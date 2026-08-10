@@ -6,11 +6,11 @@ description: Every export of @rshono/core, @rshono/core/server and @rshono/core/
 Three entry points, and which one an import comes from tells you where the code runs. That is most of
 what there is to know about the surface.
 
-| Import                | Runs                                 | Holds                                                                 |
-| --------------------- | ------------------------------------ | --------------------------------------------------------------------- |
-| `@rshono/core`        | build time, server                   | route and config declaration, and the types pages are written against |
+| Import                | Runs                                 | Holds                                                                      |
+| --------------------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| `@rshono/core`        | build time, server                   | route and config declaration, and the types pages are written against      |
 | `@rshono/core/server` | per request, server only             | the request context, `redirect` / `notFound`, error reporting, `publicUrl` |
-| `@rshono/core/client` | browser, from `'use client'` modules | the navigation hook and the boundaries                                |
+| `@rshono/core/client` | browser, from `'use client'` modules | the navigation hook and the boundaries                                     |
 
 `@rshono/core` pulls in no runtime machinery — importing it from server code is free. `@rshono/core/server`
 from a `'use client'` module is a mistake: those run in the browser, where no request is bound. Read what
@@ -56,12 +56,12 @@ Server-only, and request-scoped. See [Pages](/docs/pages) and [Server actions](/
 
 ### Functions
 
-| Signature                                   | What it does                                                                                                                   |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `getRequestContext<E>(): RequestContext<E>` | The current request's context. Memoised per request. Throws at module load, and while prerendering a `render: 'static'` route. |
-| `redirect(location, status?): never`        | Throws a control signal the framework turns into a redirect. `status` defaults to `303`.                                       |
-| `notFound(): never`                         | Aborts the render with a 404 and the app's not-found page.                                                                     |
-| `onServerError(handler): void`              | Registers one handler for every error the framework catches. Call it once, at the top level of `src/server.ts`.                |
+| Signature                                   | What it does                                                                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `getRequestContext<E>(): RequestContext<E>` | The current request's context. Memoised per request. Throws at module load, and while prerendering a `render: 'static'` route.  |
+| `redirect(location, status?): never`        | Throws a control signal the framework turns into a redirect. `status` defaults to `303`.                                        |
+| `notFound(): never`                         | Aborts the render with a 404 and the app's not-found page.                                                                      |
+| `onServerError(handler): void`              | Registers one handler for every error the framework catches. Call it once, at the top level of `src/server.ts`.                 |
 | `publicUrl(c): URL`                         | The browser-facing URL for a Hono `Context` — proxy-corrected under `trustProxy`. For middleware, which has no request context. |
 
 `publicUrl` is the one export here meant for `src/server.ts` rather than a component: middleware is

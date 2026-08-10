@@ -79,25 +79,29 @@ test('a scaffolded app installs, typechecks and builds', { skip: enabled ? false
  * reachable by accident under the first layout and only on purpose under the second, so a build that
  * passes above can still fail here with `Can't resolve 'react-server-dom-rspack/client'`.
  */
-test("and installs and builds on pnpm, whose layout hides the framework's own dependencies", { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' }, () => {
-  const tarball = join(workspace, readdirSync(workspace).find((entry) => entry.endsWith('.tgz')) ?? '');
-  const name = 'pnpm-app';
-  run(process.execPath, [CLI, name, '-y', '--pm', 'pnpm', '--no-install', '--no-git'], workspace, `scaffold ${name}`);
-  const dir = join(workspace, name);
+test(
+  "and installs and builds on pnpm, whose layout hides the framework's own dependencies",
+  { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' },
+  () => {
+    const tarball = join(workspace, readdirSync(workspace).find((entry) => entry.endsWith('.tgz')) ?? '');
+    const name = 'pnpm-app';
+    run(process.execPath, [CLI, name, '-y', '--pm', 'pnpm', '--no-install', '--no-git'], workspace, `scaffold ${name}`);
+    const dir = join(workspace, name);
 
-  const manifestPath = join(dir, 'package.json');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  manifest.dependencies['@rshono/core'] = `file:${tarball}`;
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const manifestPath = join(dir, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.dependencies['@rshono/core'] = `file:${tarball}`;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  // Exactly what a user runs, with no flags to smooth anything over. `pnpm install` fails on an install
-  // script the project has not decided about, and `pnpm run` fails again on its way to the script — so
-  // this is also what proves a default scaffold needs no `allowBuilds` at all, and is right to ship no
-  // pnpm-workspace.yaml. (Cloudflare, the one target that does bring install scripts, ships one.)
-  run('pnpm', ['install'], dir, `pnpm install (${name})`);
-  run('pnpm', ['run', 'typecheck'], dir, 'typecheck (pnpm)');
-  assert.match(run('pnpm', ['run', 'build'], dir, 'build (pnpm)'), /build complete/);
-});
+    // Exactly what a user runs, with no flags to smooth anything over. `pnpm install` fails on an install
+    // script the project has not decided about, and `pnpm run` fails again on its way to the script — so
+    // this is also what proves a default scaffold needs no `allowBuilds` at all, and is right to ship no
+    // pnpm-workspace.yaml. (Cloudflare, the one target that does bring install scripts, ships one.)
+    run('pnpm', ['install'], dir, `pnpm install (${name})`);
+    run('pnpm', ['run', 'typecheck'], dir, 'typecheck (pnpm)');
+    assert.match(run('pnpm', ['run', 'build'], dir, 'build (pnpm)'), /build complete/);
+  },
+);
 
 /**
  * The ESLint preset, which the stripped install below cannot cover: its rules are type-aware, so they need
@@ -108,18 +112,22 @@ test("and installs and builds on pnpm, whose layout hides the framework's own de
  * rather than warning). And that the scaffold passes its own `lint` — a fresh app reporting errors in code
  * the user has not written yet is worse than shipping no linter option.
  */
-test('the ESLint preset installs on the TypeScript it pins, and the scaffold passes its own rules', { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' }, () => {
-  const tarball = join(workspace, readdirSync(workspace).find((entry) => entry.endsWith('.tgz')) ?? '');
-  const dir = scaffold('eslint-app', ['--quality', 'prettier-eslint'], tarball);
+test(
+  'the ESLint preset installs on the TypeScript it pins, and the scaffold passes its own rules',
+  { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' },
+  () => {
+    const tarball = join(workspace, readdirSync(workspace).find((entry) => entry.endsWith('.tgz')) ?? '');
+    const dir = scaffold('eslint-app', ['--quality', 'prettier-eslint'], tarball);
 
-  const installed = JSON.parse(readFileSync(join(dir, 'node_modules', 'typescript', 'package.json'), 'utf8')).version;
-  assert.match(installed, /^6\.0\./, `typescript-eslint's peer range stops below 6.1 — installed ${installed}`);
+    const installed = JSON.parse(readFileSync(join(dir, 'node_modules', 'typescript', 'package.json'), 'utf8')).version;
+    assert.match(installed, /^6\.0\./, `typescript-eslint's peer range stops below 6.1 — installed ${installed}`);
 
-  run('npm', ['run', 'typecheck'], dir, 'typecheck (eslint)');
-  run('npm', ['run', 'lint'], dir, 'lint (eslint)');
-  run('npm', ['run', 'format:check'], dir, 'format:check (eslint)');
-  assert.match(run('npm', ['run', 'build'], dir, 'build (eslint)'), /build complete/);
-});
+    run('npm', ['run', 'typecheck'], dir, 'typecheck (eslint)');
+    run('npm', ['run', 'lint'], dir, 'lint (eslint)');
+    run('npm', ['run', 'format:check'], dir, 'format:check (eslint)');
+    assert.match(run('npm', ['run', 'build'], dir, 'build (eslint)'), /build complete/);
+  },
+);
 
 /**
  * Every quality preset ships config files for tools this package does not control, and a key one of them

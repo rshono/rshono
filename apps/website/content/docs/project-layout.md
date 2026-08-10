@@ -27,12 +27,12 @@ team — routes are one explicit array, so moving a page is an edit to one line.
 
 ## What the build produces
 
-| Output                 | Contents                                                                                           |
-| ---------------------- | -------------------------------------------------------------------------------------------------- |
-| `dist/static`          | Hydration runtime, `'use client'` chunks, CSS. Served under `/_static`, cached immutably.          |
-| `dist/server/main.mjs` | The app server, self-contained.                                                                    |
-| Prerendered pages      | A document and a flight payload per [`render: 'static'`](/docs/routing#static-rendering) route.    |
-| A copy of `public/`    | So a deployed build needs nothing beside it.                                                       |
+| Output                 | Contents                                                                                        |
+| ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `dist/static`          | Hydration runtime, `'use client'` chunks, CSS. Served under `/_static`, cached immutably.       |
+| `dist/server/main.mjs` | The app server, self-contained.                                                                 |
+| Prerendered pages      | A document and a flight payload per [`render: 'static'`](/docs/routing#static-rendering) route. |
+| A copy of `public/`    | So a deployed build needs nothing beside it.                                                    |
 
 Where those land, and what the entry's default export looks like, depends on the
 [deploy target](/docs/deployment).

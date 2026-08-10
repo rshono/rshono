@@ -16,7 +16,7 @@ fetched after hydration. `*.module.css` gets a class map.
 ## No PostCSS in the framework
 
 Not as a dependency, not as an optional one. Native CSS is everything a plain stylesheet needs — but
-that parser reads *finished* CSS, and `@import 'tailwindcss'`, `@theme` and `@apply` are not that. A
+that parser reads _finished_ CSS, and `@import 'tailwindcss'`, `@theme` and `@apply` are not that. A
 stylesheet that needs a plugin brings the plugin itself, through the
 [`rspack` hook](/docs/configuration#the-rspack-hook).
 

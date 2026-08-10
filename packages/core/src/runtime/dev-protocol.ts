@@ -10,7 +10,4 @@
  * - `rsc-update` — server component code changed; the client re-fetches the flight
  *   payload for the current URL in place.
  */
-export type DevMessage =
-  | { type: 'hello'; hash?: string }
-  | { type: 'client-built'; hash: string }
-  | { type: 'rsc-update' };
+export type DevMessage = { type: 'hello'; hash?: string } | { type: 'client-built'; hash: string } | { type: 'rsc-update' };

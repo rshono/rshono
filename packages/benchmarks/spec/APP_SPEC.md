@@ -29,7 +29,7 @@ Three implementations live in `../apps/`: `rshono`, `next`, `tanstack-start`.
 8. **Server components on both dynamic routes, in all three.** `/ssr` and `/interactive` put React's
    flight encode/decode round trip on the request path everywhere, so the throughput rows compare
    three implementations of one architecture rather than two architectures. See below for the part
-   this does *not* equalise.
+   this does _not_ equalise.
 
 ## Server components
 
