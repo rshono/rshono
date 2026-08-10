@@ -10,11 +10,11 @@ server whatever you choose.
 ## The targets
 
 | `deploy`     | Handoff                          | Assets & prerendered pages                                      | After `build`                               |
-| ------------ | -------------------------------- | ---------------------------------------------------------------- | ------------------------------------------- |
-| `node`       | binds a port                     | from `dist/` on disk                                             | `rshono start`                              |
-| `cloudflare` | `{ fetch }` default export       | Workers Assets; prerendered pages read via the `ASSETS` binding  | `wrangler deploy`                           |
-| `vercel`     | web handler in a Node function   | CDN for assets; prerendered pages inside the function            | `vercel deploy --prebuilt`                  |
-| `aws-lambda` | streaming handler (Function URL) | from the deployment package                                      | zip `dist/`, handler `dist/server/main.mjs` |
+| ------------ | -------------------------------- | --------------------------------------------------------------- | ------------------------------------------- |
+| `node`       | binds a port                     | from `dist/` on disk                                            | `rshono start`                              |
+| `cloudflare` | `{ fetch }` default export       | Workers Assets; prerendered pages read via the `ASSETS` binding | `wrangler deploy`                           |
+| `vercel`     | web handler in a Node function   | CDN for assets; prerendered pages inside the function           | `vercel deploy --prebuilt`                  |
+| `aws-lambda` | streaming handler (Function URL) | from the deployment package                                     | zip `dist/`, handler `dist/server/main.mjs` |
 
 **Every target streams** — a page's HTML reaches the browser as it renders. That is the bar a new target
 has to clear. Bun and Deno run the `node` build through their `node:` compatibility
@@ -55,7 +55,7 @@ Two coordinated Rspack compilers, using native RSC support (`rspack.experiments.
   through two layers — the RSC layer, with the `react-server` condition, produces the flight payload;
   the SSR layer turns it into an HTML stream with the payload inlined for hydration.
 
-Everything in that bundle that depends on *where* it runs — binding a port, serving `/_static` and
+Everything in that bundle that depends on _where_ it runs — binding a port, serving `/_static` and
 `public/`, reading a prerendered page, loading `.env` — sits behind a single interface the build resolves
 per target. The request-handling code has no platform in it.
 
@@ -71,8 +71,6 @@ your other dependencies resolve from `node_modules`.
 - **No compression.** It belongs in a proxy, a load balancer or a CDN, and every hosted target already
   does it. `hono/compress` in `src/server.ts` if you need it in-process — read its docs on streaming
   first, because a buffering compressor undoes streamed SSR.
-- **Scroll restoration is the browser's.** `history.scrollRestoration` stays `auto`, so a traversal's
-  offset is the browser's to restore. A new page starts at the top, or at the `#hash` the link named.
 - **No base path.** `siteUrl` must be a bare origin.
 - **Wildcard, optional and regex params cannot be prerendered.**
 - **The dev-mode proxy does not forward WebSocket upgrades** to a custom sub-app. Production is

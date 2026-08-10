@@ -74,8 +74,6 @@ Rules worth knowing:
 
 - **Reading `ctx` throws.** There is no request at build time. Use `params` and `url`, or make the route
   dynamic.
-- **`url.searchParams` is always empty.** One file answers every request whatever its query. Read the
-  query with `useNavigation().url` on the client.
 - **Set [`siteUrl`](/docs/configuration#siteurl)** if the page builds absolute URLs. Without it the
   origin is `http://localhost` and the build warns.
 - **Wildcard, optional and regex params cannot be prerendered.** A parameterised static route without
