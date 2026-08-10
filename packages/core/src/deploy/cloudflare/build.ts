@@ -32,13 +32,15 @@ function workerName(rootDir: string): string {
   return name || 'rshono-app';
 }
 
-function wranglerConfig(rootDir: string, today: string): string {
+const COMPATIBILITY_DATE = '2026-07-01';
+
+function wranglerConfig(rootDir: string): string {
   return `${JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
       name: workerName(rootDir),
       main: 'dist/server/main.mjs',
-      compatibility_date: today,
+      compatibility_date: COMPATIBILITY_DATE,
       // AsyncLocalStorage — how the framework binds the request context that `getRequestContext()` reads.
       compatibility_flags: ['nodejs_compat'],
       assets: {
@@ -76,8 +78,7 @@ export async function finalizeCloudflareBuild(ctx: DeployBuildContext): Promise<
 
   const existing = WRANGLER_FILES.find((file) => existsSync(join(ctx.rootDir, file)));
   if (!existing) {
-    const today = new Date().toISOString().slice(0, 10);
-    writeFileSync(join(ctx.rootDir, 'wrangler.jsonc'), wranglerConfig(ctx.rootDir, today));
+    writeFileSync(join(ctx.rootDir, 'wrangler.jsonc'), wranglerConfig(ctx.rootDir));
     console.log('  • wrote wrangler.jsonc (yours now — edit freely, the build will not touch it again)');
   }
 

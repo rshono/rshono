@@ -2,6 +2,27 @@ import * as prompts from '@clack/prompts';
 import { deployHint, type Answers } from './options.js';
 import type { Plan } from './plan.js';
 import type { PackageManager } from './pm.js';
+import { invoke, shipCommand } from './scripts.js';
+
+/**
+ * The command that produces something shippable: `preview` where the target has one — it builds and runs
+ * the result — and plain `build` for the target whose `start` already does the running.
+ */
+function checkStep(plan: Plan, pm: PackageManager): string {
+  const hasPreview = plan.features.some((feature) => feature.scripts?.preview);
+  return hasPreview ? `${invoke(pm, 'preview')} to run the production build` : `${pm.run} build`;
+}
+
+/**
+ * And where it goes from there, in the words of the app's own scripts — falling back to the framework's
+ * hint for the target that has no command to give, since that one is a sentence about the platform.
+ */
+function shipStep(answers: Answers, plan: Plan, pm: PackageManager): string {
+  const ship = shipCommand(plan.features, pm);
+  if (ship?.script === 'deploy') return `${ship.command} to ship it`;
+  if (ship) return `${ship.command} on the host that runs it`;
+  return deployHint(answers.deploy);
+}
 
 /**
  * What to do next, in the order to do it — the last thing the user reads, and for most people the only
@@ -14,7 +35,7 @@ export function nextSteps(answers: Answers, plan: Plan, pm: PackageManager, opti
   steps.push(`${pm.run} dev`);
 
   const lines = [steps.join('\n')];
-  lines.push(`\nThen ${pm.run} build, and ${deployHint(answers.deploy)}.`);
+  lines.push(`\nThen ${checkStep(plan, pm)}, and ${shipStep(answers, plan, pm)}.`);
   if (plan.notes.length > 0) lines.push(`\n${plan.notes.join('\n')}`);
   return lines.join('\n');
 }

@@ -51,7 +51,7 @@ a target added to rshono appears here with no edit.
 ## What you get
 
 ```
-package.json            scripts, and the exact dependency versions rshono is tested against
+package.json            scripts, including the target's own, and the exact pins rshono is tested against
 rshono.config.ts        the chosen deploy target; every other setting takes its default
 tsconfig.json           strict, with @/* → ./src/*
 .env                    committed defaults; secrets go in .env.local
@@ -70,6 +70,26 @@ pnpm-workspace.yaml     pnpm only: which dependency install scripts this app run
 Scaffolding runs the install and nothing else — no formatter, no linter. The templates are written to satisfy
 every formatter option at its configured width, so a fresh project passes its own `format:check` without a
 write pass first.
+
+Beside `dev`, `build` and `typecheck`, the deploy target contributes the scripts only it can define, under three
+names that mean the same thing in every app. **`deploy`** builds and ships it, where the platform has one
+command that ships a build (`cloudflare`, `vercel`). **`preview`** builds and runs the result on this machine —
+in workerd for `cloudflare`, and for `vercel` and `aws-lambda` as a Node build, since neither can run its own
+output locally. **`start`** runs a build that already exists and never makes one, which is what a `CMD`, a
+systemd unit or a PaaS start command needs — so only `node` has one, and needs no `preview`: `build` then
+`start` already is that.
+
+Every command is spelled for the package manager the project got, and for the CLI that is not installed —
+Vercel's, because most Vercel projects deploy from git — that means the runner: `npx`, `pnpm dlx`, `yarn dlx` or
+`bunx`. Wrangler is a devDependency instead, since `wrangler dev` is how a Cloudflare app previews and the
+pinned version is worth having.
+
+Those scripts are for a laptop, though, and most apps are deployed by the platform from a git repo — where the
+question is not which script to run but what to type into two fields on a settings page. A `deploy` script
+pasted there would build twice. So each target also spells out the commands its platform asks for — Workers
+Builds' build and deploy commands, Vercel's preset and build command, a PaaS's build and start commands, and
+for AWS the fact that there is no such page — in the same package manager, in the scaffolded README's
+Deploying section beside everything else about shipping it.
 
 `react` and `react-dom` are pinned **exactly**, at the versions the framework is tested against, and those
 pins are generated from rshono's own manifest. That is not tidiness: the RSC runtime reaches into React's

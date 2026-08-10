@@ -69,8 +69,8 @@ function appendGitignore(existing: string, features: Feature[]): string {
  * so `--dry-run` is the same code path minus the last step.
  */
 export function plan(answers: Answers, pm: PackageManager): Plan {
-  const features = selectFeatures(answers);
-  const tokens = tokensFor(answers, pm);
+  const features = selectFeatures(answers, pm);
+  const tokens = tokensFor(answers, features, pm);
 
   const raw = readTemplateDir(join(TEMPLATES_DIR, 'base'));
   for (const feature of features) {

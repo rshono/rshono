@@ -1,9 +1,7 @@
 # {{PROJECT_NAME}}
 
 ```bash
-{{PM_RUN}} dev        # dev server with HMR, http://localhost:3000
-{{PM_RUN}} build      # production build for {{DEPLOY_TARGET}}
-{{PM_RUN}} typecheck  # tsc --noEmit
+{{SCRIPT_TABLE}}
 ```
 
 `package.json` has the rest, including whatever your formatter and linter added.
@@ -32,6 +30,9 @@ compiles to `undefined` rather than shipping. `src/components/layout.tsx` reads 
 ## Deploying
 
 This app is built for `{{DEPLOY_TARGET}}`: after `{{PM_RUN}} build`, {{DEPLOY_HINT}}.
+{{DEPLOY_STEP}}
+
+{{PLATFORM_SETUP}}
 
 Change `deploy` in `rshono.config.ts` to target somewhere else, or build for one place without editing the
 file: `rshono build --deploy vercel`, or `RSHONO_DEPLOY=vercel` in CI. `dev` always runs the Node dev

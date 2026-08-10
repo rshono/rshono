@@ -19,6 +19,21 @@ export interface Feature {
   devDependencies?: Record<string, string>;
   /** Merged into `scripts`; a later feature wins a collision, so keep the names distinct. */
   scripts?: Record<string, string>;
+  /**
+   * A one-line gloss for a script this feature contributes, keyed by script name — what the generated
+   * README prints beside the command. Optional per script: one with nothing to explain is left out of
+   * the table and covered by the line pointing at `package.json`.
+   */
+  scriptHelp?: Record<string, string>;
+  /**
+   * A markdown block for the scaffolded README's Deploying section: what to type into the platform when
+   * the app is wired up there rather than deployed from a laptop.
+   *
+   * A deploy target's own scripts are not the answer to that question — a host asks for a build command and
+   * a start or deploy command of its own, and a `deploy` script that builds first would build twice. So the
+   * commands here are spelled out separately, in the package manager the app got.
+   */
+  platformSetup?: string;
   /** Appended to `.gitignore` under a heading naming the feature. */
   gitignore?: string[];
   /**

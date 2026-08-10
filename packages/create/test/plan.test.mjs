@@ -91,7 +91,11 @@ test('the scaffolded README is about the app, not about the template', () => {
     assert.match(readme, /^# my-app$/m, 'the title should be the project name');
     assert.match(readme, new RegExp('after `pnpm build`, .+\\.$', 'm'), `${deploy}: the deploy hint should be a sentence, not a token`);
     // The names of the tokens themselves, in any wrapping — `**PROJECT_NAME**` is how this last broke.
-    assert.doesNotMatch(readme, /PROJECT_NAME|DEPLOY_TARGET|DEPLOY_HINT|PM_RUN/, `${deploy}: a token name survived into the README`);
+    assert.doesNotMatch(
+      readme,
+      /PROJECT_NAME|DEPLOY_TARGET|DEPLOY_HINT|PM_RUN|SCRIPT_TABLE|DEPLOY_STEP|PLATFORM_SETUP/,
+      `${deploy}: a token name survived into the README`,
+    );
   }
 });
 
@@ -122,13 +126,118 @@ test('the deploy target reaches the config, the scripts and the README', () => {
   }
 });
 
-test('only the target that runs its own build gets a start script', () => {
-  const start = (deploy) => JSON.parse(plan(answers({ deploy }), pm).files.get('package.json')).scripts.start;
-  assert.equal(start('node'), 'rshono start');
-  // `rshono start` refuses a build made for another platform, so offering it here would be a broken
-  // script. (Bun and Deno had a target each and so a `start` of their own; they run the `node` build now.)
+/** The scripts a target's app ends up with, rendered. */
+function scriptsFor(deploy, manager = pm) {
+  return JSON.parse(plan(answers({ deploy }), manager).files.get('package.json')).scripts;
+}
+
+/*
+ * The three per-platform script names and what each one promises — the contract `scripts.ts` states and
+ * every target has to keep, because the README describes them in words written once for all four.
+ */
+test('every deploy target keeps the start / preview / deploy contract', () => {
+  // `start` runs a build that already exists, so only the target whose build *is* a server has one:
+  // `rshono start` refuses a bundle made for anywhere else, and a script that always failed would be
+  // worse than no script. (Bun and Deno had a target each and so a `start`; they run the `node` build now.)
+  assert.equal(scriptsFor('node').start, 'rshono start');
   for (const deploy of ['cloudflare', 'vercel', 'aws-lambda']) {
-    assert.equal(start(deploy), undefined, deploy);
+    assert.equal(scriptsFor(deploy).start, undefined, `${deploy} cannot run its own build`);
+  }
+
+  // `preview` builds and then runs the result here, for the targets whose build is not a server on this
+  // machine. `node` needs none: `build` then `start` is the same two steps under names it already has.
+  assert.equal(scriptsFor('node').preview, undefined, 'build then start is already the preview');
+  for (const deploy of ['cloudflare', 'vercel', 'aws-lambda']) {
+    const { preview } = scriptsFor(deploy);
+    assert.ok(preview?.startsWith('rshono build'), `${deploy}: preview should build first — got ${preview}`);
+    // A target with no local runtime of its own previews the Node build, and has to ask for it explicitly:
+    // `rshono start` refuses the platform bundle, so without the flag the script would never have worked.
+    if (preview.includes('rshono start')) {
+      assert.match(preview, /^rshono build --deploy node &&/, `${deploy}: previewing with rshono start needs the Node build`);
+    }
+  }
+
+  // `deploy` where the platform has one command that ships a build, and only there. The Vercel CLI is not
+  // a dependency, so its script names the runner that fetches it — one per package manager.
+  assert.equal(scriptsFor('cloudflare').deploy, 'rshono build && wrangler deploy', 'wrangler is installed, so it is called directly');
+  assert.equal(scriptsFor('aws-lambda').deploy, undefined, 'the upload is SAM, CDK or the console — not a command to guess');
+  for (const [name, dlx] of [
+    ['npm', 'npx'],
+    ['pnpm', 'pnpm dlx'],
+    ['yarn', 'yarn dlx'],
+    ['bun', 'bunx'],
+  ]) {
+    const script = scriptsFor('vercel', packageManager(name)).deploy;
+    assert.equal(script, `rshono build && ${dlx} vercel deploy --prebuilt --prod`, `${name}: the deploy script has to be runnable`);
+  }
+});
+
+/*
+ * What the platform asks for is not what the scripts are. A host has a build field and a start or deploy
+ * field of its own, and pasting the app's `deploy` script into the second one would build twice — so every
+ * target spells those commands out separately, in the package manager the app got.
+ *
+ * The assertion is that they are *there and spelled for this manager*, for all four targets: a block that
+ * silently went missing, or one that hardcoded `npm run build` for a pnpm app, is the failure worth catching.
+ */
+test('every deploy target says what to type into the platform, in this app’s package manager', () => {
+  for (const name of ['npm', 'pnpm', 'yarn', 'bun']) {
+    const manager = packageManager(name);
+    const build = name === 'npm' ? 'npm run build' : `${name} build`;
+
+    for (const deploy of DEPLOY_TARGET_NAMES) {
+      const label = `${name}/${deploy}`;
+      const setup = plan(answers({ deploy }), manager).files.get('README.md').split('## Deploying')[1];
+      assert.ok(setup, `${label}: the README lost its Deploying section`);
+      assert.ok(setup.includes(`\`${build}\``), `${label}: the platform's build command should be \`${build}\``);
+      // The other manager's spelling must not appear at all — a hardcoded one would pass the check above.
+      const wrong = name === 'npm' ? 'pnpm build' : 'npm run build';
+      assert.ok(!setup.includes(wrong), `${label}: "${wrong}" is not this app's command`);
+    }
+  }
+
+  // The two fields each platform actually labels, so the block answers the question it exists for.
+  const setupFor = (deploy) => plan(answers({ deploy }), pm).files.get('README.md').split('## Deploying')[1];
+  assert.match(setupFor('node'), /\*\*Start command\*\* — `pnpm start`/, 'a PaaS asks for a start command');
+  assert.match(setupFor('cloudflare'), /\*\*Deploy command\*\* — `npx wrangler deploy`/, 'Workers Builds asks for one');
+  // Not a default worth omitting: Vercel detects `hono` in the dependencies and would apply the Hono preset.
+  assert.match(setupFor('vercel'), /\*\*Framework Preset\*\* — Other/, 'Vercel would otherwise detect Hono');
+  assert.match(setupFor('aws-lambda'), /no dashboard/, 'and AWS has no fields at all — say so rather than invent them');
+});
+
+/*
+ * The README's command table is generated from the same scripts the manifest gets, and it is the part a
+ * reader copies — so every line has to name a script that exists and be typeable exactly as printed.
+ *
+ * `pnpm deploy` is the trap this pins down: pnpm has a `deploy` command of its own and never looks at the
+ * manifest, so a bare `pnpm deploy` would be a printed command that quietly does something else.
+ */
+test('the README’s command table is typeable, and lists exactly the scripts for running the app', () => {
+  for (const name of ['npm', 'pnpm', 'yarn', 'bun']) {
+    const manager = packageManager(name);
+    for (const deploy of DEPLOY_TARGET_NAMES) {
+      const label = `${name}/${deploy}`;
+      const result = plan(answers({ deploy }), manager);
+      const scripts = scriptsFor(deploy, manager);
+      const table = result.files
+        .get('README.md')
+        .split('\n')
+        .filter((line) => line.includes('  # '))
+        .map((line) => line.split('  # ')[0].trimEnd());
+
+      const documented = [];
+      for (const command of table) {
+        const script = command.split(' ').at(-1);
+        documented.push(script);
+        assert.ok(scripts[script], `${label}: the table documents "${script}", which the manifest has no script for`);
+        const prefix = script === 'deploy' ? `${name} run` : manager.run;
+        assert.equal(command, `${prefix} ${script}`, `${label}: as printed, this line does not run the script`);
+      }
+
+      // Running the app, and nothing else: the formatter and linter scripts are the README's "the rest".
+      const expected = ['dev', 'build', 'typecheck', ...['start', 'preview', 'deploy'].filter((script) => scripts[script])];
+      assert.deepEqual(documented, expected, `${label}: the table and the manifest disagree`);
+    }
   }
 });
 
@@ -256,7 +365,7 @@ test('a feature contributing gitignore lines gets them, under a heading naming i
 
 test('every overlay a feature names exists on disk', () => {
   for (const combination of matrix()) {
-    for (const feature of selectFeatures(answers(combination))) {
+    for (const feature of selectFeatures(answers(combination), pm)) {
       for (const overlay of feature.overlays ?? []) {
         assert.ok(existsSync(join(TEMPLATES_DIR, overlay)), `${feature.id} names a missing overlay: templates/${overlay}`);
       }
@@ -309,6 +418,7 @@ test('the package manager is read off npm_config_user_agent', () => {
     version: '11.9.0',
     install: ['install'],
     run: 'pnpm',
+    dlx: 'pnpm dlx',
   });
   assert.equal(detectPackageManager('bun/1.2.0 npm/? node/v22.0.0').name, 'bun');
   assert.equal(detectPackageManager('yarn/4.1.0').run, 'yarn');

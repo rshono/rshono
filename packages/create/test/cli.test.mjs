@@ -128,7 +128,10 @@ test('flags reach the generated project, with no prompt in a non-interactive run
   assert.ok(existsSync(join(target, 'postcss.config.mjs')));
   assert.ok(existsSync(join(target, 'biome.json')));
   assert.ok(manifest.devDependencies['@biomejs/biome'] && manifest.devDependencies.tailwindcss);
-  assert.match(result.output, /vercel deploy --prebuilt/, 'the closing summary should say how to deploy it');
+  // The closing summary points at the app's own script rather than restating the command inside it, and
+  // the target's note is what explains the one flag that script cannot do without.
+  assert.match(result.output, /npm run deploy/, 'the closing summary should say how to deploy it');
+  assert.match(result.output, /--prebuilt uploads what rshono build assembled/, 'and why the flag is in the script');
 });
 
 test('--no-git leaves no repository, and the scaffold is not committed by accident', () => {
