@@ -1,6 +1,6 @@
 import type { Handler } from 'hono';
 import { DOC_SECTIONS } from '../content/docs';
-import { MARKDOWN_HEADERS, origin, SUMMARY } from './llms';
+import { MARKDOWN_HEADERS, origin, SUMMARY, UPSTREAM_SECTION } from './llms';
 
 /**
  * `/llms.txt` — the index described by the [llms.txt convention](https://llmstxt.org): a short summary
@@ -19,7 +19,8 @@ export const handler: Handler = (c) => {
     `> ${SUMMARY}\n\n` +
     `Every documentation page is available as Markdown by appending \`.md\` to its URL.\n` +
     `The whole corpus in one file: ${base}/llms-full.txt\n\n` +
-    `${sections}\n`;
+    `${sections}\n\n` +
+    `${UPSTREAM_SECTION}\n`;
 
   return c.body(body, 200, MARKDOWN_HEADERS);
 };

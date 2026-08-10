@@ -21,6 +21,42 @@ export function origin(requestUrl: string): string {
   return new URL(requestUrl).origin;
 }
 
+/**
+ * The projects an rshono app is written *against*, each of which publishes an `llms.txt` of its own.
+ *
+ * rshono's documentation stops at its seams: `src/server.ts` is a Hono app, a page is a React server
+ * component, and the build is Rspack's. A reader that needs the far side of one of those seams is better
+ * served by the upstream file than by anything this site could restate about it.
+ */
+const UPSTREAM = [
+  {
+    title: 'Hono',
+    url: 'https://hono.dev/llms.txt',
+    description: 'The server rshono runs on — `src/server.ts` is a Hono app, and an endpoint handler is a Hono handler.',
+  },
+  {
+    title: 'Rspack',
+    url: 'https://rspack.rs/llms.txt',
+    description: 'The bundler behind `rshono dev` and `rshono build`. rshono writes the config; the `rspack` hook extends it.',
+  },
+  {
+    title: 'React',
+    url: 'https://react.dev/llms.txt',
+    description: 'Server and client components, hooks, and the rest of the model pages are written in.',
+  },
+] as const;
+
+/**
+ * The upstream links as one markdown block, so both endpoints emit the identical thing.
+ *
+ * The heading is the literal word "Optional", which the [llms.txt convention](https://llmstxt.org) gives
+ * a meaning to: links a reader may skip when its context budget is tight. That is the honest label for
+ * three external corpora, each of them larger than this whole site — a tool that follows every link it
+ * finds should not drown in them, and one that reads the heading still knows where they are.
+ */
+export const UPSTREAM_SECTION =
+  '## Optional\n\n' + UPSTREAM.map((project) => `- [${project.title} llms.txt](${project.url}): ${project.description}`).join('\n');
+
 /** Both endpoints serve plain markdown, cached like the prerendered pages they mirror. */
 export const MARKDOWN_HEADERS = {
   'Content-Type': 'text/markdown; charset=utf-8',

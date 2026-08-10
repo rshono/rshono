@@ -57,6 +57,7 @@ tsconfig.json           strict, with @/* → ./src/*
 .env                    committed defaults; secrets go in .env.local
 .gitignore              plus whatever each chosen feature adds, under a heading naming it
 README.md               the app's own commands, layout and deploy step
+AGENTS.md               where an agent finds the framework docs; CLAUDE.md imports it
 public/                 favicon.svg, robots.txt
 src/routes.ts           one page, a 404 and a 500
 src/server.ts           error reporting, trailing-slash and old-path redirects, AppType

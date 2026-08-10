@@ -40,7 +40,18 @@ function* matrix() {
   }
 }
 
-const REQUIRED = ['package.json', 'tsconfig.json', 'rshono.config.ts', '.gitignore', '.env', 'README.md', 'src/routes.ts', 'src/components/home.tsx'];
+const REQUIRED = [
+  'package.json',
+  'tsconfig.json',
+  'rshono.config.ts',
+  '.gitignore',
+  '.env',
+  'README.md',
+  'AGENTS.md',
+  'CLAUDE.md',
+  'src/routes.ts',
+  'src/components/home.tsx',
+];
 
 test('every combination produces a complete, parseable project', () => {
   for (const combination of matrix()) {
@@ -82,6 +93,19 @@ test('the scaffolded README is about the app, not about the template', () => {
     // The names of the tokens themselves, in any wrapping — `**PROJECT_NAME**` is how this last broke.
     assert.doesNotMatch(readme, /PROJECT_NAME|DEPLOY_TARGET|DEPLOY_HINT|PM_RUN/, `${deploy}: a token name survived into the README`);
   }
+});
+
+/*
+ * The two agent files are only worth anything as a pair: CLAUDE.md carries no instructions of its own, so an
+ * `@AGENTS.md` line that stopped being an import — moved inline, or renamed — would leave a Claude session
+ * with a stub and nothing else. The URL is the other half: it is the only thing either file is really for.
+ */
+test('the agent files point at the framework docs, and CLAUDE.md at AGENTS.md', () => {
+  const files = plan(answers({ packageName: 'my-app' }), pm).files;
+
+  assert.match(files.get('AGENTS.md'), /^# my-app$/m, 'the title should be the project name');
+  assert.match(files.get('AGENTS.md'), /https:\/\/www\.rshono\.com\/llms\.txt/, 'an agent has to be able to find the docs');
+  assert.match(files.get('CLAUDE.md'), /^@AGENTS\.md$/m, 'Claude Code imports by `@path`, on a line of its own');
 });
 
 test('the plan is deterministic — same answers, byte-identical files', () => {
