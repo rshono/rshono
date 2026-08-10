@@ -89,7 +89,7 @@ test('the scaffolded README is about the app, not about the template', () => {
   for (const deploy of DEPLOY_TARGET_NAMES) {
     const readme = plan(answers({ packageName: 'my-app', deploy }), pm).files.get('README.md');
     assert.match(readme, /^# my-app$/m, 'the title should be the project name');
-    assert.match(readme, new RegExp('after `pnpm build`, .+\\.$', 'm'), `${deploy}: the deploy hint should be a sentence, not a token`);
+    assert.match(readme, new RegExp(`^This app is built for \`${deploy}\`\\. .+\\.$`, 'm'), `${deploy}: the deploy step should be a sentence`);
     // The names of the tokens themselves, in any wrapping — `**PROJECT_NAME**` is how this last broke.
     assert.doesNotMatch(
       readme,
@@ -160,7 +160,7 @@ test('every deploy target keeps the start / preview / deploy contract', () => {
   // `deploy` where the platform has one command that ships a build, and only there. The Vercel CLI is not
   // a dependency, so its script names the runner that fetches it — one per package manager.
   assert.equal(scriptsFor('cloudflare').deploy, 'rshono build && wrangler deploy', 'wrangler is installed, so it is called directly');
-  assert.equal(scriptsFor('aws-lambda').deploy, undefined, 'the upload is SAM, CDK or the console — not a command to guess');
+  assert.equal(scriptsFor('aws-lambda').deploy, undefined, 'nothing there is one command this could guess at');
   for (const [name, dlx] of [
     ['npm', 'npx'],
     ['pnpm', 'pnpm dlx'],
@@ -177,32 +177,33 @@ test('every deploy target keeps the start / preview / deploy contract', () => {
  * field of its own, and pasting the app's `deploy` script into the second one would build twice — so every
  * target spells those commands out separately, in the package manager the app got.
  *
- * The assertion is that they are *there and spelled for this manager*, for all four targets: a block that
- * silently went missing, or one that hardcoded `npm run build` for a pnpm app, is the failure worth catching.
+ * Two things are asserted, for all four targets. That the block names *this* app's build command — and that
+ * the four managers produce four different blocks, which is the check a hardcoded command cannot pass.
  */
 test('every deploy target says what to type into the platform, in this app’s package manager', () => {
-  for (const name of ['npm', 'pnpm', 'yarn', 'bun']) {
-    const manager = packageManager(name);
-    const build = name === 'npm' ? 'npm run build' : `${name} build`;
+  /** The Deploying section down to the paragraph that is the same for every app. */
+  const sectionFor = (deploy, manager) =>
+    plan(answers({ deploy }), manager).files.get('README.md').split('## Deploying')[1]?.split('Change `deploy`')[0];
 
-    for (const deploy of DEPLOY_TARGET_NAMES) {
-      const label = `${name}/${deploy}`;
-      const setup = plan(answers({ deploy }), manager).files.get('README.md').split('## Deploying')[1];
-      assert.ok(setup, `${label}: the README lost its Deploying section`);
-      assert.ok(setup.includes(`\`${build}\``), `${label}: the platform's build command should be \`${build}\``);
-      // The other manager's spelling must not appear at all — a hardcoded one would pass the check above.
-      const wrong = name === 'npm' ? 'pnpm build' : 'npm run build';
-      assert.ok(!setup.includes(wrong), `${label}: "${wrong}" is not this app's command`);
+  for (const deploy of DEPLOY_TARGET_NAMES) {
+    const sections = new Map();
+    for (const name of ['npm', 'pnpm', 'yarn', 'bun']) {
+      const section = sectionFor(deploy, packageManager(name));
+      const build = name === 'npm' ? 'npm run build' : `${name} build`;
+      assert.ok(section, `${name}/${deploy}: the README lost its Deploying section`);
+      assert.ok(section.includes(build), `${name}/${deploy}: the platform's build command should be \`${build}\``);
+      sections.set(name, section);
     }
+    assert.equal(new Set(sections.values()).size, 4, `${deploy}: a hardcoded command would leave two managers identical`);
   }
 
-  // The two fields each platform actually labels, so the block answers the question it exists for.
-  const setupFor = (deploy) => plan(answers({ deploy }), pm).files.get('README.md').split('## Deploying')[1];
-  assert.match(setupFor('node'), /\*\*Start command\*\* — `pnpm start`/, 'a PaaS asks for a start command');
-  assert.match(setupFor('cloudflare'), /\*\*Deploy command\*\* — `npx wrangler deploy`/, 'Workers Builds asks for one');
+  // The field each platform actually labels, so the block answers the question it exists for.
+  const pnpmSection = (deploy) => sectionFor(deploy, pm);
+  assert.match(pnpmSection('node'), /\*\*Start\*\* — `pnpm start`/, 'a host asks for a start command');
+  assert.match(pnpmSection('cloudflare'), /\*\*Build command\*\* to `pnpm build`/, 'Workers Builds asks for that one');
   // Not a default worth omitting: Vercel detects `hono` in the dependencies and would apply the Hono preset.
-  assert.match(setupFor('vercel'), /\*\*Framework Preset\*\* — Other/, 'Vercel would otherwise detect Hono');
-  assert.match(setupFor('aws-lambda'), /no dashboard/, 'and AWS has no fields at all — say so rather than invent them');
+  assert.match(pnpmSection('vercel'), /\*\*Framework Preset\*\* to\s+Other/, 'Vercel would otherwise detect Hono');
+  assert.match(pnpmSection('aws-lambda'), /no settings page/, 'and AWS has none at all — say so rather than invent one');
 });
 
 /*

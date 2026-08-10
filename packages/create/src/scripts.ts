@@ -1,4 +1,6 @@
-import type { Feature } from './features/index.js';
+// `features/types.js` rather than `features/index.js`: the deploy feature imports `invoke` from here, and
+// going through the barrel would make that a cycle — types.ts imports nothing.
+import type { Feature } from './features/types.js';
 import type { Answers, DeployTargetName } from './options.js';
 import type { PackageManager } from './pm.js';
 
@@ -9,17 +11,28 @@ import type { PackageManager } from './pm.js';
  * platform, so the deploy target contributes its own. The three names are a contract the targets keep,
  * and the reason the README can describe an app it was not written for:
  *
- * - **`start`** runs a build that already exists and never makes one — what a Dockerfile's `CMD`, a
- *   systemd unit or a PaaS start command calls. Only the target that runs its own build has one.
- * - **`preview`** builds, then runs the result on this machine. For the targets whose build is not a
- *   server here, because "is the production build alright" is otherwise unanswerable without deploying.
- * - **`deploy`** builds, then ships it — for the platforms that have one command that does the shipping.
+ * - **`start`** runs a build that already exists and never makes one — what a host's own start command
+ *   calls. Only the target whose build is a server has one.
+ * - **`preview`** builds, then runs the result here — for the targets where that is not the same two
+ *   commands, because otherwise the production build is unanswerable without deploying it.
+ * - **`deploy`** builds, then ships it — where the platform has one command that does the shipping.
  */
 export const BASE_SCRIPTS: Record<string, string> = {
   dev: 'rshono dev',
   build: 'rshono build',
   typecheck: 'tsc --noEmit',
 };
+
+/**
+ * Every script the app gets, in the order they are written: the base ones, then each feature's, in the order
+ * the features were selected. The manifest and the README's command table are both this, so neither can
+ * document a script the other does not have.
+ */
+export function buildScripts(features: Feature[]): Record<string, string> {
+  const scripts: Record<string, string> = { ...BASE_SCRIPTS };
+  for (const feature of features) Object.assign(scripts, feature.scripts);
+  return scripts;
+}
 
 /** The gloss for each base script, in the README's command table. `build` names the target it is for. */
 function baseScriptHelp(deploy: DeployTargetName): Record<string, string> {
@@ -45,48 +58,30 @@ export function invoke(pm: PackageManager, script: string): string {
 /**
  * The README's command table: one line per script, with the command to type and a one-line gloss.
  *
- * Generated from the same two sources the manifest is assembled from — {@link BASE_SCRIPTS} and the
- * features — so the file cannot document a script the app does not have, or miss one it does. A script
- * whose feature supplies no `scriptHelp` is left out and covered by the "package.json has the rest"
- * line: that is how a formatter's `format:check` stays out of a table about running the app.
+ * A script whose feature supplies no `scriptHelp` is left out and covered by the "package.json has the
+ * rest" line — that is how a formatter's `format:check` stays out of a table about running the app.
  */
 export function scriptTable(answers: Answers, features: Feature[], pm: PackageManager): string {
-  const scripts: Record<string, string> = { ...BASE_SCRIPTS };
   const help: Record<string, string> = baseScriptHelp(answers.deploy);
-  for (const feature of features) {
-    Object.assign(scripts, feature.scripts);
-    Object.assign(help, feature.scriptHelp);
-  }
+  for (const feature of features) Object.assign(help, feature.scriptHelp);
 
-  const documented = Object.keys(scripts).filter((name) => help[name]);
+  const documented = Object.keys(buildScripts(features)).filter((name) => help[name]);
   const width = Math.max(...documented.map((name) => invoke(pm, name).length));
   return documented.map((name) => `${invoke(pm, name).padEnd(width)}  # ${help[name]}`).join('\n');
 }
 
 /**
- * The one command that gets this app into production, or `null` for the target whose upload is the user's
- * own to wire up. Decided once here because both the README and the closing summary name it, and they must
- * not name different things — each phrases it for where it appears.
+ * The command that gets this app into production, as a sentence — the README's deploy step, and the same
+ * choice the closing summary makes, so the two cannot name different commands.
  *
- * Read off the features rather than the target, so a target that gains a `deploy` gains the command with
- * it. `start` is the answer where there is no `deploy`: it does not ship anything itself, but it is what
- * the host will run, so it is the command the app hands over.
- */
-export function shipCommand(features: Feature[], pm: PackageManager): { script: 'deploy' | 'start'; command: string } | null {
-  const scripts = new Set(features.flatMap((feature) => Object.keys(feature.scripts ?? {})));
-  for (const script of ['deploy', 'start'] as const) {
-    if (scripts.has(script)) return { script, command: invoke(pm, script) };
-  }
-  return null;
-}
-
-/**
- * The deploy step as a sentence, for the README. The platform's own command is never repeated here — the
- * framework's hint on the line above is where it gets named, and saying it twice is how the two drift.
+ * Read off the scripts rather than the target, so a target that gains a `deploy` gains the sentence with it.
+ * `start` is the answer where there is no `deploy`: it ships nothing itself, but it is what the host runs.
  */
 export function deployStep(features: Feature[], pm: PackageManager): string {
-  const ship = shipCommand(features, pm);
-  if (ship?.script === 'deploy') return `\`${ship.command}\` does the build and the upload in one step.`;
-  if (ship) return `\`${ship.command}\` runs that build wherever you host it, and never makes one.`;
-  return `\`${invoke(pm, 'preview')}\` runs the same bundle on Node, so you can check it before you upload.`;
+  const scripts = buildScripts(features);
+  if (scripts.deploy) return `\`${invoke(pm, 'deploy')}\` does the build and the upload in one step.`;
+  if (scripts.start) return `\`${invoke(pm, 'start')}\` runs that build wherever you host it, and never makes one.`;
+  // Every branch names a script the app has, so a target that contributes none of the three still reads true.
+  if (scripts.preview) return `\`${invoke(pm, 'preview')}\` runs the build here, so you can check it first.`;
+  return `\`${invoke(pm, 'build')}\` produces it; getting it there is yours to script.`;
 }

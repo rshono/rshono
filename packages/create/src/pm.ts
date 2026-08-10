@@ -10,14 +10,11 @@ export interface PackageManager {
   /** What precedes a script name: `pnpm dev`, but `npm run dev`. */
   run: string;
   /**
-   * How this manager runs a CLI it has *not* installed — `npx`, `pnpm dlx`, `yarn dlx`, `bunx`.
+   * How this manager runs a CLI it has *not* installed — `npx`, `pnpm dlx`, `yarn dlx` (Berry), `bunx`.
    *
-   * One deploy target needs it. Wrangler is a devDependency, because `wrangler dev` is how a Cloudflare
-   * app previews and a pinned version is worth having; the Vercel CLI is not, because most Vercel projects
-   * deploy from git and never install it — so its `deploy` script fetches the CLI through this rather than
-   * assuming a global `vercel` on the PATH.
-   *
-   * `yarn dlx` is Yarn Berry only, as `pnx` is pnpm 10.16+: both are the current release of their tool.
+   * The Vercel target needs it: wrangler is a devDependency because `wrangler dev` is how a Cloudflare app
+   * previews, but the Vercel CLI is not installed, so its `deploy` script fetches the CLI through this
+   * rather than assuming a global `vercel` on the PATH.
    */
   dlx: string;
 }

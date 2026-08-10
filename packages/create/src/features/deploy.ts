@@ -12,16 +12,12 @@ import type { Feature } from './types.js';
  * copy generated here would only go stale. So a target contributes the commands that run and ship the
  * build, the CLI they need, the directories to gitignore, and a note for the step no command covers.
  *
- * Which script names mean what is settled in `scripts.ts`, above `BASE_SCRIPTS`. In short: `start` runs an
- * existing build, `preview` builds and runs it here, `deploy` builds and ships it. The targets that have
- * one command to ship with have a `deploy`; the ones whose build is not a server locally have a `preview`,
- * since "does the production build work" is otherwise unanswerable without deploying it. Only `node` has a
- * `start`, and it needs no `preview`: `build` then `start` *is* the preview, and `rshono start` refuses a
- * bundle built for anywhere else rather than starting one with no listener in it.
+ * What the three script names promise is documented once, above `BASE_SCRIPTS` in `scripts.ts`. Only `node`
+ * has a `start`, because `rshono start` refuses a bundle built for anywhere else, and it needs no `preview`:
+ * `build` then `start` already is one.
  *
- * `pm` is here for two reasons — the Vercel CLI is not installed, so its script has to name the runner that
- * fetches it (see {@link PackageManager.dlx}), and every command in {@link Feature.platformSetup} is spelled
- * for the package manager the app got.
+ * `pm` is here because two things have to be spelled for the app's package manager — the runner that fetches
+ * the uninstalled Vercel CLI ({@link PackageManager.dlx}), and every command in {@link Feature.platformSetup}.
  */
 function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
   const build = invoke(pm, 'build');
@@ -34,12 +30,12 @@ function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
       scripts: { start: 'rshono start' },
       scriptHelp: { start: 'run the build that exists — what your host calls' },
       platformSetup: [
-        'Hosting it somewhere with two fields to fill in — Render, Railway, Fly, a PaaS:',
+        'The two commands a host asks for:',
         '',
-        `- **Build command** — \`${pm.name} install && ${build}\``,
-        `- **Start command** — \`${invoke(pm, 'start')}\``,
+        `- **Build** — \`${pm.name} install && ${build}\``,
+        `- **Start** — \`${invoke(pm, 'start')}\``,
         '',
-        `A Dockerfile is the same pair: \`RUN ${build}\`, then \`CMD ["${pm.name}", "start"]\`.`,
+        `In a Dockerfile, the same pair: \`RUN ${build}\`, then \`CMD ["${pm.name}", "start"]\`.`,
       ].join('\n'),
     },
     cloudflare: {
@@ -60,13 +56,8 @@ function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
       gitignore: ['.wrangler/'],
       notes: ['The first build writes wrangler.jsonc — yours to edit after that.'],
       platformSetup: [
-        'Building on Cloudflare from a git repo instead — the two commands Workers Builds asks for:',
-        '',
-        `- **Build command** — \`${build}\``,
-        '- **Deploy command** — `npx wrangler deploy`, or `npx wrangler versions upload` on a preview branch',
-        '',
-        'Its build image installs your dependencies before running these, and has npm, pnpm, yarn and bun in it —',
-        'so `npx` there runs the wrangler that install put in `node_modules`, whichever manager did the installing.',
+        `Building from a git repo instead: set Workers Builds' **Build command** to \`${build}\`.`,
+        'Its deploy command already defaults to `npx wrangler deploy`, and it installs dependencies itself.',
       ].join('\n'),
     },
     vercel: {
@@ -88,27 +79,24 @@ function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
         'Drop --prod from the deploy script for a preview URL instead.',
       ],
       platformSetup: [
-        `Deploying from CI instead — the same \`${invoke(pm, 'deploy')}\`, with \`VERCEL_ORG_ID\` and`,
-        '`VERCEL_PROJECT_ID` in the job environment and a token for the CLI to authenticate with. That is the',
-        'route this target is for: the build has already assembled the deployment, which is what `--prebuilt`',
-        'uploads, and the platform must not rebuild it.',
+        `Deploying from CI instead: the same \`${invoke(pm, 'deploy')}\`, with \`VERCEL_ORG_ID\`, \`VERCEL_PROJECT_ID\``,
+        'and a CLI token in the environment.',
         '',
-        'If you connect the repo to Vercel’s own builds instead, its settings have to be pointed here:',
-        '**Framework Preset** — Other, because `hono` in the dependencies is otherwise detected as the Hono',
-        `preset and would bring its build settings with it — and **Build Command** — \`${build}\`.`,
+        `If you let Vercel build the repo itself, set **Framework Preset** to Other — \`hono\` is otherwise`,
+        `detected as the Hono preset — and **Build Command** to \`${build}\`.`,
       ].join('\n'),
     },
     'aws-lambda': {
       id: 'deploy-aws-lambda',
-      // No CLI to wrap: the upload is SAM, CDK, Terraform or the console, and guessing wrong would be
-      // worse than saying nothing. `preview` still applies — the Lambda bundle is a Node handler.
+      // No CLI to wrap, and no upload this could guess at. `preview` still applies — the bundle is a Node
+      // handler, so it runs here.
       scripts: { preview: 'rshono build --deploy node && rshono start' },
       scriptHelp: { preview: 'build for Node and run that here' },
       notes: ['Use a Function URL in RESPONSE_STREAM mode — a buffered invoke mode drops the streaming.'],
       platformSetup: [
-        'There is no dashboard to fill in here: the upload is SAM, CDK, Terraform or the console. What a CI job',
-        `needs is \`${pm.name} install && ${build}\`, and then the function package — \`dist/\`, plus \`node_modules\` if the`,
-        'app has dependencies of its own, which the server bundle leaves external rather than inlining.',
+        `There is no settings page here; the upload is yours to script. A job needs \`${pm.name} install && ${build}\`,`,
+        'then the function package: `dist/`, plus `node_modules` for any dependency of your own, which the server',
+        'bundle leaves external.',
       ].join('\n'),
     },
   };

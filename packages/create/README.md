@@ -73,23 +73,18 @@ write pass first.
 
 Beside `dev`, `build` and `typecheck`, the deploy target contributes the scripts only it can define, under three
 names that mean the same thing in every app. **`deploy`** builds and ships it, where the platform has one
-command that ships a build (`cloudflare`, `vercel`). **`preview`** builds and runs the result on this machine —
-in workerd for `cloudflare`, and for `vercel` and `aws-lambda` as a Node build, since neither can run its own
-output locally. **`start`** runs a build that already exists and never makes one, which is what a `CMD`, a
-systemd unit or a PaaS start command needs — so only `node` has one, and needs no `preview`: `build` then
-`start` already is that.
+command that does the shipping (`cloudflare`, `vercel`). **`preview`** builds and runs the result here — in
+workerd for `cloudflare`, and as a Node build for `vercel` and `aws-lambda`, since neither can run its own
+output locally. **`start`** runs a build that already exists and never makes one, which is what a host's start
+command needs — so only `node` has one, and needs no `preview`: `build` then `start` already is that.
 
-Every command is spelled for the package manager the project got, and for the CLI that is not installed —
-Vercel's, because most Vercel projects deploy from git — that means the runner: `npx`, `pnpm dlx`, `yarn dlx` or
-`bunx`. Wrangler is a devDependency instead, since `wrangler dev` is how a Cloudflare app previews and the
-pinned version is worth having.
+Every command is spelled for the package manager the project got. That includes the runner for the one CLI a
+scaffold does not install, Vercel's: `npx`, `pnpm dlx`, `yarn dlx` or `bunx`. Wrangler is a devDependency
+instead, since `wrangler dev` is how a Cloudflare app previews.
 
-Those scripts are for a laptop, though, and most apps are deployed by the platform from a git repo — where the
-question is not which script to run but what to type into two fields on a settings page. A `deploy` script
-pasted there would build twice. So each target also spells out the commands its platform asks for — Workers
-Builds' build and deploy commands, Vercel's preset and build command, a PaaS's build and start commands, and
-for AWS the fact that there is no such page — in the same package manager, in the scaffolded README's
-Deploying section beside everything else about shipping it.
+Those scripts are for a laptop, and a platform building from git asks a different question — what to type into
+two fields on a settings page, where a `deploy` script would build twice. So each target also spells out the
+commands its own platform asks for, in the scaffolded README's Deploying section.
 
 `react` and `react-dom` are pinned **exactly**, at the versions the framework is tested against, and those
 pins are generated from rshono's own manifest. That is not tidiness: the RSC runtime reaches into React's

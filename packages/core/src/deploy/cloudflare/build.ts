@@ -32,6 +32,8 @@ function workerName(rootDir: string): string {
   return name || 'rshono-app';
 }
 
+// Fixed, not the day the build ran: wrangler's bundled workerd refuses a date newer than its own, so a config
+// dated today would deploy fine and never start under `wrangler dev`. See the test that holds it behind today.
 const COMPATIBILITY_DATE = '2026-07-01';
 
 function wranglerConfig(rootDir: string): string {

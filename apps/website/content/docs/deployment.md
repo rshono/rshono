@@ -30,10 +30,9 @@ needs a real `node:` API beyond `nodejs_compat` will not work. The build scaffol
 the project has none — including `nodejs_compat`, which the request context needs for
 `AsyncLocalStorage` — and never touches it again.
 
-Its `compatibility_date` is a fixed date behind the released wranglers, not the day it was generated:
-wrangler bundles the workerd binary it shipped with, and that binary refuses a date newer than its own, so
-a config dated today would deploy fine and break `wrangler dev`. Move it deliberately, when your own code
-wants a newer default.
+Its `compatibility_date` is a fixed date behind the released wranglers, not the day it was generated: wrangler
+bundles the workerd it shipped with, and that binary refuses a date newer than its own, so a config dated today
+would deploy fine and break `wrangler dev`.
 
 Bindings (D1, KV, R2) arrive as `getRequestContext().env`. They are not available under `rshono dev`,
 which is plain Node.

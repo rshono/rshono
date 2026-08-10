@@ -29,11 +29,12 @@ compiles to `undefined` rather than shipping. `src/components/layout.tsx` reads 
 
 ## Deploying
 
-This app is built for `{{DEPLOY_TARGET}}`: after `{{PM_RUN}} build`, {{DEPLOY_HINT}}.
-{{DEPLOY_STEP}}
+This app is built for `{{DEPLOY_TARGET}}`. {{DEPLOY_STEP}}
 
 {{PLATFORM_SETUP}}
 
 Change `deploy` in `rshono.config.ts` to target somewhere else, or build for one place without editing the
 file: `rshono build --deploy vercel`, or `RSHONO_DEPLOY=vercel` in CI. `dev` always runs the Node dev
 server, whatever the target — it is a property of the build, not of developing.
+
+Every target, and what each one needs: <https://www.rshono.com/docs/deployment>

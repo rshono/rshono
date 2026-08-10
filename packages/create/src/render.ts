@@ -1,5 +1,5 @@
 import type { Feature } from './features/index.js';
-import { deployHint, type Answers } from './options.js';
+import type { Answers } from './options.js';
 import type { PackageManager } from './pm.js';
 import { deployStep, scriptTable } from './scripts.js';
 
@@ -21,16 +21,11 @@ export function tokensFor(answers: Answers, features: Feature[], pm: PackageMana
   return {
     '{{PROJECT_NAME}}': answers.packageName,
     '{{DEPLOY_TARGET}}': answers.deploy,
-    '{{DEPLOY_HINT}}': deployHint(answers.deploy),
-    '{{PM_RUN}}': pm.run,
-    // The three derived from the features rather than the answers, because all three are about what the app
+    // Derived from the features rather than the answers, because all three are about the scripts the app
     // actually got: its command table, the one command that ships it, and what its platform asks for.
     '{{SCRIPT_TABLE}}': scriptTable(answers, features, pm),
     '{{DEPLOY_STEP}}': deployStep(features, pm),
-    '{{PLATFORM_SETUP}}': features
-      .map((feature) => feature.platformSetup)
-      .filter(Boolean)
-      .join('\n\n'),
+    '{{PLATFORM_SETUP}}': features.map((feature) => feature.platformSetup ?? '').join(''),
   };
 }
 
