@@ -71,7 +71,6 @@ your other dependencies resolve from `node_modules`.
 - **No compression.** It belongs in a proxy, a load balancer or a CDN, and every hosted target already
   does it. `hono/compress` in `src/server.ts` if you need it in-process — read its docs on streaming
   first, because a buffering compressor undoes streamed SSR.
-- **No prefetching.** A navigation fetches when it is asked for; there is no speculative warming.
 - **Scroll restoration is the browser's.** `history.scrollRestoration` stays `auto`, so a traversal's
   offset is the browser's to restore. A new page starts at the top, or at the `#hash` the link named.
 - **No base path.** `siteUrl` must be a bare origin.
