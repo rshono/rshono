@@ -1,18 +1,8 @@
 import type { Feature } from './features/index.js';
 import type { Answers } from './options.js';
 import type { PackageManager } from './pm.js';
+import { buildScripts } from './scripts.js';
 import { FRAMEWORK_DEPS, NODE_ENGINE, RSHONO_RANGE } from './versions.js';
-
-/**
- * The scripts every app gets. `start` is not among them, because it means something different per
- * platform: `node` is the one target that runs the build itself, so it contributes its own, and a
- * platform target contributes a `deploy` instead, where its platform has one command to give.
- */
-const BASE_SCRIPTS: Record<string, string> = {
-  dev: 'rshono dev',
-  build: 'rshono build',
-  typecheck: 'tsc --noEmit',
-};
 
 /** Field order in the emitted file — the conventional reading order, and stable so snapshots are too. */
 const FIELD_ORDER = ['name', 'version', 'private', 'type', 'engines', 'packageManager', 'scripts', 'dependencies', 'devDependencies'];
@@ -51,12 +41,10 @@ export function buildPnpmSettings(features: Feature[]): string | null {
 /**
  * Assembles `package.json` from the answers and whatever the selected features contribute.
  *
- * Dependencies are sorted by name and scripts are left in contribution order (the base ones, then each
- * feature's, in the order features were selected) — so two runs with the same answers produce byte-
- * identical output, which is what makes the generated manifest snapshot-testable.
+ * Dependencies are sorted by name and scripts keep the order {@link buildScripts} gives them — so two runs
+ * with the same answers produce byte-identical output, which is what makes the manifest snapshot-testable.
  */
 export function buildPackageJson(answers: Answers, features: Feature[], pm: PackageManager): string {
-  const scripts: Record<string, string> = { ...BASE_SCRIPTS };
   const dependencies: Record<string, string> = {
     '@rshono/core': RSHONO_RANGE,
     hono: FRAMEWORK_DEPS.hono,
@@ -70,7 +58,6 @@ export function buildPackageJson(answers: Answers, features: Feature[], pm: Pack
   };
 
   for (const feature of features) {
-    Object.assign(scripts, feature.scripts);
     Object.assign(dependencies, feature.dependencies);
     Object.assign(devDependencies, feature.devDependencies);
   }
@@ -82,7 +69,7 @@ export function buildPackageJson(answers: Answers, features: Feature[], pm: Pack
     type: 'module',
     // Generated from the framework's own manifest, so the app's floor cannot drift below rshono's.
     engines: { node: NODE_ENGINE },
-    scripts,
+    scripts: buildScripts(features),
     dependencies: sorted(dependencies),
     devDependencies: sorted(devDependencies),
   };

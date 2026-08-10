@@ -2,6 +2,23 @@ import * as prompts from '@clack/prompts';
 import { deployHint, type Answers } from './options.js';
 import type { Plan } from './plan.js';
 import type { PackageManager } from './pm.js';
+import { buildScripts, invoke } from './scripts.js';
+
+/**
+ * The two halves of the closing line, in the words of the app's own scripts: what produces something
+ * shippable, and where it goes from there. The target with no command to give keeps the framework's hint,
+ * which is a sentence about the platform rather than something to type.
+ */
+function productionSteps(answers: Answers, plan: Plan, pm: PackageManager): string {
+  const scripts = buildScripts(plan.features);
+  const check = scripts.preview ? `${invoke(pm, 'preview')} to run the production build` : `${pm.run} build`;
+  const ship = scripts.deploy
+    ? `${invoke(pm, 'deploy')} to ship it`
+    : scripts.start
+      ? `${invoke(pm, 'start')} on the host that runs it`
+      : deployHint(answers.deploy);
+  return `${check}, and ${ship}`;
+}
 
 /**
  * What to do next, in the order to do it — the last thing the user reads, and for most people the only
@@ -14,7 +31,7 @@ export function nextSteps(answers: Answers, plan: Plan, pm: PackageManager, opti
   steps.push(`${pm.run} dev`);
 
   const lines = [steps.join('\n')];
-  lines.push(`\nThen ${pm.run} build, and ${deployHint(answers.deploy)}.`);
+  lines.push(`\nThen ${productionSteps(answers, plan, pm)}.`);
   if (plan.notes.length > 0) lines.push(`\n${plan.notes.join('\n')}`);
   return lines.join('\n');
 }

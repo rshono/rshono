@@ -110,6 +110,22 @@ describe('the Workers build output', () => {
     assert.equal(config.assets.binding, 'ASSETS', 'the worker reads public/ and prerendered pages through it');
   });
 
+  /*
+   * The generated config used to be dated the day the build ran, which made every fresh project's
+   * `wrangler dev` fail: wrangler ships the workerd binary it was released with, and that binary refuses a
+   * compatibility date newer than its own — "requires compatibility date X, but the newest date supported
+   * by this server binary is Y", and it never starts. `wrangler deploy` hid it, because Cloudflare's own
+   * runtime is current.
+   *
+   * So the date has to be a constant behind the released wranglers, and this is what says so. The bound is
+   * the build date rather than a literal, since a literal here would just be the constant twice.
+   */
+  test('dates the config behind the wrangler that has to run it', () => {
+    const { compatibility_date: date } = JSON.parse(readFileSync(WRANGLER_CONFIG, 'utf8'));
+    assert.match(date, /^\d{4}-\d{2}-\d{2}$/, 'a compatibility date is a plain ISO day');
+    assert.ok(date < new Date().toISOString().slice(0, 10), `${date} is not behind today — wrangler dev will refuse to start`);
+  });
+
   test('hands the platform a fetch handler, and still exports the app and routes the prerender pass imports', () => {
     assert.equal(typeof worker.fetch, 'function');
     assert.equal(typeof bundle.app?.fetch, 'function');

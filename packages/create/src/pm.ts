@@ -9,6 +9,14 @@ export interface PackageManager {
   install: string[];
   /** What precedes a script name: `pnpm dev`, but `npm run dev`. */
   run: string;
+  /**
+   * How this manager runs a CLI it has *not* installed — `npx`, `pnpm dlx`, `yarn dlx` (Berry), `bunx`.
+   *
+   * The Vercel target needs it: wrangler is a devDependency because `wrangler dev` is how a Cloudflare app
+   * previews, but the Vercel CLI is not installed, so its `deploy` script fetches the CLI through this
+   * rather than assuming a global `vercel` on the PATH.
+   */
+  dlx: string;
 }
 
 const INSTALL: Record<PackageManagerName, string[]> = {
@@ -25,12 +33,19 @@ const RUN: Record<PackageManagerName, string> = {
   bun: 'bun',
 };
 
+const DLX: Record<PackageManagerName, string> = {
+  npm: 'npx',
+  pnpm: 'pnpm dlx',
+  yarn: 'yarn dlx',
+  bun: 'bunx',
+};
+
 function isKnown(name: string): name is PackageManagerName {
   return PACKAGE_MANAGERS.includes(name as PackageManagerName);
 }
 
 export function packageManager(name: PackageManagerName, version?: string): PackageManager {
-  return { name, version, install: INSTALL[name], run: RUN[name] };
+  return { name, version, install: INSTALL[name], run: RUN[name], dlx: DLX[name] };
 }
 
 /**

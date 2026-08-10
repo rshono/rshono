@@ -1,5 +1,7 @@
-import { deployHint, type Answers } from './options.js';
+import type { Feature } from './features/index.js';
+import type { Answers } from './options.js';
 import type { PackageManager } from './pm.js';
+import { deployStep, scriptTable } from './scripts.js';
 
 /**
  * The substitutions applied to every template file. Deliberately a handful of scalars: anything that
@@ -15,12 +17,15 @@ export type Tokens = Record<string, string>;
  */
 const TOKEN_PATTERN = /\{\{[A-Z][A-Z\d_]*\}\}/g;
 
-export function tokensFor(answers: Answers, pm: PackageManager): Tokens {
+export function tokensFor(answers: Answers, features: Feature[], pm: PackageManager): Tokens {
   return {
     '{{PROJECT_NAME}}': answers.packageName,
     '{{DEPLOY_TARGET}}': answers.deploy,
-    '{{DEPLOY_HINT}}': deployHint(answers.deploy),
-    '{{PM_RUN}}': pm.run,
+    // Derived from the features rather than the answers, because all three are about the scripts the app
+    // actually got: its command table, the one command that ships it, and what its platform asks for.
+    '{{SCRIPT_TABLE}}': scriptTable(answers, features, pm),
+    '{{DEPLOY_STEP}}': deployStep(features, pm),
+    '{{PLATFORM_SETUP}}': features.map((feature) => feature.platformSetup ?? '').join(''),
   };
 }
 
