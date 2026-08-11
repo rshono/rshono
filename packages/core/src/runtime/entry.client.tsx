@@ -10,6 +10,9 @@ import {
 import { isControlDigest, parseRedirectDigest } from './control.js';
 import type { DevMessage } from './dev-protocol.js';
 import type { RscPayload } from './entry.rsc.js';
+// Dev-only, and reached only from inside an `import.meta.webpackHot` branch — which a production
+// build compiles to `false`, leaving this module unreferenced and dropped.
+import { walkHotUpdates } from './hot-update.js';
 import { RouterContext, type NavigationRouter } from './navigation.js';
 import { createRscRequest } from './request.js';
 
@@ -470,50 +473,65 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
  * guarded by import.meta.webpackHot). Listens to the CLI's SSE endpoint:
  *
  *   client-built  → hot-apply the waiting updates (react-refresh keeps
- *                   component state); any failure falls back to reload.
+ *                   component state); anything the page can't be patched
+ *                   up to falls back to a reload — see walkHotUpdates.
  *   rsc-update    → server component code changed: re-fetch the flight
  *                   payload for the current URL, state preserved.
  *   hello         → sent on (re)connect with the latest build hash; a
  *                   mismatch means events were missed — resync.
  */
 function initDevRefresh(fetchRscPayload: () => Promise<void>) {
+  const hot = import.meta.webpackHot!;
   let connectedOnce = false;
+  /** The newest build the dev server has announced — what {@link applyClientUpdate} walks towards. */
+  let targetHash: string | undefined;
 
-  async function applyClientUpdate(hash: string) {
-    const hot = import.meta.webpackHot!;
-    if (hash === __webpack_hash__) return;
-    if (hot.status() !== 'idle') {
-      window.location.reload();
-      return;
-    }
-    try {
-      await hot.check(true);
-      if (hash !== __webpack_hash__) await applyClientUpdate(hash);
-    } catch (error) {
-      console.warn('[rshono] hot update failed, reloading:', error);
-      window.location.reload();
-    }
+  /** Gives up on patching the page and takes the whole document from the dev server instead. */
+  function reload(reason: string, error?: unknown): void {
+    console.warn(`[rshono] ${reason} — reloading`, ...(error === undefined ? [] : [error]));
+    window.location.reload();
   }
 
-  const source = new EventSource('/_rshono/hmr');
-  source.onmessage = async (event) => {
-    const message = JSON.parse(event.data) as DevMessage;
+  async function applyClientUpdate(): Promise<void> {
+    const giveUp = await walkHotUpdates(
+      hot,
+      () => __webpack_hash__,
+      () => targetHash,
+    );
+    if (giveUp) reload(giveUp.reason, giveUp.error);
+  }
+
+  async function handle(message: DevMessage): Promise<void> {
     switch (message.type) {
       case 'hello':
+        targetHash = message.hash ?? targetHash;
         if (connectedOnce) {
-          if (message.hash && message.hash !== __webpack_hash__) await applyClientUpdate(message.hash);
+          await applyClientUpdate();
           await fetchRscPayload().catch(() => window.location.reload());
         }
         connectedOnce = true;
         break;
       case 'client-built':
-        if (message.hash) await applyClientUpdate(message.hash);
+        targetHash = message.hash;
+        await applyClientUpdate();
         break;
       case 'rsc-update':
         console.log('[rshono] server components updated');
         await fetchRscPayload().catch(() => window.location.reload());
         break;
     }
+  }
+
+  const source = new EventSource('/_rshono/hmr');
+  // Chained rather than handled as they arrive: a burst of saves puts several frames on the wire
+  // inside the time one `hot.check` takes, and two of those overlapping is an error webpack throws
+  // on ("check() is only allowed in idle status") — which would turn every burst into a full reload.
+  // Nothing is dropped by queueing, because `targetHash` is shared: whichever handler runs next
+  // walks to the newest build rather than to the one its own frame named.
+  let queue: Promise<void> = Promise.resolve();
+  source.onmessage = (event) => {
+    const message = JSON.parse(event.data) as DevMessage;
+    queue = queue.then(() => handle(message)).catch((error) => reload('the dev client failed', error));
   };
 }
 
