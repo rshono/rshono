@@ -17,6 +17,23 @@ const FRAMEWORK_ROOT = join(FRAMEWORK_DIST, '..');
 const BUNDLED_PACKAGES = /^(@rshono\/core|react|react-dom|react-server-dom-rspack|hono|@hono\/node-server)(\/|$)/;
 
 /**
+ * The directory a command writes its bundles to, relative to the project root — one per command,
+ * never shared.
+ *
+ * `rshono build` run while `rshono dev` is up would otherwise write over the dev server's own
+ * output: the build's `clean` empties `<out>/server`, and the route chunks it deletes are exactly
+ * the ones the running server worker imports *lazily, at request time*. Every route the worker had
+ * not already loaded then fails with `ERR_MODULE_NOT_FOUND`, and no later edit repairs it, because
+ * Rspack's watch-mode emit compares against what it believes it already wrote rather than against
+ * the disk — so it never re-emits the deleted files. The dev server 500s until it is restarted.
+ *
+ * Both names are a single level under the root, which {@link ../deploy/filesystem.ts} relies on: it
+ * derives the project root from where the bundle ended up, `<out>/server/main.mjs` → `../..`.
+ */
+export const BUILD_OUT_DIR = 'dist';
+export const DEV_OUT_DIR = '.rshono';
+
+/**
  * Packages that end up imported *by app source* without the app ever mentioning them: the RSC
  * transform rewrites a `'use client'` module, a page or a server action into imports of the RSC
  * runtime, and those requests resolve from the app's own `src/`.
@@ -108,6 +125,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
   const { rootDir, isDev, config, preset, onServerComponentChanges } = options;
   const srcDir = join(rootDir, 'src');
   const mode = isDev ? 'development' : 'production';
+  const outDir = isDev ? DEV_OUT_DIR : BUILD_OUT_DIR;
 
   const routesFile = ['routes.ts', 'routes.tsx'].map((f) => join(srcDir, f)).find(existsSync);
   if (!routesFile) {
@@ -172,7 +190,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     devtool: isDev ? 'source-map' : false,
     entry: { main: clientEntry },
     output: {
-      path: join(rootDir, 'dist', 'static'),
+      path: join(rootDir, outDir, 'static'),
       publicPath: '/_static/',
       clean: !isDev,
       filename: isDev ? 'chunks/main.js' : 'chunks/main.[contenthash].js',
@@ -207,8 +225,13 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     devtool: isDev ? 'source-map' : false,
     entry: { main: rscEntry },
     output: {
-      path: join(rootDir, 'dist', 'server'),
-      clean: true,
+      path: join(rootDir, outDir, 'server'),
+      // Off in dev, matching the client compiler above. The server bundle's route chunks are imported
+      // lazily, at request time, so the worker keeps reading this directory for as long as it runs —
+      // and a rebuild that renames or drops a chunk (renaming a page file is enough) would delete one
+      // the live worker still intends to import. Stale chunks are inert instead: nothing references
+      // them, and `rshono dev` empties the directory on startup.
+      clean: !isDev,
       module: true,
       chunkFormat: 'module',
       chunkLoading: 'import',
@@ -291,7 +314,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
       pageScanPlugin,
       new ServerPlugin({ onServerComponentChanges }),
       // Bakes rshono.config.ts into the bundle, read back as `__RSHONO_CONFIG__` at request time.
-      new rspack.DefinePlugin({ __RSHONO_CONFIG__: JSON.stringify(resolveServerConfig(config, { isDev })) }),
+      new rspack.DefinePlugin({ __RSHONO_CONFIG__: JSON.stringify(resolveServerConfig(config, { isDev, outDir })) }),
     ],
     performance: false,
   };

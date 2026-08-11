@@ -126,7 +126,8 @@ Call them directly from client code (typed args and result), or wire them to `<f
 `useActionState` — forms keep working before hydration and with JavaScript disabled. Every action response
 carries a fresh page payload, so server-rendered UI updates after a mutation.
 **Every `'use server'` export is a public HTTP endpoint**, so authenticate, authorize and validate inside the
-action. [Server actions docs](https://www.rshono.com/docs/server-actions).
+action. [Server actions docs](https://www.rshono.com/docs/pages#server-actions), and
+[how to use them](https://www.rshono.com/docs/usage).
 
 ## Full Hono underneath
 
