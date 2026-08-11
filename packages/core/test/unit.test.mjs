@@ -18,6 +18,7 @@ import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../di
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
 import { beginPageRender, RequestContext } from '../dist/runtime/context.js';
+import { walkHotUpdates } from '../dist/runtime/hot-update.js';
 import { MINIMAL_APP_DIR } from './helpers.mjs';
 
 const tempDirs = [];
@@ -732,5 +733,106 @@ describe('server bundle externals', () => {
     );
     assert.equal(verdict('D:/app/src/components/home.tsx'), undefined, 'forward-slash drive paths too');
     assert.equal(verdict('\\\\server\\share\\home.tsx'), undefined, 'and UNC paths');
+  });
+});
+
+describe('walkHotUpdates', () => {
+  // A fake of the bundler's hot runtime. `chain` maps the hash the page is on to the hash the next
+  // `*.hot-update.json` moves it to — exactly the file-per-build chain the real one walks; a hash
+  // missing from it is a 404, which the real runtime reports as "no update", not as an error.
+  function fakeHot({ from, chain, status = () => 'idle' }) {
+    const state = { hash: from, checks: 0 };
+    return [
+      state,
+      {
+        status,
+        async check() {
+          state.checks++;
+          const next = chain.get(state.hash);
+          if (next === undefined) return null;
+          if (next instanceof Error) throw next;
+          state.hash = next;
+          return ['some/module.js'];
+        },
+      },
+    ];
+  }
+
+  const walk = (state, hot, target) =>
+    walkHotUpdates(
+      hot,
+      () => state.hash,
+      () => target,
+    );
+
+  test('walks one build at a time until the page is on the target', async () => {
+    const [state, hot] = fakeHot({
+      from: 'a',
+      chain: new Map([
+        ['a', 'b'],
+        ['b', 'c'],
+      ]),
+    });
+    assert.equal(await walk(state, hot, 'c'), null);
+    assert.equal(state.hash, 'c');
+    assert.equal(state.checks, 2, 'each round should advance exactly one build');
+  });
+
+  test('does nothing when the page is already on the target', async () => {
+    const [state, hot] = fakeHot({ from: 'a', chain: new Map() });
+    assert.equal(await walk(state, hot, 'a'), null);
+    assert.equal(state.checks, 0);
+  });
+
+  test('gives up instead of spinning when the update chain is broken', async () => {
+    // The regression this exists for. A missing manifest 404s, and the runtime resolves `check` with
+    // null rather than rejecting — so a walk that only stops on "reached the target" or "threw" keeps
+    // re-requesting that same 404 forever, and the page never picks up another change. Restarting the
+    // dev server puts every open tab in exactly this state: starting up wipes `dist`.
+    const [state, hot] = fakeHot({ from: 'gone', chain: new Map() });
+    const giveUp = await walk(state, hot, 'latest');
+    assert.match(giveUp?.reason ?? '', /cannot be applied/);
+    assert.equal(state.checks, 1, 'the unreachable target must be given up on after a single round');
+  });
+
+  test('gives up when an update applies without moving the page forward', async () => {
+    const [state, hot] = fakeHot({ from: 'a', chain: new Map([['a', 'a']]) });
+    const giveUp = await walk(state, hot, 'z');
+    assert.match(giveUp?.reason ?? '', /cannot be applied/);
+    assert.equal(state.checks, 1);
+  });
+
+  test('gives up, carrying the error, when an update cannot be applied', async () => {
+    const failure = new Error('module declined the update');
+    const [state, hot] = fakeHot({ from: 'a', chain: new Map([['a', failure]]) });
+    const giveUp = await walk(state, hot, 'b');
+    assert.equal(giveUp?.error, failure);
+  });
+
+  test('gives up when another update is already in flight', async () => {
+    const [state, hot] = fakeHot({ from: 'a', chain: new Map([['a', 'b']]), status: () => 'apply' });
+    assert.match((await walk(state, hot, 'b'))?.reason ?? '', /already in flight/);
+    assert.equal(state.checks, 0, 'check() may only be called from idle');
+  });
+
+  test('absorbs builds that land mid-walk rather than finishing against a stale target', async () => {
+    // Both hashes are read fresh each round precisely so a save during a walk extends it: the page
+    // ends up on the newest build instead of stopping at the one the walk started for.
+    const [state, hot] = fakeHot({
+      from: 'a',
+      chain: new Map([
+        ['a', 'b'],
+        ['b', 'c'],
+      ]),
+    });
+    let target = 'b';
+    const done = walkHotUpdates(
+      hot,
+      () => state.hash,
+      () => target,
+    );
+    target = 'c';
+    assert.equal(await done, null);
+    assert.equal(state.hash, 'c');
   });
 });
