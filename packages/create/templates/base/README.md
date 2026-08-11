@@ -37,4 +37,4 @@ Change `deploy` in `rshono.config.ts` to target somewhere else, or build for one
 file: `rshono build --deploy vercel`, or `RSHONO_DEPLOY=vercel` in CI. `dev` always runs the Node dev
 server, whatever the target — it is a property of the build, not of developing.
 
-Every target, and what each one needs: <https://www.rshono.com/docs/deployment>
+Every deployment target, and what each one needs: <https://www.rshono.com/docs/deployment>
