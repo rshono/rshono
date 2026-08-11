@@ -4,7 +4,7 @@ import { cpSync, existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createConfigs } from '../builder/rspack-config.js';
+import { BUILD_OUT_DIR, createConfigs } from '../builder/rspack-config.js';
 import type { RshonoConfig } from '../config.js';
 import { writeBuildMarker } from '../deploy/build-marker.js';
 import type { DeployPreset } from '../deploy/presets.js';
@@ -20,7 +20,7 @@ interface BuildOptions {
 
 export async function buildCommand(options: BuildOptions): Promise<void> {
   const { rootDir, config, preset } = options;
-  const distDir = join(rootDir, 'dist');
+  const distDir = join(rootDir, BUILD_OUT_DIR);
 
   console.log('  • building client + server bundles…');
   const configs = createConfigs({ rootDir, isDev: false, config, preset });

@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..', '..', '..');
 export const TESTBED_DIR = join(ROOT, 'apps', 'testbed');
 export const TESTBED_DIST = join(TESTBED_DIR, 'dist');
+/** Where `rshono dev` builds to — deliberately not `dist/`, so `rshono build` cannot overwrite a running server. */
+export const TESTBED_DEV_DIR = join(TESTBED_DIR, '.rshono');
 export const FIXTURES_DIR = join(ROOT, 'packages', 'core', 'test', 'fixtures');
 /** The smallest app the framework accepts: src/routes.ts and nothing else. */
 export const MINIMAL_APP_DIR = join(FIXTURES_DIR, 'minimal-app');
@@ -54,6 +56,21 @@ export function buildApp(dir, { config, args = [] } = {}) {
 
 export function buildTestbed(config) {
   return buildApp(TESTBED_DIR, { config });
+}
+
+/**
+ * Runs `rshono <args>` to completion — for asserting on a command that is expected to *exit*, where
+ * {@link startApp} would only ever reject. Both streams are returned as one string, because which of
+ * them a refusal lands on is not the point of any test that uses this.
+ */
+export function runCli(dir, args, { env = {}, timeoutMs = 60_000 } = {}) {
+  const result = spawnSync(process.execPath, [CLI, ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, ...APP_ENV, ...env },
+    timeout: timeoutMs,
+  });
+  return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
 /**

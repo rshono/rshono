@@ -3,9 +3,10 @@ import { rspack, type Stats } from '@rspack/core';
 import { Hono } from 'hono';
 import { proxy } from 'hono/proxy';
 import { mkdir, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { createConfigs } from '../builder/rspack-config.js';
+import { DEV_OUT_DIR, createConfigs } from '../builder/rspack-config.js';
 import type { RshonoConfig } from '../config.js';
 import { NODE_PRESET } from '../deploy/presets.js';
 import type { DevMessage } from '../runtime/dev-protocol.js';
@@ -19,6 +20,22 @@ function describe(error: unknown): string {
   return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 
+/**
+ * Whether nothing is listening on the port yet — checked before the output directory is emptied.
+ *
+ * `rshono dev` clears its own output on startup, so a second one started against a running server
+ * wipes the directory that server is still importing route chunks from, and only then exits on
+ * EADDRINUSE. The first server keeps serving from files that no longer exist, and its watcher never
+ * re-emits them — it believes it already wrote them — so it 500s until it is restarted.
+ */
+function portAvailable(port: number, hostname: string): Promise<boolean> {
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  const probe = createServer();
+  probe.once('error', () => resolve(false));
+  probe.listen(port, hostname, () => probe.close(() => resolve(true)));
+  return promise;
+}
+
 interface DevOptions {
   rootDir: string;
   port?: number;
@@ -28,10 +45,18 @@ interface DevOptions {
 export async function devCommand(options: DevOptions): Promise<void> {
   const { rootDir, config } = options;
   const port = options.port ?? SERVER_DEFAULTS.port;
-  const distDir = join(rootDir, 'dist');
+  // Its own directory, never `dist/`: a `rshono build` in another terminal must not be able to
+  // delete the chunks this server is still importing. See DEV_OUT_DIR.
+  const outDir = join(rootDir, DEV_OUT_DIR);
 
-  await rm(distDir, { recursive: true, force: true });
-  await mkdir(join(distDir, 'static'), { recursive: true });
+  // Before the `rm` below, not at `serve` where the bind actually happens: see {@link portAvailable}.
+  if (!(await portAvailable(port, '127.0.0.1'))) {
+    console.error(`  ✗ port ${port} is already in use`);
+    process.exit(1);
+  }
+
+  await rm(outDir, { recursive: true, force: true });
+  await mkdir(join(outDir, 'static'), { recursive: true });
 
   const encoder = new TextEncoder();
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -85,7 +110,7 @@ export async function devCommand(options: DevOptions): Promise<void> {
 
   function spawnWorker(): Promise<{ worker: Worker; port: number }> {
     return new Promise((resolve, reject) => {
-      const worker = new Worker(join(distDir, 'server', 'main.mjs'), {
+      const worker = new Worker(join(outDir, 'server', 'main.mjs'), {
         workerData: { port: 0, hostname: '127.0.0.1' },
         execArgv: ['--enable-source-maps'],
         env: process.env as Record<string, string>,
@@ -194,7 +219,7 @@ export async function devCommand(options: DevOptions): Promise<void> {
 
   const front = new Hono();
 
-  front.route('/_static', createStaticAssetsApp({ root: join(distDir, 'static'), isDev: true }));
+  front.route('/_static', createStaticAssetsApp({ root: join(outDir, 'static'), isDev: true }));
 
   front.get('/_rshono/hmr', (c) => {
     let ctrl: ReadableStreamDefaultController<Uint8Array>;

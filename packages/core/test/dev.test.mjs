@@ -2,8 +2,10 @@
 // indirection is what these test: everything has to arrive at the browser as if it were served
 // directly, and dev is also where React's debug channel is live and can leak what prod never would.
 import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { startTestbed, stopServer } from './helpers.mjs';
+import { runCli, startTestbed, stopServer, TESTBED_DEV_DIR, TESTBED_DIR } from './helpers.mjs';
 
 // Served under the testbed's hardened profile, so the dev-only half of the CSP contract is covered
 // here: the app writes one policy for both environments and the framework widens it for React Refresh.
@@ -89,6 +91,43 @@ test('public/ files are served at the web root in dev (through the worker proxy)
   assert.equal(res.status, 200);
   assert.match(await res.text(), /User-agent: \*/);
   assert.equal(res.headers.get('cache-control'), 'no-cache', 'dev serves public assets without caching');
+});
+
+test('a second dev server refuses the port instead of wiping the first one’s output', async () => {
+  // `rshono dev` empties its output directory as its first action, so a second one started against a
+  // running server used to delete the chunks that server imports lazily, at request time, and only
+  // *then* exit on EADDRINUSE. The first server was left serving a build no longer on disk — 500s on
+  // every route it had not already loaded, 404 on the client bundle — and its watcher never re-emits
+  // them, because it compares against what it believes it wrote rather than against the disk.
+  //
+  // So the exit code proves nothing on its own: the unguarded version exited 1 too, just after doing
+  // the damage. What is asserted is that the first server is untouched.
+
+  // A request parks until the first build has landed, so this is also what makes the listing below
+  // meaningful: `rshono dev` reports its address as soon as it is listening, which is before the
+  // compilers have written anything.
+  assert.equal((await fetch(`${base}/`)).status, 200);
+  // Tolerating ENOENT so the damage arrives as a diff against the assertion below rather than as a
+  // bare throw: the unguarded version deletes the directory outright, it does not merely change it.
+  const chunks = join(TESTBED_DEV_DIR, 'server', 'chunks');
+  const listChunks = () => {
+    try {
+      return readdirSync(chunks);
+    } catch {
+      return [];
+    }
+  };
+  const before = listChunks();
+  assert.ok(before.length > 0, 'the running dev server should have route chunks on disk to protect');
+
+  const second = runCli(TESTBED_DIR, ['dev'], { env: { PORT: String(port) } });
+  assert.equal(second.status, 1, `a second dev server on port ${port} should refuse to start:\n${second.output}`);
+
+  assert.deepEqual(listChunks(), before, "the running server's route chunks must all survive");
+  assert.equal((await fetch(`${base}/boundary`)).status, 200, 'a route the first server had not yet imported must still load');
+  assert.equal((await fetch(`${base}/_static/chunks/main.js`)).status, 200, 'and the browser must still get its bundle');
+  // Last, so a reworded refusal fails on its wording and not before the invariants above are checked.
+  assert.match(second.output, /port \d+ is already in use/, 'the refusal should say so, not crash on EADDRINUSE');
 });
 
 test('HMR SSE channel greets with the current build hash', async () => {

@@ -6,11 +6,12 @@ import { readPrerendered } from '../server/ssg.js';
 import { createPublicFallback, createStaticAssetsApp } from '../server/static.js';
 import type { DeployRuntime } from './contract.js';
 
-const isDev = __RSHONO_CONFIG__.isDev;
+const { isDev, outDir } = __RSHONO_CONFIG__;
 
 /**
  * The project root, derived from where the bundle ended up: this module is compiled into
- * `<root>/dist/server/main.mjs`, so `import.meta.dirname` is `<root>/dist/server` at runtime.
+ * `<root>/<outDir>/server/main.mjs`, so `import.meta.dirname` is `<root>/<outDir>/server` at
+ * runtime — which is why every output directory sits exactly one level under the root.
  *
  * Derived rather than baked in at build time, because an absolute build-time path would tie the
  * output to the machine that produced it — and building in CI to run somewhere else is the normal
@@ -19,10 +20,10 @@ const isDev = __RSHONO_CONFIG__.isDev;
  */
 const rootDir = join(import.meta.dirname, '..', '..');
 
-const staticDir = join(rootDir, 'dist', 'static');
-const ssgDir = join(rootDir, 'dist', 'ssg');
-/** `public/` is copied into `dist/` by the build, so a deployed build is self-contained; dev reads the source. */
-const publicDir = isDev ? join(rootDir, 'public') : join(rootDir, 'dist', 'public');
+const staticDir = join(rootDir, outDir, 'static');
+const ssgDir = join(rootDir, outDir, 'ssg');
+/** `public/` is copied into the build output, so a deployed build is self-contained; dev reads the source. */
+const publicDir = isDev ? join(rootDir, 'public') : join(rootDir, outDir, 'public');
 
 /**
  * Everything a deploy target with a real filesystem does the same way.
