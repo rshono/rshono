@@ -211,7 +211,7 @@ request context is bound around the render and the actions it runs, not around t
 Neither needs it: both are handed `c`, which is a superset.
 
 For a header that depends on a mutation rather than on the route — a session cookie after login — use a
-[server action](/docs/server-actions#cookies-and-headers) instead.
+[server action](/docs/pages#cookies-and-headers) instead.
 
 ## End-to-end types for a client
 

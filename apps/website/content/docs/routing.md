@@ -54,8 +54,10 @@ definition, not at runtime.
 | `staticPaths` | For a parameterised static route: the param sets to prerender, one file each.       |
 
 Write `component` inline as `() => import('…')`. The framework detects that exact form and injects
-Rspack's `'use server-entry'` directive for you — see [Pages](/docs/pages#the-use-server-entry-directive)
-for when you have to write it yourself.
+Rspack's `'use server-entry'` directive for you, which is what attaches each page's client JS and CSS to
+its component — per-route code splitting with no asset manifest. Wire a component up some other way
+(variable indirection, barrel re-exports, computed specifiers) and the build throws a descriptive error
+telling you to write the directive at the top of the page module yourself.
 
 ## Static rendering
 

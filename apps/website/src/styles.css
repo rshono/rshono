@@ -149,6 +149,20 @@
     @apply overflow-x-auto rounded-lg border border-zinc-200 p-4 text-[0.8125rem]/6 dark:border-zinc-800;
   }
 
+  /*
+   * The filename header a fence's `title="…"` produces. `pr-20` keeps a long path from running under the
+   * copy button, which is positioned against the same wrapper and lands in this row.
+   */
+  .code-title {
+    @apply truncate rounded-t-lg border border-b-0 border-zinc-200 bg-zinc-50 px-4 py-2 pr-20 font-mono text-xs text-zinc-600;
+    @apply dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400;
+  }
+
+  /* Titled blocks join their header instead of sitting in a second rounded box below it. */
+  .code-block:has(.code-title) pre.shiki {
+    @apply rounded-t-none;
+  }
+
   .shiki,
   .shiki span {
     color: var(--shiki-light);

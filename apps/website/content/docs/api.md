@@ -52,7 +52,7 @@ See [Routing](/docs/routing) and [Configuration](/docs/configuration).
 
 ## `@rshono/core/server`
 
-Server-only, and request-scoped. See [Pages](/docs/pages) and [Server actions](/docs/server-actions).
+Server-only, and request-scoped. See [Pages](/docs/pages) and [Usage](/docs/usage).
 
 ### Functions
 

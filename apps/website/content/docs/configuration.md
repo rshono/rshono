@@ -129,7 +129,7 @@ server.use(
 ```
 
 The check proves a request came from your own site. It says nothing about _who_ sent it — every
-[`'use server'` export is a public endpoint](/docs/server-actions#every-action-is-a-public-endpoint).
+[`'use server'` export is a public endpoint](/docs/pages#every-action-is-a-public-endpoint).
 
 Everything else Hono ships works the same way — `cors`, `basicAuth`, `jwt`, `ipRestriction`, `timeout`,
 `requestId`, and [`secureHeaders`](#csp) below. A middleware that rejects by throwing an `HTTPException`

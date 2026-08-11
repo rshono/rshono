@@ -50,6 +50,13 @@ export const routes = defineRoutes({
       path: '/docs/:slug{[a-z0-9-]+\\.md}',
       server: () => import('./routes/doc-markdown'),
     },
+    /* Ahead of `/docs/:slug` for the same reason as the markdown endpoint: it has to win the match. */
+    {
+      type: 'endpoint',
+      method: 'get',
+      path: '/docs/server-actions',
+      server: () => import('./routes/moved-doc'),
+    },
     {
       path: '/docs/:slug',
       render: 'static',

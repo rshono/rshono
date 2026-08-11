@@ -136,6 +136,11 @@ const COPY_HANDLER = `
  */
 const COPY_BUTTON = `<button type="button" class="code-copy" aria-label="Copy code to clipboard" onclick="${COPY_HANDLER}">Copy</button>`;
 
+/** The characters that would break out of the header's markup. A title is a filename, but this is markup we build. */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 /**
  * The one call every code block on this site goes through.
  *
@@ -146,15 +151,34 @@ const COPY_BUTTON = `<button type="button" class="code-copy" aria-label="Copy co
  * The wrapper is what the copy button is positioned against, and it goes here rather than in the fence
  * rule so that a command tab panel and a landing page sample get one too — those reach Shiki through this
  * function without passing through markdown at all.
+ *
+ * `title` becomes a filename header above the block. It is emitted *before* the `<pre>` so the copy
+ * button stays the `<pre>`'s next sibling — which is the one thing `COPY_HANDLER` relies on.
  */
-function highlightWith(highlighter: HighlighterCore, code: string, lang: string): string {
+function highlightWith(highlighter: HighlighterCore, code: string, lang: string, title?: string): string {
   const block = highlighter.codeToHtml(code, {
     lang: KNOWN_LANGS.has(lang) ? lang : 'text',
     themes: { light: 'github-light', dark: 'github-dark' },
     defaultColor: false,
   });
 
-  return `<div class="code-block">${block}${COPY_BUTTON}</div>`;
+  const header = title ? `<div class="code-title">${escapeHtml(title)}</div>` : '';
+  return `<div class="code-block">${header}${block}${COPY_BUTTON}</div>`;
+}
+
+/**
+ * The filename a fence may carry: ` ```tsx title="src/components/new-note/index.tsx" `.
+ *
+ * `title="…"` is the spelling the rest of the docs world already uses, and that is the whole argument for
+ * it: `content/docs/*.md` is served verbatim at `/docs/:slug.md` and quoted into `llms-full.txt`, so a
+ * fence attribute has to still say what it means to a reader who has never seen this site. Unlike the
+ * command tabs — presentation, and therefore detected rather than marked up — a filename is *content*:
+ * which file the snippet goes in cannot be inferred from the code.
+ *
+ * Double quotes only. One spelling is easier to keep right than three.
+ */
+function readFenceTitle(info: string): string | undefined {
+  return /\btitle="([^"]*)"/.exec(info)?.[1] || undefined;
 }
 
 /**
@@ -218,17 +242,19 @@ let mdPromise: Promise<MarkdownIt> | undefined;
 async function getMarkdownIt(): Promise<MarkdownIt> {
   mdPromise ??= (async () => {
     const highlighter = await getHighlighter();
-    const highlight = (code: string, lang: string) => highlightWith(highlighter, code, lang);
+    const highlight = (code: string, lang: string, title?: string) => highlightWith(highlighter, code, lang, title);
 
+    /**
+     * No `highlight` option: that one is only ever read by markdown-it's *default* fence rule, and the
+     * rule below replaces it outright rather than delegating to it. Delegating is what put every block
+     * on this site inside a second `<pre><code class="language-…">` — the default rule passes anything
+     * not starting with `<pre` through that wrapper, and what `highlightWith` returns starts with the
+     * `<div>` the copy button is positioned against.
+     */
     const md = new MarkdownIt({
       html: true,
       linkify: true,
       typographer: false,
-      /**
-       * `highlightWith` returns the whole block — the `<pre class="shiki">` and its wrapper — so this is
-       * finished HTML and markdown-it wraps it in nothing further.
-       */
-      highlight,
     });
 
     md.use(anchor, anchorOptions);
@@ -254,10 +280,10 @@ async function getMarkdownIt(): Promise<MarkdownIt> {
     md.renderer.rules.table_open = (tokens, index, options, env, self) => `<div class="table-scroll">${self.renderToken(tokens, index, options)}`;
     md.renderer.rules.table_close = (tokens, index, options, env, self) => `${self.renderToken(tokens, index, options)}</div>`;
 
-    const renderFence = md.renderer.rules.fence!;
-    md.renderer.rules.fence = (tokens, index, options, env: RenderEnv, self) => {
+    md.renderer.rules.fence = (tokens, index, options, env: RenderEnv) => {
       const token = tokens[index];
-      const lang = token.info.trim().split(/\s+/)[0] ?? '';
+      const info = token.info.trim();
+      const lang = info.split(/\s+/)[0] ?? '';
 
       if (SHELL_LANGS.has(lang)) {
         const group = (env.commandTabs = (env.commandTabs ?? 0) + 1);
@@ -265,7 +291,7 @@ async function getMarkdownIt(): Promise<MarkdownIt> {
         if (tabs) return tabs;
       }
 
-      return renderFence(tokens, index, options, env, self);
+      return highlight(token.content, lang, readFenceTitle(info));
     };
 
     return md;

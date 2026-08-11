@@ -1,6 +1,6 @@
 ---
 title: Pages
-description: A page is a React server component that renders the whole document and receives the request.
+description: A page is a React server component that renders the whole document and receives the request — and the 'use server' actions it mutates through.
 ---
 
 Every page module **default-exports a server component** — nothing else. It may be `async` and await
@@ -66,7 +66,7 @@ async function Breadcrumb() {
 `ctx.cookies.set()`, `ctx.cookies.delete()` and `ctx.setHeader()` **throw inside a page**. A page
 streams, so its response head is committed before the component runs — a cookie set here would arrive
 on a full page load and silently vanish on a soft navigation. Write it from a
-[server action](/docs/server-actions#cookies-and-headers) or from
+[server action](#cookies-and-headers) or from
 [middleware](/docs/hono#response-headers-and-cookies), both of which run first.
 
 Hono's response builders are the same story, and say so: `ctx.redirect()`, `ctx.notFound()`, `ctx.json()`
@@ -117,13 +117,85 @@ are soft navigations, so client state outside the changed subtree survives. Hist
 half alone. Both are `'use client'` modules a server component can render directly. A `redirect()` is
 never absorbed by either — it is navigation, not failure.
 
-## The `'use server-entry'` directive
+## Server actions
 
-Each page carries Rspack's `'use server-entry'` directive, which attaches the page's client JS and CSS
-to the component. That is what gives per-page code splitting with no asset manifest.
+A `'use server'` module exports functions a client component can call directly, with typed arguments and
+result:
 
-The framework injects it for every component written with the inline `component: () => import('…')` form
-in `routes.ts`, including routes added while the dev server is running. If a component is wired up some
-other way — variable indirection, barrel re-exports, computed specifiers — write `'use server-entry'` as
-the first line of the page module yourself. The framework throws a descriptive error when neither
-happened.
+```ts
+'use server';
+
+export async function createUser(data: { name: string; email: string }) {
+  // runs on the server, always
+}
+```
+
+There is no route handler in between, and no client bundle carries the body — only a reference to it.
+[Usage](/docs/usage) covers wiring them into components with `useActionState`, `useTransition` and
+`useOptimistic`; what follows is what an action _is_ on this side of the wire.
+
+### Progressive enhancement
+
+A `<form action={createUser}>` posts **before hydration and with JavaScript disabled**. The client
+runtime upgrades it to a fetch once loaded; until then the browser's own form post does the job.
+
+Every action response carries a fresh page payload, so server-rendered UI updates after a mutation with
+no refetch and no cache invalidation call.
+
+### Cookies and headers
+
+An action runs **before** the page it re-renders, which is what makes it the place to write to the
+response — [the rule above](#a-page-can-read-ctx-not-write-to-it) is the other side of the same coin:
+
+```ts
+'use server';
+import { getRequestContext, redirect } from '@rshono/core/server';
+
+export async function login(form: FormData) {
+  const ctx = getRequestContext();
+  ctx.cookies.set('session', await createSession(form), { httpOnly: true, sameSite: 'Lax', path: '/' });
+  redirect('/dashboard');
+}
+
+export async function logout() {
+  const ctx = getRequestContext();
+  ctx.cookies.delete('session', { path: '/' });
+  ctx.setHeader('clear-site-data', '"cache", "storage"');
+  redirect('/');
+}
+```
+
+Both survive the `redirect()` — the signal is thrown after the cookie is already on the response.
+
+For headers that belong to a route rather than to a mutation, use
+[middleware](/docs/hono#response-headers-and-cookies).
+
+### Every action is a public endpoint
+
+That is the RSC model, not an rshono choice: the client is handed an id for each action and can call it
+with whatever arguments it likes. A [CSRF check](/docs/configuration#security-middleware) proves a
+request came from your own site; it says nothing about _who_ sent it. Authenticate, authorize and validate
+arguments inside the action, exactly as in a route handler.
+
+### Errors
+
+Thrown action errors are logged server-side and **redacted in the production payload** — React sends no
+message and no digest. Return values, not throws, for anything the user should see:
+
+```ts
+'use server';
+
+export async function createUser(data: FormData) {
+  const email = String(data.get('email') ?? '');
+  if (!email.includes('@')) return { ok: false, error: 'That email looks wrong.' };
+  return { ok: true };
+}
+```
+
+Errors that do escape reach [`onServerError`](/docs/hono#error-reporting) like everything else the
+framework catches.
+
+### Secrets
+
+Actions compile to server references and run only on the server, so they read the real `process.env`.
+See [Environment & secrets](/docs/configuration#environment-and-secrets).

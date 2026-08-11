@@ -68,7 +68,7 @@ const FEATURES = [
   {
     title: 'Actions, not endpoints',
     body: "A 'use server' function is callable from client code with typed arguments. Wired to a form it posts before hydration and with JavaScript disabled.",
-    href: '/docs/server-actions',
+    href: '/docs/pages#server-actions',
   },
   {
     title: 'The Hono app is yours',

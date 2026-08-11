@@ -18,8 +18,8 @@ import sourceHono from '../../content/docs/hono.md';
 import sourcePages from '../../content/docs/pages.md';
 import sourceProjectLayout from '../../content/docs/project-layout.md';
 import sourceRouting from '../../content/docs/routing.md';
-import sourceServerActions from '../../content/docs/server-actions.md';
 import sourceStyling from '../../content/docs/styling.md';
+import sourceUsage from '../../content/docs/usage.md';
 import { readFrontmatter } from './markdown.js';
 
 /** One documentation page. `title` and `description` come from the file's own frontmatter. */
@@ -60,8 +60,8 @@ const SECTIONS: Array<{ title: string; pages: Array<{ slug: string; source: stri
     pages: [
       { slug: 'routing', source: sourceRouting },
       { slug: 'pages', source: sourcePages },
-      { slug: 'server-actions', source: sourceServerActions },
       { slug: 'hono', source: sourceHono },
+      { slug: 'usage', source: sourceUsage },
     ],
   },
   {
