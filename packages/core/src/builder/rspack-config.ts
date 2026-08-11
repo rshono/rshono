@@ -226,11 +226,9 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     entry: { main: rscEntry },
     output: {
       path: join(rootDir, outDir, 'server'),
-      // Off in dev, matching the client compiler above. The server bundle's route chunks are imported
-      // lazily, at request time, so the worker keeps reading this directory for as long as it runs —
-      // and a rebuild that renames or drops a chunk (renaming a page file is enough) would delete one
-      // the live worker still intends to import. Stale chunks are inert instead: nothing references
-      // them, and `rshono dev` empties the directory on startup.
+      // Off in dev, matching the client compiler above: route chunks are imported lazily, at request
+      // time, so leaving a superseded one on disk is harmless where deleting one mid-request is not.
+      // `rshono dev` empties the directory on startup, so nothing accumulates across sessions.
       clean: !isDev,
       module: true,
       chunkFormat: 'module',
