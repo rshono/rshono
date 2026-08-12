@@ -3,7 +3,6 @@ dist/
 # `rshono dev`'s build output, kept apart from `dist/` so the two commands cannot overwrite each other.
 .rshono/
 .vercel/
-.netlify/
 *.tsbuildinfo
 .DS_Store
 .env*

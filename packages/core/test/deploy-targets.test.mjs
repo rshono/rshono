@@ -89,7 +89,7 @@ describe('vercel', () => {
     assert.ok(existsSync(join(output, 'static', '_static', 'chunks')), 'hashed bundle is CDN-served');
     assert.ok(existsSync(join(output, 'static', 'robots.txt')), 'public/ is CDN-served at the web root');
     // Not in static output on purpose: one URL answers with a document or a flight payload depending on
-    // `Accept`, which a path-keyed CDN cannot choose between.
+    // the `RSC` request header, which a path-keyed CDN cannot choose between.
     assert.equal(existsSync(join(output, 'static', 'docs')), false, 'prerendered pages are not CDN-served');
     assert.ok(existsSync(join(functionDir, 'dist', 'ssg', 'docs')), 'they ship inside the function instead');
   });

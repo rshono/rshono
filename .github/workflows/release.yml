@@ -3,7 +3,7 @@ name: Release
 # A tag is what publishes. `pnpm -r publish` reads the version from each manifest, so the tag has to be
 # pushed *after* the version bump is committed — see the flow in CONTRIBUTING.md:
 #
-#   pnpm -r exec npm version <version> --no-git-tag-version
+#   pnpm version:set <version>          # the two published manifests only, no tag
 #   git commit -am "Release v<version>" && git tag v<version> && git push --follow-tags
 #
 # The two packages ship together and share a version, which is why there is no changeset tooling here.

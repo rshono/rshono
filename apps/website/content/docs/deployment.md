@@ -67,8 +67,18 @@ In development the CLI watches both bundles and runs the server bundle **in a wo
 per rebuild, with requests gated on readiness so nothing drops across a restart. Client edits hot-apply
 via react-refresh; server component edits re-fetch the payload in place. Browser state survives both.
 
-In production `dist/server/main.mjs` is self-contained — React, Hono and the framework are bundled in;
-your other dependencies resolve from `node_modules`.
+In production `dist/server/main.mjs` always has React, Hono and the framework bundled in. What happens to
+**your** dependencies is a property of the target:
+
+- On **`node`** they stay external and resolve from the `node_modules` beside the build, which is where the
+  process runs.
+- On **`cloudflare`, `vercel` and `aws-lambda`** they are bundled in too. A function is an uploaded directory
+  rather than an installed one, so there is no `node_modules` at request time and an external
+  `import 'some-package'` would be a cold start that dies on `ERR_MODULE_NOT_FOUND`.
+
+The cost on those three: a dependency that cannot be bundled — a native addon, or one that reads its own
+files off disk relative to `__dirname` — fails the **build** rather than the deploy. Reach for the `rspack`
+hook in `rshono.config.ts` to keep such a package external, or deploy it to `node`.
 
 ## Limitations
 

@@ -5,7 +5,8 @@ import { loadConfig } from '../server/load-config.js';
 import { loadEnvFiles } from '../server/load-env.js';
 
 // The commands are imported where they are dispatched: `build` and `dev` pull in Rspack, and a static import
-// would load it for `start` too — ~30 MB of RSS and ~70ms of startup for a command that only spawns a server.
+// would load it for `start` too — ~30 MB of RSS and ~70ms of startup that would then sit in the server's own
+// process for its whole life, since `start` imports the bundle rather than spawning it.
 
 const HELP = `rshono — Hono + Rspack + React Server Components
 
