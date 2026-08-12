@@ -13,6 +13,16 @@ buildTestbed();
 const { base, child, getOutput } = await startTestbed('start');
 after(() => stopServer(child));
 
+/**
+ * The two answers one page URL gives: the HTML document a navigation gets, and the flight payload a soft
+ * navigation asks for with the `RSC` header. Iterated wherever a behaviour has to hold for both, since a
+ * fix that only reaches the document half is the bug prerendering and error pages both used to have.
+ */
+const REPRESENTATIONS = [
+  { name: 'document', headers: {}, contentType: 'text/html' },
+  { name: 'flight', headers: { RSC: '1' }, contentType: 'text/x-component' },
+];
+
 /** An action-shaped multipart POST body, for requests that are meant to be rejected before it is read. */
 function signupBody() {
   const form = new FormData();
@@ -80,7 +90,7 @@ test('async server components read the database directly, on a plain and a param
 });
 
 test('soft-navigation requests get a flight payload', async () => {
-  const res = await fetch(`${base}/users`, { headers: { Accept: 'text/x-component' } });
+  const res = await fetch(`${base}/users`, { headers: { RSC: '1' } });
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type'), /text\/x-component/);
   assert.match(await res.text(), /Ada Lovelace/);
@@ -110,7 +120,7 @@ test("a server component's props never reach the browser, so ctx cannot leak thr
   // Production React serializes a server component's *output*, not its props — and `ctx` is
   // non-enumerable besides, which is what keeps React's dev-only debug serialization off it too
   // (see `pageProps` in entry.rsc.tsx). Either way the Hono Context must not be on the wire.
-  const flight = await (await fetch(`${base}/`, { headers: { Accept: 'text/x-component', cookie: 'visitor=Ada' } })).text();
+  const flight = await (await fetch(`${base}/`, { headers: { RSC: '1', cookie: 'visitor=Ada' } })).text();
   assert.match(flight, /"data-ctx":"visitor","children":"Ada"/, 'the page should have rendered its ctx-derived markup');
   // As a JSON key — the page renders the literal word "ctx" as prose, which is not a leak.
   assert.doesNotMatch(flight, /"ctx":/, 'the ctx prop itself must never be serialized into the payload');
@@ -123,7 +133,7 @@ test('redirect() in a server component: an HTTP 3xx on hard navigation, a digest
   assert.equal(hard.status, 303);
   assert.match(hard.headers.get('location') ?? '', /\/login$/);
 
-  const soft = await fetch(`${base}/dashboard`, { headers: { Accept: 'text/x-component' } });
+  const soft = await fetch(`${base}/dashboard`, { headers: { RSC: '1' } });
   assert.match(await soft.text(), /RSHONO_REDIRECT/, 'the client needs the digest to follow the redirect itself');
 });
 
@@ -138,7 +148,7 @@ test('a client-initiated action that redirects answers with a flight payload the
     headers: {
       Origin: base,
       'x-rsc-action': serverActionId('Logging out'),
-      Accept: 'text/x-component',
+      RSC: '1',
       'content-type': 'text/plain;charset=UTF-8',
       cookie: 'session=ada%40example.com',
     },
@@ -182,7 +192,7 @@ test('an unmatched path renders the notFound page from routes.ts, as a document 
   assert.match(html, /404 — nothing here/);
   assert.match(html, /__FLIGHT_DATA/, 'the 404 page should hydrate like any page');
 
-  const flight = await fetch(`${base}/definitely-not-a-page`, { headers: { Accept: 'text/x-component' } });
+  const flight = await fetch(`${base}/definitely-not-a-page`, { headers: { RSC: '1' } });
   assert.equal(flight.status, 404);
   assert.match(flight.headers.get('content-type'), /text\/x-component/);
   assert.match(await flight.text(), /nothing here/, 'a soft navigation swaps the 404 page in instead of reloading');
@@ -203,7 +213,7 @@ test('useNavigation() gives a client island server-computed pathname/params/sear
 });
 
 test('the navigation URL rides the flight payload so soft navigation stays in sync', async () => {
-  const flight = await (await fetch(`${base}/profile/1?tab=settings`, { headers: { Accept: 'text/x-component' } })).text();
+  const flight = await (await fetch(`${base}/profile/1?tab=settings`, { headers: { RSC: '1' } })).text();
   assert.match(flight, /profile\/1\?tab=settings/, 'the flight payload should carry the URL for the client router');
 });
 
@@ -265,7 +275,7 @@ test('client-initiated server action mutates and re-renders', async () => {
     headers: {
       Origin: base,
       'x-rsc-action': serverActionId('Add user'),
-      Accept: 'text/x-component',
+      RSC: '1',
       'content-type': 'text/plain;charset=UTF-8',
     },
     body: JSON.stringify([{ name: 'Wire Wanda', email: 'wanda@example.com' }]),
@@ -285,14 +295,14 @@ test('endpoint route and Hono sub-app respond with JSON', async () => {
 });
 
 test('a thrown endpoint renders the error page from routes.ts, redacted, in both representations', async () => {
-  for (const accept of ['text/html', 'text/x-component']) {
-    const res = await fetch(`${base}/api/boom`, { headers: { Accept: accept } });
+  for (const { name, headers, contentType } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/api/boom`, { headers: { Accept: 'text/html', ...headers } });
     assert.equal(res.status, 500);
-    assert.match(res.headers.get('content-type'), new RegExp(accept), `${accept}: the client must get something it can swap in`);
+    assert.match(res.headers.get('content-type'), new RegExp(contentType), `${name}: the client must get something it can swap in`);
     const body = await res.text();
-    assert.match(body, /Something went wrong/, `${accept}: the error page component should render`);
-    assert.match(body, /Internal Server Error/, `${accept}: the error page shows the generic message`);
-    assert.doesNotMatch(body, /Intentional endpoint failure/, `${accept}: real error detail must be redacted in prod`);
+    assert.match(body, /Something went wrong/, `${name}: the error page component should render`);
+    assert.match(body, /Internal Server Error/, `${name}: the error page shows the generic message`);
+    assert.doesNotMatch(body, /Intentional endpoint failure/, `${name}: real error detail must be redacted in prod`);
   }
 });
 
@@ -314,6 +324,7 @@ test('a render failure answers with a visible error document, not a blank page',
 });
 
 test('a no-JS (progressive-enhancement) action that throws renders the error page', async () => {
+  const logsBefore = getOutput().length;
   const html = await (await fetch(`${base}/crash`)).text();
   const res = await fetch(`${base}/crash`, {
     method: 'POST',
@@ -326,13 +337,21 @@ test('a no-JS (progressive-enhancement) action that throws renders the error pag
   assert.match(body, /Something went wrong/, 'the error page component must render for a thrown PE action');
   assert.match(body, /Internal Server Error/, 'prod error page shows the generic redacted message');
   assert.doesNotMatch(body, /Intentional server-action failure/, 'the real error detail must be redacted in prod');
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
+  const logged = getOutput().slice(logsBefore);
+  // The two action paths have to agree about what happened. This one is re-thrown so the error page can
+  // render, which also carries it into the top-level handler — where, without the reporter de-duplicating,
+  // the same fault would arrive a second time as a `request`.
+  assert.match(logged, /\[error-reporter\] action \/crash: Intentional server-action failure/, 'a thrown PE action is an action');
+  assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'and one fault is reported once, whatever stages it crosses');
 });
 
 test('a thrown server action is redacted in the payload, but logged in full server-side', async () => {
   const logsBefore = getOutput().length;
   const res = await fetch(`${base}/users`, {
     method: 'POST',
-    headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), Accept: 'text/x-component', 'content-type': 'text/plain;charset=UTF-8' },
+    headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
     body: JSON.stringify([{ name: '', email: 'invalid' }]),
   });
   assert.equal(res.status, 500);
@@ -367,12 +386,12 @@ test('<AsyncBoundary> renders its children on the happy path', async () => {
 
 test('<AsyncBoundary> contains a thrown error locally instead of failing the whole page', async () => {
   const logsBefore = getOutput().length;
-  for (const accept of ['text/html', 'text/x-component']) {
-    const res = await fetch(`${base}/boundary?fail=1`, { headers: { Accept: accept } });
-    assert.equal(res.status, 200, `${accept}: the error is caught by the boundary, not escalated to a 500`);
-    assert.match(res.headers.get('content-type'), new RegExp(accept), `${accept}: the client gets a payload it can swap in, not a reload`);
+  for (const { name, headers, contentType } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/boundary?fail=1`, { headers });
+    assert.equal(res.status, 200, `${name}: the error is caught by the boundary, not escalated to a 500`);
+    assert.match(res.headers.get('content-type'), new RegExp(contentType), `${name}: the client gets a payload it can swap in, not a reload`);
     const body = await res.text();
-    assert.match(body, /This section failed to load/, `${accept}: the boundary error fallback is delivered to the client`);
+    assert.match(body, /This section failed to load/, `${name}: the boundary error fallback is delivered to the client`);
     assert.doesNotMatch(body, /Something went wrong/, 'the global error page must NOT be used — the failure stayed local');
   }
 
@@ -396,25 +415,25 @@ test('a prerendered route is served from disk in both representations, publicly 
   // Prerendering used to pay off only for cold loads and crawlers: a flight request skipped the built
   // file and re-rendered the page the build had already produced.
   const etags = {};
-  for (const accept of ['text/html', 'text/x-component']) {
-    const res = await fetch(`${base}/docs/getting-started`, { headers: { Accept: accept } });
+  for (const { name, headers, contentType } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/docs/getting-started`, { headers });
     assert.equal(res.status, 200);
-    assert.match(res.headers.get('content-type'), new RegExp(accept));
-    assert.match(res.headers.get('cache-control') ?? '', /public/, `${accept}: a request-independent page should be publicly cacheable`);
+    assert.match(res.headers.get('content-type'), new RegExp(contentType));
+    assert.match(res.headers.get('cache-control') ?? '', /public/, `${name}: a request-independent page should be publicly cacheable`);
     assert.match(await res.text(), /Getting Started/);
-    etags[accept] = res.headers.get('etag');
-    assert.ok(etags[accept], `${accept}: served from disk, so it can carry a validator`);
+    etags[name] = res.headers.get('etag');
+    assert.ok(etags[name], `${name}: served from disk, so it can carry a validator`);
 
-    const revalidated = await fetch(`${base}/docs/getting-started`, { headers: { Accept: accept, 'if-none-match': etags[accept] } });
-    assert.equal(revalidated.status, 304, `${accept}: the client already holds this exact page`);
+    const revalidated = await fetch(`${base}/docs/getting-started`, { headers: { ...headers, 'if-none-match': etags[name] } });
+    assert.equal(revalidated.status, 304, `${name}: the client already holds this exact page`);
     assert.equal(await revalidated.text(), '', 'the whole point is not to resend the body');
     assert.match(revalidated.headers.get('cache-control') ?? '', /public/, 'a 304 must repeat the freshness directives');
 
-    const stale = await fetch(`${base}/docs/getting-started`, { headers: { Accept: accept, 'if-none-match': '"not-the-one"' } });
-    assert.equal(stale.status, 200, `${accept}: a stale validator must get the current page`);
+    const stale = await fetch(`${base}/docs/getting-started`, { headers: { ...headers, 'if-none-match': '"not-the-one"' } });
+    assert.equal(stale.status, 200, `${name}: a stale validator must get the current page`);
     await stale.text();
   }
-  assert.notEqual(etags['text/html'], etags['text/x-component'], 'two representations must not share one validator');
+  assert.notEqual(etags.document, etags.flight, 'two representations must not share one validator');
 });
 
 test('prerendered pages build absolute URLs from siteUrl; a dynamic page uses the request it got', async () => {
@@ -424,7 +443,7 @@ test('prerendered pages build absolute URLs from siteUrl; a dynamic page uses th
   assert.match(html, /<link rel="canonical" href="https:\/\/rshono\.example\/docs\/getting-started"\/?>/);
   assert.doesNotMatch(html, /http:\/\/localhost/, 'the build-time origin must not survive into a shipped page');
 
-  const flight = await (await fetch(`${base}/docs/getting-started`, { headers: { Accept: 'text/x-component' } })).text();
+  const flight = await (await fetch(`${base}/docs/getting-started`, { headers: { RSC: '1' } })).text();
   assert.match(flight, /https:\/\/rshono\.example\/docs\/getting-started/, 'useNavigation() reads the URL from this payload');
   assert.doesNotMatch(flight, /http:\/\/localhost/);
 
@@ -433,14 +452,19 @@ test('prerendered pages build absolute URLs from siteUrl; a dynamic page uses th
   assert.match(dynamic, /localhost/, 'a dynamic page reflects the request it actually received');
 });
 
-test('dynamic pages are never stored by a shared cache, and vary on Accept', async () => {
+test('dynamic pages are never stored by a shared cache, and vary on RSC', async () => {
   // Same URL, two representations: a shared cache keyed on the URL alone would otherwise be free to
   // hand an HTML document to a soft navigation asking for flight — or one user's page to another.
-  for (const accept of ['text/html', 'text/x-component']) {
-    const res = await fetch(`${base}/whoami`, { headers: { Accept: accept, cookie: 'visitor=someone' } });
+  //
+  // `RSC` rather than `Accept`, which this used to vary on: browsers send long `Accept` strings that differ
+  // by vendor and version, so a CDN keyed on one stores a copy per variant of identical bytes. This header
+  // has two states, which is what makes the prerendered page's `public, max-age=300` mean anything.
+  for (const { name, headers } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/whoami`, { headers: { ...headers, cookie: 'visitor=someone' } });
     assert.equal(res.status, 200);
-    assert.equal(res.headers.get('cache-control'), 'private, no-cache', `${accept}: a personalised page must not be publicly cacheable`);
-    assert.match(res.headers.get('vary'), /\bAccept\b/, `${accept}: content negotiation must be declared`);
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', `${name}: a personalised page must not be publicly cacheable`);
+    assert.match(res.headers.get('vary'), /\bRSC\b/, `${name}: the negotiated header must be declared`);
+    assert.doesNotMatch(res.headers.get('vary'), /\bAccept\b/, `${name}: and not the high-cardinality one it replaced`);
   }
 });
 
@@ -504,7 +528,7 @@ test('secrets never reach the browser — not in the HTML, the flight payload, o
   assert.ok(!html.includes(APP_ENV.DATABASE_URL), 'DATABASE_URL value must not appear in SSR HTML');
   assert.ok(html.includes(APP_ENV.PUBLIC_API_ENDPOINT), 'the PUBLIC_ variable should be inlined');
 
-  const flight = await (await fetch(`${base}/`, { headers: { Accept: 'text/x-component' } })).text();
+  const flight = await (await fetch(`${base}/`, { headers: { RSC: '1' } })).text();
   assert.ok(!flight.includes(APP_ENV.DATABASE_URL), 'DATABASE_URL value must not appear in the flight payload');
 
   const sources = clientChunks();
@@ -556,7 +580,7 @@ test('an action POST that cannot be shown to be same-origin is rejected (CSRF)',
 test('X-Forwarded-Host cannot poison the public request URL without trustProxy', async () => {
   const flight = await (
     await fetch(`${base}/whoami`, {
-      headers: { Accept: 'text/x-component', 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' },
+      headers: { RSC: '1', 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' },
     })
   ).text();
   assert.doesNotMatch(flight, /evil\.example/, 'a client-supplied forwarded host reached the URL the app builds');

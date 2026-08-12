@@ -8,7 +8,7 @@ import { fileSystemRuntime } from '../filesystem.js';
  *
  * `/_static` and `public/` are in the static output, and `config.json` puts the filesystem handler ahead of the
  * function, so mounting them here would be dead weight. Prerendered pages are *not* static output — one URL
- * answers with a document or a flight payload depending on `Accept`, and a path-keyed CDN cannot choose — so
+ * answers with a document or a flight payload on the `RSC` request header, and a path-keyed CDN cannot choose — so
  * they ship inside the function and are read from its read-only disk, exactly as on a server.
  */
 export const runtime: DeployRuntime = {

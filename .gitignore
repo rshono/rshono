@@ -2,7 +2,6 @@ node_modules/
 dist/
 # `rshono dev`'s build output, kept apart from `dist/` so the two commands cannot overwrite each other.
 .rshono/
-# Deploy-target output: `rshono build --deploy <platform>` assembles these from dist/.
 .vercel/
 .netlify/
 *.tsbuildinfo

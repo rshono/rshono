@@ -1,0 +1,38 @@
+version: 2
+
+updates:
+  # The workflow's own actions, which nothing else watches — a pinned `@v7` goes stale silently.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'ci:'
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'deps:'
+    groups:
+      # One PR for the tooling, which moves together and is checked by the same lint run.
+      dev-tooling:
+        dependency-type: development
+        patterns: ['*']
+    ignore:
+      # The coupled set. RSC internals reach across the two compilers and the two React builds, so these are
+      # pinned exactly in the manifests *and* in `pnpm-workspace.yaml` overrides; moving one without the
+      # others fails inside minified React at render time. A bump here is a deliberate release, tested by the
+      # whole suite — see CONTRIBUTING.md.
+      - dependency-name: '@rspack/core'
+      - dependency-name: '@rspack/plugin-react-refresh'
+      - dependency-name: react-server-dom-rspack
+      - dependency-name: react
+      - dependency-name: react-dom
+      - dependency-name: react-refresh
+      # typescript-eslint accepts nothing from TypeScript 6.1 up, so the root pin is load-bearing and a
+      # major bump here breaks linting rather than improving it.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']

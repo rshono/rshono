@@ -1,0 +1,74 @@
+name: Release
+
+# A tag is what publishes. `pnpm -r publish` reads the version from each manifest, so the tag has to be
+# pushed *after* the version bump is committed — see the flow in CONTRIBUTING.md:
+#
+#   pnpm -r exec npm version <version> --no-git-tag-version
+#   git commit -am "Release v<version>" && git tag v<version> && git push --follow-tags
+#
+# The two packages ship together and share a version, which is why there is no changeset tooling here.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      # Reads the workflow's OIDC token, which is what mints the provenance attestation. Without this the
+      # publish still works and the package simply has no verifiable link back to this commit.
+      id-token: write
+      # For the draft release at the end; the checkout itself only needs read.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # The same gates as CI, re-run against the exact tagged tree rather than trusted from the branch: a
+      # tag can point anywhere, and this is the last moment a broken release is still cheap.
+      - name: Build the framework
+        run: pnpm --filter @rshono/core build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck and test
+        run: |
+          pnpm --filter @rshono/core typecheck
+          pnpm --filter @rshono/core test
+          pnpm --filter testbed typecheck
+          pnpm --filter @rshono/create typecheck
+          pnpm --filter @rshono/create test
+
+      # Refuses the publish unless the tag names the version the manifests carry, so a mistyped tag cannot
+      # publish something nobody meant to.
+      - name: Check the tag matches the version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          for pkg in packages/core packages/create; do
+            declared=$(node -p "require('./$pkg/package.json').version")
+            [ "$declared" = "$tagged" ] || { echo "$pkg is $declared but the tag says $tagged"; exit 1; }
+          done
+
+      # `--provenance` attaches a signed statement of which repo, workflow and commit built the tarball,
+      # which npm shows on the package page and consumers can verify.
+      - name: Publish
+        run: pnpm -r publish --access public --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+
+      - name: Draft the release notes
+        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}

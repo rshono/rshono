@@ -149,12 +149,12 @@ describe('serving from a Worker', () => {
     assert.equal(res.status, 200);
     assert.ok(body.startsWith('<!DOCTYPE html>'));
     assert.equal(res.headers.get('cache-control'), 'public, max-age=300');
-    assert.ok(res.headers.get('vary')?.includes('Accept'), 'one URL, two representations');
+    assert.ok(res.headers.get('vary')?.includes('RSC'), 'one URL, two representations');
     assert.match(res.headers.get('etag') ?? '', /^W\//, 'weak: something in front may re-encode the bytes without changing the representation');
   });
 
   test('answers the same URL with the prerendered flight payload when asked for one', async () => {
-    const res = await fetchWorker('/docs/getting-started', { headers: { accept: 'text/x-component' } });
+    const res = await fetchWorker('/docs/getting-started', { headers: { RSC: '1' } });
     const body = await res.text();
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type') ?? '', /^text\/x-component/);

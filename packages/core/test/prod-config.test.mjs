@@ -67,7 +67,7 @@ describe('a hardened server.ts', () => {
   test('the prerendered flight payload is still served from disk — only the document needs a nonce', async () => {
     // A flight payload never carries a nonce (that only goes on the HTML bootstrap), so there is
     // nothing per-request about it and no reason for CSP to cost soft navigations their prerender.
-    const res = await fetch(`${app.base}/docs/getting-started`, { headers: { Accept: 'text/x-component' } });
+    const res = await fetch(`${app.base}/docs/getting-started`, { headers: { RSC: '1' } });
     assert.equal(res.status, 200);
     assert.match(res.headers.get('cache-control') ?? '', /public/, 'still served from disk under CSP');
     assert.ok(res.headers.get('etag'));
@@ -112,7 +112,7 @@ describe('a hardened server.ts', () => {
   test('trustProxy: true honours X-Forwarded-* without dragging the internal port along', async () => {
     const flight = await (
       await fetch(`${app.base}/whoami`, {
-        headers: { Accept: 'text/x-component', 'x-forwarded-host': 'proxied.example', 'x-forwarded-proto': 'https' },
+        headers: { RSC: '1', 'x-forwarded-host': 'proxied.example', 'x-forwarded-proto': 'https' },
       })
     ).text();
     assert.match(flight, /https:\/\/proxied\.example\/whoami/, 'trustProxy should rebuild the URL from the forwarded headers');

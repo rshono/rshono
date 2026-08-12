@@ -51,6 +51,12 @@ function readFlightPayload(): ReadableStream<Uint8Array> {
 /** Created at module evaluation, not inside `main()`, so no chunk can be pushed before it is watching. */
 const flightStream = readFlightPayload();
 
+/**
+ * The part of the location a payload is rendered for — the document, without the fragment, which the server
+ * never sees. Two URLs that differ only by `#hash` describe the same payload.
+ */
+const documentUrl = (): string => location.pathname + location.search;
+
 /** Guarantees somewhere to attach the fatal overlay: the root container is `document`, so a teardown can take `<body>` with it. */
 function overlayHost(): HTMLElement {
   if (!document.documentElement) document.appendChild(document.createElement('html'));
@@ -112,8 +118,8 @@ function showFatal(error: unknown, componentStack?: string | null): void {
  * Asks a URL for its flight payload. Deliberately uncached — a payload can never be staler than the click
  * that wanted it, and the browser's own HTTP cache is what makes a repeat visit cheap.
  */
-function requestPayload(href: string): Promise<RscPayload> {
-  return createFromFetch<RscPayload>(fetch(createRscRequest(new URL(href, location.href).href)));
+function requestPayload(href: string, signal: AbortSignal): Promise<RscPayload> {
+  return createFromFetch<RscPayload>(fetch(createRscRequest(new URL(href, location.href).href, undefined, signal)));
 }
 
 async function main() {
@@ -185,16 +191,47 @@ async function main() {
     return true;
   }
 
-  async function fetchRscPayload() {
+  /**
+   * The navigation whose payload the screen is allowed to show. React runs async transitions concurrently, so
+   * two overlapping navigations are two live fetches with no ordering between them — without this, a slow
+   * first response landing after a fast second one renders the page the user already left while the address
+   * bar shows the one they asked for.
+   */
+  let currentNavigation = 0;
+  /** The in-flight navigation's fetch, so a newer one can stop paying for it. */
+  let navigationFetch: AbortController | null = null;
+
+  /**
+   * Fetches the payload for the current URL and applies it, unless a newer navigation started meanwhile.
+   *
+   * @returns `true` when this navigation is the one that settled the screen, `false` when it was superseded.
+   *   The distinction is what keeps a stale response from scrolling a page it is no longer rendering — and
+   *   why being superseded resolves rather than throws: both callers answer a rejection with a full reload,
+   *   so surfacing the abort would turn every fast second click into one.
+   */
+  async function fetchRscPayload(): Promise<boolean> {
+    const navigation = ++currentNavigation;
+    navigationFetch?.abort();
+    const controller = (navigationFetch = new AbortController());
+    const superseded = () => navigation !== currentNavigation;
+
     let payload: RscPayload;
     try {
-      payload = await requestPayload(window.location.href);
+      payload = await requestPayload(window.location.href, controller.signal);
     } catch (error) {
-      if (handleControlDigest(error)) return;
+      // Checked before the error is read: an abort is this navigation being replaced, and the one that
+      // replaced it owns the outcome.
+      if (superseded()) return false;
+      if (handleControlDigest(error)) return true;
       throw error;
     }
-    if (payload.redirect) return push(payload.redirect);
+    if (superseded()) return false;
+    if (payload.redirect) {
+      push(payload.redirect);
+      return true;
+    }
     setPayload(payload);
+    return true;
   }
 
   function BrowserRoot() {
@@ -222,8 +259,9 @@ async function main() {
       const stopNavigating = listenNavigation((afterRender) =>
         startNav(async () => {
           try {
-            await fetchRscPayload();
-            pendingScroll.current = afterRender;
+            // Only the navigation that settled the screen owes a scroll — a superseded one would move the
+            // page the navigation that replaced it is about to render.
+            if (await fetchRscPayload()) pendingScroll.current = afterRender;
           } catch {
             window.location.reload();
           }
@@ -243,6 +281,11 @@ async function main() {
 
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet();
+    // The document the action is being called from. Every action response carries a fresh payload for that
+    // page, so if a navigation has moved on by the time it arrives the payload describes a page the user has
+    // left — the return value is still theirs, but painting it is not. Compared without the fragment, which
+    // the server never saw.
+    const calledFrom = documentUrl();
     const request = createRscRequest(window.location.href, {
       id,
       body: await encodeReply(args, { temporaryReferences }),
@@ -258,7 +301,7 @@ async function main() {
       push(payload.redirect);
       return undefined;
     }
-    React.startTransition(() => setPayload(payload));
+    if (documentUrl() === calledFrom) React.startTransition(() => setPayload(payload));
     if (payload.notFound) return undefined;
     const result = payload.returnValue!;
     if (!result.ok) throw result.error;
@@ -389,9 +432,7 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
     else window.scrollTo(0, 0);
   };
 
-  const documentUrl = () => location.pathname + location.search;
-
-  // What the payload on screen was rendered for. The document part only: the server never sees the fragment.
+  // What the payload on screen was rendered for. See {@link documentUrl}.
   let renderedUrl = documentUrl();
 
   /**
@@ -447,7 +488,9 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
  *   rsc-update    → server component code changed: re-fetch the flight payload, state preserved.
  *   hello         → sent on (re)connect with the latest build hash; a mismatch means a missed event.
  */
-function initDevRefresh(fetchRscPayload: () => Promise<void>) {
+// `Promise<unknown>`: the payload fetch reports whether its navigation was superseded, which matters to a
+// click and not to a rebuild — here only settling or rejecting does.
+function initDevRefresh(fetchRscPayload: () => Promise<unknown>) {
   const hot = import.meta.webpackHot!;
   let connectedOnce = false;
   /** The newest build the dev server has announced — what {@link applyClientUpdate} walks towards. */

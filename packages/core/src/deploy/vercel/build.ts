@@ -50,7 +50,10 @@ export async function finalizeVercelBuild(ctx: DeployBuildContext): Promise<void
     join(functionDir, '.vc-config.json'),
     `${JSON.stringify(
       {
-        runtime: 'nodejs22.x',
+        // The Node the build ran on, so the function runs the runtime the app was tested against — and so
+        // this does not become a hard-coded version the platform retires on a date the framework does not
+        // control. A major Vercel does not offer is an explicit error from the deploy rather than a mismatch.
+        runtime: `nodejs${process.versions.node.split('.')[0]}.x`,
         handler: HANDLER,
         launcherType: 'Nodejs',
         // Without this the platform buffers the whole response, undoing streamed SSR.

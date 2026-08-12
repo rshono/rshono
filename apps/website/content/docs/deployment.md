@@ -46,9 +46,9 @@ environment variables, so `getRequestContext().env` would be empty there.
 
 ## Prerendered pages are never CDN-served
 
-One URL answers with an HTML document or a flight payload depending on `Accept`, and a path-keyed CDN
-cannot choose. The app always handles page URLs. Assets under `/_static` and `public/` do go straight to
-the CDN where there is one.
+One URL answers with an HTML document or a flight payload depending on the `RSC` request header, and a
+path-keyed CDN cannot choose. The app always handles page URLs. Assets under `/_static` and `public/` do go
+straight to the CDN where there is one.
 
 ## How the build works
 

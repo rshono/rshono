@@ -1,0 +1,13 @@
+{
+  "name": "rshono-test-external-dep",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A dependency outside the set the framework bundles unconditionally, so the serverless targets have something real to prove they bundled it. Used by apps/testbed; see packages/core/test/deploy-targets.test.mjs.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  }
+}

@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { readBuildMarker } from '../deploy/build-marker.js';
 import { deployHintFor } from '../deploy/presets.js';
-import { onShutdown } from '../server/shutdown.js';
 
 interface StartOptions {
   rootDir: string;
@@ -30,17 +29,14 @@ export async function startCommand(options: StartOptions): Promise<void> {
     process.exit(1);
   }
 
-  const env = { ...process.env };
-  if (port !== undefined) env.PORT = String(port);
-  if (host !== undefined) env.HOST = host;
+  // Read by the bundle as it evaluates, which is what binds the port — so they have to be set first.
+  if (port !== undefined) process.env.PORT = String(port);
+  if (host !== undefined) process.env.HOST = host;
 
-  const child = spawn(process.execPath, ['--enable-source-maps', mainPath], {
-    stdio: 'inherit',
-    env,
-  });
-
-  onShutdown((signal) => child.kill(signal));
-  child.on('exit', (code, signal) => {
-    process.exit(signal ? 1 : (code ?? 1));
-  });
+  // Imported into this process rather than spawned into a child. The child only ever existed to pass
+  // `--enable-source-maps`, and `bin/rshono.mjs` already enables the same thing in-process before the CLI
+  // loads — so a supervisor bought a second PID and its own heap in every container, an extra frame in every
+  // stack, and signal forwarding for signals the bundle already handles itself through `onShutdown`. `start`
+  // deliberately imports no Rspack, so the process this leaves behind is the server and little else.
+  await import(pathToFileURL(mainPath).href);
 }

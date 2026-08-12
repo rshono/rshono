@@ -1,0 +1,68 @@
+# Changelog
+
+All notable changes to `@rshono/core` and `@rshono/create`, which are released together and share a version.
+
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
+[semantic versioning](https://semver.org/spec/v2.0.0.html). Each release is tagged `v<version>`, and the tag
+is what publishes it.
+
+Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
+those.
+
+## [Unreleased]
+
+### Fixed
+
+- **`vercel` and `aws-lambda` produced deployments that could not boot.** Both targets upload a directory
+  rather than install one, but the server bundle kept importing the app's dependencies from `node_modules` —
+  so any app with a runtime dependency died at cold start on `ERR_MODULE_NOT_FOUND`. Both presets now bundle
+  dependencies, as `cloudflare` already did. Native addons and packages that read their own files off disk
+  cannot be bundled and now fail the build on these targets rather than the deploy.
+- **A soft navigation could render the wrong page.** Two overlapping navigations were two unordered fetches:
+  a slow first response landing after a fast second one repainted the page the user had left, under the URL of
+  the one they asked for. Navigations are now sequenced, the superseded fetch is aborted, and only the
+  navigation that settled the screen performs its scroll. A server action's payload is likewise no longer
+  applied if a navigation moved on while it was in flight.
+- **Production server stack traces were unmappable.** The server bundle is minified and shipped no source
+  map, so everything reaching the `onServerError` funnel was minified frames. It now ships one, and the
+  runtime enables Node's mapping itself so Vercel and Lambda need no flag. Client source maps stay off in a
+  build.
+- **A `'use client'` component from `node_modules` was SSR'd against the real `process.env`** while the
+  browser bundle saw the `PUBLIC_`-only view — a hydration mismatch on anything the host sets, and a leak for
+  anything secret. The env shadow now covers every module in the SSR layer, not just the app's own source.
+- **A thrown no-JS form action was reported as a `request` rather than an `action`**, so the progressive
+  enhancement path attributed its errors to the wrong stage. It is now reported as an action, and
+  `onServerError` de-duplicates, so one fault is reported once however many stages it crosses.
+- **The prerendered page cache was bounded by entry count, not size** — 128 entries of half-megabyte pages
+  retained ~64 MB with nothing about the number to suggest it. It now holds a byte budget (32 MB).
+- **`rshono build` could truncate its own output**, since a piped stdout is asynchronous and the process
+  exited without draining it. In CI that dropped the lines saying what was built.
+
+### Added
+
+- **A build-time check that `react` and `react-dom` resolve to the same version.** RSC couples them across
+  bundles, so a split resolution fails inside minified React at render time; the build now refuses it by name
+  and points at the override key. A different minor than the framework was tested with is a warning.
+- **A cross-site form post can no longer reach a server action.** A `<form action={serverAction}>` post is the
+  only action shape a browser can be made to send from another site — the client-initiated one carries a
+  header that forces a preflight — so the framework refuses it whether or not `csrf()` is registered. This is
+  not a CSRF policy; `csrf()` in `src/server.ts` remains that, and covers everything else.
+- **A build warning when `src/server.ts` is absent**, naming the CSRF check and the body cap the app has
+  therefore opted out of.
+- `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, this changelog, issue templates, Dependabot, and a
+  tag-triggered release workflow that publishes with npm provenance.
+
+### Changed
+
+- **The flight-payload discriminator is now an `RSC: 1` request header, and page responses `Vary: RSC`.** It
+  was `Accept: text/x-component` with `Vary: Accept` — correct content negotiation, and close to a
+  cache-disabling header on the prerendered pages served `public, max-age=300`, because browsers send long
+  `Accept` strings that differ by vendor and version. The new header has two states. This is internal to the
+  client runtime and the server, which ship together; a client outside the framework asking for a payload by
+  `Accept` needs updating.
+- `.vc-config.json`'s Node runtime is derived from the Node the build ran on, rather than pinned to
+  `nodejs22.x` — which would have started failing on a date the framework does not control.
+- `rshono start` runs the build in its own process instead of spawning a child. The child only ever existed to
+  pass `--enable-source-maps`, which the CLI already enables in-process.
+- The generated `eslint.config.mjs` explains why an ESLint app pins TypeScript below the version rshono builds
+  with, and that `lint:fix` therefore wants a `typecheck` after it.

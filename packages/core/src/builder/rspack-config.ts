@@ -8,6 +8,7 @@ import type { DeployPreset } from '../deploy/presets.js';
 import { resolveServerConfig } from '../server/server-config.js';
 import { scanPageFiles } from './page-files.js';
 import { publicEnv } from './public-env.js';
+import { checkReactVersions } from './react-versions.js';
 
 // This file lives in `dist/builder/`, so the entries and loaders below are the *built* framework.
 const FRAMEWORK_DIST = join(import.meta.dirname, '..');
@@ -109,12 +110,25 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
   const mode = isDev ? 'development' : 'production';
   const outDir = isDev ? DEV_OUT_DIR : BUILD_OUT_DIR;
 
+  // Before anything is compiled: a react/react-dom split fails inside React at render time, and this is the
+  // one place that can say so with the two versions in hand.
+  checkReactVersions(rootDir);
+
   const routesFile = ['routes.ts', 'routes.tsx'].map((f) => join(srcDir, f)).find(existsSync);
   if (!routesFile) {
     throw new Error(`[rshono] src/routes.ts not found in ${rootDir} — it is the one required file.`);
   }
   const serverAppFile = ['server.ts', 'server.tsx'].map((f) => join(srcDir, f)).find(existsSync);
   const serverAppAlias = serverAppFile ?? join(FRAMEWORK_DIST, 'runtime', 'empty-server-app.js');
+  // Optional, and staying optional — but per-request security is Hono middleware registered there, so an app
+  // without one has opted out of all of it, which is worth hearing once rather than discovering. Builds only:
+  // `dev` would print it on every rebuild, and it is not news on a developer's machine.
+  if (!serverAppFile && !isDev) {
+    console.warn(
+      '  ⚠ No src/server.ts — this build has no CSRF check and no request body cap. Both are Hono middleware\n' +
+        '    (`csrf()`, `bodyLimit()`); `npx @rshono/create` scaffolds a src/server.ts with them registered.',
+    );
+  }
 
   const rscEntry = join(FRAMEWORK_DIST, 'runtime', 'entry.rsc.js');
   const ssrEntry = join(FRAMEWORK_DIST, 'runtime', 'entry.ssr.js');
@@ -168,6 +182,8 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     mode,
     target: 'web',
     context: rootDir,
+    // Never in a build: a client map is served from `/_static` like everything else beside it, and it would
+    // publish the original source of the app's own modules. Dev binds 127.0.0.1 only.
     devtool: isDev ? 'source-map' : false,
     entry: { main: clientEntry },
     output: {
@@ -203,7 +219,11 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     mode,
     target: 'node',
     context: rootDir,
-    devtool: isDev ? 'source-map' : false,
+    // In a build too, unlike the client's: the bundle is minified, and without a map every stack trace that
+    // reaches `onServerError` — the error-tracker funnel — is unmappable minified frames. A server map is
+    // never served to anyone; `dist/server` is not on a public path, and the runtime enables Node's own
+    // mapping so no host has to pass a flag.
+    devtool: 'source-map',
     entry: { main: rscEntry },
     output: {
       path: join(rootDir, outDir, 'server'),
@@ -257,13 +277,24 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
           use: [{ loader: join(FRAMEWORK_DIST, 'builder', 'page-entry-loader.cjs') }],
         },
         {
+          // Deliberately not scoped to `srcDir`: a `'use client'` component from `node_modules` is SSR'd in
+          // the same layer, and scoping this to the app's own source left those rendering against the real
+          // `process.env` while the browser bundle saw the `PUBLIC_`-only view — a hydration mismatch on
+          // anything the host sets, and a leak for anything secret. The loader's own layer check is what
+          // decides; every other module gets one `includes('process.env')` scan.
           test: /\.[cm]?[tj]sx?$/,
-          include: srcDir,
           enforce: 'pre',
           use: [
             {
               loader: join(FRAMEWORK_DIST, 'builder', 'env-shadow-loader.cjs'),
-              options: { prelude: `const process = { env: ${JSON.stringify(publicEnv(isDev))} }; `, layer: Layers.ssr },
+              // `Object.create` over the real `process`, not a bare `{ env }`: the prelude shadows the whole
+              // binding for that module, and `react-dom/server` is in this layer too — anything reading
+              // `process.nextTick` or `process.platform` has to still find it. Not a `{ __proto__: … }`
+              // literal, whose meaning would change if a minifier ever quoted the key.
+              options: {
+                prelude: `const process = Object.assign(Object.create(globalThis.process ?? Object.prototype), { env: ${JSON.stringify(publicEnv(isDev))} }); `,
+                layer: Layers.ssr,
+              },
             },
           ],
         },

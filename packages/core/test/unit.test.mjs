@@ -9,11 +9,12 @@ import { basename, dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
 
 import { scanPageFiles } from '../dist/builder/page-files.js';
+import { checkReactVersions } from '../dist/builder/react-versions.js';
 import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
 import { appendVary, etagMatches } from '../dist/server/headers.js';
 import { resolveServerConfig } from '../dist/server/server-config.js';
-import { prerenderedRelPath, ssgFilePath } from '../dist/server/prerendered.js';
+import { createPageCache, prerenderedRelPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
@@ -329,9 +330,9 @@ describe('readPrerendered', () => {
 });
 
 describe('prerenderStaticRoutes', () => {
-  // The app answers per `Accept`, exactly as the real one does — the point of prerendering both.
+  // The app answers per the `RSC` header, exactly as the real one does — the point of prerendering both.
   const okResponse = (request) =>
-    request.headers.get('Accept') === 'text/x-component'
+    request.headers.get('RSC') === '1'
       ? new Response('0:{"root":"flight"}', { status: 200, headers: { 'Content-Type': 'text/x-component' } })
       : new Response('<!DOCTYPE html><p>ok</p>', { status: 200, headers: { 'Content-Type': 'text/html' } });
 
@@ -351,7 +352,7 @@ describe('prerenderStaticRoutes', () => {
         { path: '/live', component: async () => ({ default: () => null }) },
       ],
       fetch: (request) => {
-        requested.push(`${request.headers.get('Accept')} ${new URL(request.url).pathname}`);
+        requested.push(`${request.headers.get('RSC') ? 'flight' : 'document'} ${new URL(request.url).pathname}`);
         return okResponse(request);
       },
     });
@@ -359,14 +360,7 @@ describe('prerenderStaticRoutes', () => {
     assert.deepEqual(result.written, ['/about', '/docs/a', '/docs/b']);
     assert.deepEqual(
       requested,
-      [
-        'text/html /about',
-        'text/x-component /about',
-        'text/html /docs/a',
-        'text/x-component /docs/a',
-        'text/html /docs/b',
-        'text/x-component /docs/b',
-      ],
+      ['document /about', 'flight /about', 'document /docs/a', 'flight /docs/a', 'document /docs/b', 'flight /docs/b'],
       'each path is rendered as a document and as a flight payload; a dynamic route is never prerendered',
     );
     const decode = (page) => new TextDecoder().decode(page.body);
@@ -394,7 +388,7 @@ describe('prerenderStaticRoutes', () => {
       ssgDir,
       routes: [{ path: '/about', render: 'static', component: async () => ({ default: () => null }) }],
       fetch: (request) =>
-        request.headers.get('Accept') === 'text/x-component'
+        request.headers.get('RSC') === '1'
           ? new Response('nope', { status: 500 })
           : new Response('<!DOCTYPE html><p>ok</p>', { status: 200, headers: { 'Content-Type': 'text/html' } }),
     });
@@ -659,6 +653,79 @@ describe('the deploy seam', () => {
     });
     assert.equal(serverConfig.target, 'webworker', 'the preset reached the generated config');
     assert.equal(serverConfig.devtool, 'source-map', "the app's own hook ran after it");
+  });
+});
+
+describe('createPageCache', () => {
+  const pageOf = (size) => ({ body: new Uint8Array(size), contentLength: String(size), etag: `W/"${size}"` });
+
+  test('evicts oldest-first to stay inside its byte budget', () => {
+    const cache = createPageCache(300);
+    cache.set('a', pageOf(100));
+    cache.set('b', pageOf(100));
+    cache.set('c', pageOf(100));
+    assert.ok(cache.get('a'), 'still inside the budget');
+
+    cache.set('d', pageOf(100));
+    assert.equal(cache.get('a'), undefined, 'the oldest went');
+    assert.ok(cache.get('b') && cache.get('c') && cache.get('d'));
+  });
+
+  test('counts bytes rather than entries', () => {
+    const cache = createPageCache(300);
+    cache.set('big', pageOf(250));
+    cache.set('small', pageOf(100));
+    assert.equal(cache.get('big'), undefined, 'two entries, but 350 bytes');
+    assert.ok(cache.get('small'));
+  });
+
+  test('serves a page too big to store rather than emptying the cache for it', () => {
+    const cache = createPageCache(300);
+    cache.set('keep', pageOf(100));
+    cache.set('huge', pageOf(500));
+    assert.equal(cache.get('huge'), undefined, 'not stored');
+    assert.ok(cache.get('keep'), 'and nothing was evicted to make room for it');
+  });
+
+  test('re-setting a key does not double-count its bytes', () => {
+    const cache = createPageCache(300);
+    cache.set('a', pageOf(200));
+    cache.set('a', pageOf(200));
+    cache.set('b', pageOf(100));
+    assert.ok(cache.get('a') && cache.get('b'), '300 bytes held, not 500');
+  });
+});
+
+describe('checkReactVersions', () => {
+  /** An app root with whatever versions of the two packages the case needs installed into it. */
+  const appWith = (versions) => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'app', private: true }));
+    for (const [name, version] of Object.entries(versions)) {
+      mkdirSync(join(dir, 'node_modules', name), { recursive: true });
+      writeFileSync(join(dir, 'node_modules', name, 'package.json'), JSON.stringify({ name, version }));
+    }
+    return dir;
+  };
+
+  test('refuses a react/react-dom split, naming both versions', () => {
+    const dir = appWith({ react: '19.2.8', 'react-dom': '19.1.0' });
+    assert.throws(() => checkReactVersions(dir), /react 19\.2\.8 and react-dom 19\.1\.0 resolve to different versions/);
+    // The advice has to name the escape hatch, since a transitive dependency is the usual cause.
+    assert.throws(() => checkReactVersions(dir), /overrides/);
+  });
+
+  test('accepts a matching pair', () => {
+    checkReactVersions(appWith({ react: '19.2.8', 'react-dom': '19.2.8' }));
+  });
+
+  test('says nothing when neither is installed — the resolver reports that better', () => {
+    checkReactVersions(appWith({}));
+  });
+
+  test('does not fire on a real app', () => {
+    // The check runs on every dev and build, so a false positive here would break every one of them.
+    checkReactVersions(MINIMAL_APP_DIR);
   });
 });
 

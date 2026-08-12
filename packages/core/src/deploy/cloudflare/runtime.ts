@@ -6,7 +6,7 @@ import type { DeployRuntime } from '../contract.js';
  * Where `finalize` puts the prerendered pages inside the assets directory.
  *
  * A prefix of its own, rather than the pages' real URLs, is what keeps every page URL reaching the worker: one
- * URL answers with a document or a flight payload depending on `Accept`, and a path-keyed CDN cannot make that
+ * URL answers with a document or a flight payload on the `RSC` request header, and a path-keyed CDN cannot make that
  * choice. The tree is reachable here too, so `finalize` marks it `noindex` rather than leaving a crawler to
  * find the same page twice.
  */

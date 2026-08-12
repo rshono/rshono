@@ -169,8 +169,11 @@ default, and with no directives a shared cache is free to store one user's page 
 next. Set your own value from middleware and it is left alone. **Prerendered pages** keep
 `public, max-age=300` and a weak `ETag`.
 
-Every page response carries `Vary: Accept`, because one URL answers with either an HTML document or a
-flight payload depending on it.
+Every page response carries `Vary: RSC`, because one URL answers with either an HTML document or a flight
+payload depending on that request header — the client runtime sends `RSC: 1` to ask for a payload. A header
+of its own rather than `Accept`: a browser's `Accept` string differs by vendor and version, so a CDN keyed on
+it would store a copy of a prerendered page per variant, and some shared caches refuse to store such a
+response at all.
 
 ## CSP
 
