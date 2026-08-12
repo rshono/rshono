@@ -117,6 +117,10 @@ function requestPayload(href: string): Promise<RscPayload> {
 }
 
 async function main() {
+  // The assertion is load-bearing under the compiler that builds this: TypeScript 7 declares `nonce` on
+  // HTMLElement, 6 declares it on Element. ESLint runs the older lib — where the narrowing is redundant —
+  // so it reports an assertion that `tsc` requires. Believe `typecheck`, not the rule.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
   const cspMeta = document.querySelector('meta[property="csp-nonce"]') as HTMLMetaElement | null;
   if (cspMeta?.nonce) __webpack_nonce__ = cspMeta.nonce;
 
@@ -346,7 +350,9 @@ function fragmentTarget(): HTMLElement | null {
   let id = fragment;
   try {
     id = decodeURIComponent(fragment);
-  } catch {}
+  } catch {
+    // Malformed escape — the literal fragment is the better guess at the id than nothing.
+  }
   return document.getElementById(id);
 }
 
@@ -358,11 +364,15 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
   const prevRestoration = window.history.scrollRestoration;
   try {
     window.history.scrollRestoration = 'auto';
-  } catch {}
+  } catch {
+    // Not settable in every browser, and only a preference — the navigation still works without it.
+  }
   undo.push(() => {
     try {
       window.history.scrollRestoration = prevRestoration;
-    } catch {}
+    } catch {
+      // As above: if it could not be set, it cannot be put back either.
+    }
   });
 
   /**
@@ -403,6 +413,9 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
   window.addEventListener('popstate', onPopState);
   undo.push(() => window.removeEventListener('popstate', onPopState));
 
+  // Saved unbound on purpose, and called back with `.call(this, …)` below — patching `history` is the only
+  // way to see a navigation the app makes itself, and the receiver is restored at every call site.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   const oldPushState = window.history.pushState;
   window.history.pushState = function (state, unused, url) {
     const res = oldPushState.call(this, state, unused, url as string);
@@ -413,6 +426,7 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
     window.history.pushState = oldPushState;
   });
 
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- as with `pushState` above.
   const oldReplaceState = window.history.replaceState;
   window.history.replaceState = function (state, unused, url) {
     const res = oldReplaceState.call(this, state, unused, url as string);
@@ -479,7 +493,7 @@ function initDevRefresh(fetchRscPayload: () => Promise<void>) {
   // puts several frames on the wire inside the time one takes. Queueing drops nothing, because `targetHash`
   // is shared — whichever handler runs next walks to the newest build.
   let queue: Promise<void> = Promise.resolve();
-  source.onmessage = (event) => {
+  source.onmessage = (event: MessageEvent<string>) => {
     const message = JSON.parse(event.data) as DevMessage;
     queue = queue.then(() => handle(message)).catch((error) => reload('the dev client failed', error));
   };

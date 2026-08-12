@@ -169,7 +169,9 @@ export function injectFlightPayload(
         }
         if (!startedFlight) {
           startedFlight = true;
-          writeFlight(controller)
+          // Deliberately not awaited: this runs inside a scheduled callback with nothing to return to, and
+          // the chain already routes a write failure to `controller.error` before settling `flightDone`.
+          void writeFlight(controller)
             .catch((error) => controller.error(error))
             .then(flightDone);
         }

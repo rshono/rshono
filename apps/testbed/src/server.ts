@@ -124,7 +124,7 @@ server.post('/api/users', async (c) => {
 });
 
 server.get('/api/users/:id', async (c) => {
-  const id = c.req.param('id')!;
+  const id = c.req.param('id');
   const user = await fakeDB.getUser(id);
   if (!user) {
     return c.json({ error: 'Not found' }, 404);

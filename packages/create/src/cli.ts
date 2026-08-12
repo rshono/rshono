@@ -191,7 +191,7 @@ async function main(): Promise<void> {
   // addresses either on its own.
   let preset: QualityPreset | undefined = QUALITY_PRESETS.find((candidate) => candidate.id === qualityFlag);
   if (!preset && !formatterFlag && !linterFlag) {
-    const fallback = QUALITY_PRESETS[0]!;
+    const fallback = QUALITY_PRESETS[0];
     if (interactive) {
       const id = unwrap(
         await prompts.select({

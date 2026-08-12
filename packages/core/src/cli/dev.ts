@@ -112,7 +112,9 @@ export async function devCommand(options: DevOptions): Promise<void> {
         env: process.env as Record<string, string>,
       });
       const timeout = setTimeout(() => {
-        worker.terminate();
+        // Nothing waits on the termination: the promise below is already being rejected, and a worker that
+        // never reported ready has no state left worth draining.
+        void worker.terminate();
         reject(new Error(`server worker did not become ready within ${WORKER_READY_TIMEOUT_MS / 1000}s`));
       }, WORKER_READY_TIMEOUT_MS);
 
@@ -126,7 +128,7 @@ export async function devCommand(options: DevOptions): Promise<void> {
       });
       // `on`, not `once`: an error after the worker is ready has no pending promise left to reject, and a
       // consumed `once` would leave it unlistened — which Node turns into an uncaught exception here.
-      worker.on('error', (error) => {
+      worker.on('error', (error: Error) => {
         if (ready) {
           console.error('  ✗ server worker crashed:', error);
           return;
@@ -213,7 +215,7 @@ export async function devCommand(options: DevOptions): Promise<void> {
 
   front.route('/_static', createStaticAssetsApp({ root: join(outDir, 'static'), isDev: true }));
 
-  front.get('/_rshono/hmr', (c) => {
+  front.get('/_rshono/hmr', () => {
     let ctrl: ReadableStreamDefaultController<Uint8Array>;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

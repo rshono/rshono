@@ -3,6 +3,16 @@
 import { getRequestContext, redirect } from '@rshono/core/server';
 import { fakeDB, type User } from './db';
 
+// Not exported — a 'use server' module may only export async functions.
+/**
+ * A form field as trimmed text. `FormData.get` also yields `File` for a file input, which stringifies to
+ * `[object File]`; anything that is not already a string is treated as absent.
+ */
+function field(formData: FormData, name: string): string {
+  const value = formData.get(name);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export async function createUser(data: { name: string; email: string }): Promise<User> {
   if (!data.name.trim() || !data.email.includes('@')) {
     throw new Error('A name and a valid email are required.');
@@ -15,7 +25,7 @@ export interface LoginState {
 }
 
 export async function login(_prev: LoginState, formData: FormData): Promise<LoginState> {
-  const email = String(formData.get('email') ?? '').trim();
+  const email = field(formData, 'email');
   if (!email.includes('@')) return { error: 'Enter a valid email address.' };
   getRequestContext().cookies.set('session', encodeURIComponent(email), { path: '/', httpOnly: true, sameSite: 'Lax' });
   redirect('/dashboard');
@@ -52,8 +62,8 @@ export interface SignupState {
 }
 
 export async function signup(_prev: SignupState, formData: FormData): Promise<SignupState> {
-  const name = String(formData.get('name') ?? '').trim();
-  const email = String(formData.get('email') ?? '').trim();
+  const name = field(formData, 'name');
+  const email = field(formData, 'email');
   if (!name || !email.includes('@')) {
     return { error: 'Please provide a name and a valid email address.' };
   }

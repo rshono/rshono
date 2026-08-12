@@ -51,5 +51,5 @@ export function unwrap<T>(value: T | symbol): T {
     prompts.cancel('Cancelled — nothing was written.');
     process.exit(130);
   }
-  return value as T;
+  return value;
 }

@@ -23,11 +23,19 @@
     "testbed:dev": "pnpm --filter testbed dev",
     "release": "pnpm -r publish --publish-branch main",
     "clean": "rm -rf packages/*/dist packages/*/node_modules apps/*/node_modules node_modules",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "uncomment": "prettier --plugin=prettier-plugin-uncomment --write ."
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.9.0",
     "prettier": "^3.9.1",
-    "prettier-plugin-uncomment": "^1.0.2"
+    "prettier-plugin-uncomment": "^1.0.2",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.65.0"
   }
 }

@@ -99,6 +99,9 @@ export interface PageProps<Path extends string = string, E extends Env = Env> {
  * @see {@link https://react.dev/reference/rsc/server-components | React — Server Components}
  * @see {@link https://www.rshono.com/docs/pages | Docs — pages}
  */
+// `any`, not `unknown`: this default is what an unparameterised `PageComponent` means in a user's own
+// annotation, and `unknown` props would reject every component that declares the props it actually takes.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type PageComponent<P = any> = (props: P) => ReactNode | Promise<ReactNode>;
 
 /**
@@ -293,7 +296,8 @@ type ValidateRoute<R> = R extends {
   path: infer P extends string;
   component: () => Promise<{ default: PageComponent<infer CP> }>;
 }
-  ? [PageProps<P, any>] extends [CP]
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Env is deliberately unpinned; see above.
+    [PageProps<P, any>] extends [CP]
     ? R
     : R & { component: `component props are not satisfied by PageProps<'${P}'>` }
   : R;

@@ -1,3 +1,6 @@
+// `__RSHONO_CONFIG__` is a global const, and an `import` cannot bring one into scope — a path reference is
+// the only way to reach it, which is the whole reason that file is separate. See its header.
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
 /// <reference path="../types/rshono-config.d.ts" />
 /**
  * The request context: {@link getRequestContext} and the {@link RequestContext} it returns, the
@@ -392,10 +395,10 @@ export class RequestContext<E extends Env = Env> {
 
   // Hono's response builders, restated as errors naming what to use instead — through `ctx.hono` every
   // one of them is a silent no-op from a page. `@deprecated` strikes them through in autocomplete; the
-  // unread `...args` is so `ctx.redirect('/x')` reaches the thrown message rather than an arity error.
+  // unread `..._args` is so `ctx.redirect('/x')` reaches the thrown message rather than an arity error.
 
   /** @deprecated Not available on a page's context — use `redirect()` from `@rshono/core/server`. */
-  redirect(...args: unknown[]): never {
+  redirect(..._args: unknown[]): never {
     return notOnContext(
       'redirect(location, status?)',
       "Use `redirect()` from '@rshono/core/server', which throws a signal the framework turns into a real redirect.",
@@ -403,27 +406,27 @@ export class RequestContext<E extends Env = Env> {
   }
 
   /** @deprecated Not available on a page's context — use `notFound()` from `@rshono/core/server`. */
-  notFound(...args: unknown[]): never {
+  notFound(..._args: unknown[]): never {
     return notOnContext('notFound()', "Use `notFound()` from '@rshono/core/server', which aborts the render and shows the app's not-found page.");
   }
 
   /** @deprecated A page renders JSX. For a JSON response, use an `{ type: 'endpoint' }` route. */
-  json(...args: unknown[]): never {
+  json(..._args: unknown[]): never {
     return notOnContext('json(object)', "For a JSON response use an { type: 'endpoint' } route; to read the request body use `ctx.req.json()`.");
   }
 
   /** @deprecated A page renders JSX. For a text response, use an `{ type: 'endpoint' }` route. */
-  text(...args: unknown[]): never {
+  text(..._args: unknown[]): never {
     return notOnContext('text(string)', "For a text response use an { type: 'endpoint' } route; to read the request body use `ctx.req.text()`.");
   }
 
   /** @deprecated A page renders JSX, which the framework turns into HTML for you. */
-  html(...args: unknown[]): never {
+  html(..._args: unknown[]): never {
     return notOnContext('html(string)', "A page's JSX is already its HTML; for a hand-built HTML response use an { type: 'endpoint' } route.");
   }
 
   /** @deprecated Not available on a page's context. To read the request body, use `ctx.req`. */
-  body(...args: unknown[]): never {
+  body(..._args: unknown[]): never {
     return notOnContext(
       'body(data, …)',
       "To read the *request* body use `ctx.req.json()` / `ctx.req.text()` / `ctx.req.formData()`; to build a response, use an { type: 'endpoint' } route.",
@@ -431,7 +434,7 @@ export class RequestContext<E extends Env = Env> {
   }
 
   /** @deprecated A page's status is set by the framework — use `notFound()`, or an endpoint route. */
-  status(...args: unknown[]): never {
+  status(..._args: unknown[]): never {
     return notOnContext(
       'status(code)',
       "A page's status is the framework's: 200, 404 via `notFound()`, 500 when it throws. For any other code use an { type: 'endpoint' } route.",
@@ -439,7 +442,7 @@ export class RequestContext<E extends Env = Env> {
   }
 
   /** @deprecated Renamed — use `ctx.setHeader(name, value)`, which is valid from a `'use server'` action. */
-  header(...args: unknown[]): never {
+  header(..._args: unknown[]): never {
     return notOnContext(
       'header(name, value)',
       "Use `ctx.setHeader(name, value)` from a 'use server' action, or `c.header(…)` in middleware — a page renders too late to set one.",
