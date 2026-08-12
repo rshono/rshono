@@ -1,10 +1,7 @@
 /**
- * Build cost: cold (caches cleared) and warm (caches kept, one source file touched), plus the size
- * of what came out.
- *
- * Cold is the CI number; warm is the one a developer feels. Both are run `--trials` times and
- * reported as a median with the relative spread next to it, because a single build timing on a
- * laptop is worth roughly nothing.
+ * Build cost: cold (caches cleared) and warm (caches kept, one source file touched), plus the size of what came
+ * out. Cold is the CI number, warm the one a developer feels. Both are run `--trials` times and reported as a
+ * median with its relative spread, because a single build timing on a laptop is worth roughly nothing.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';

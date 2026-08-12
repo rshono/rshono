@@ -9,34 +9,26 @@ import { resolveServerConfig } from '../server/server-config.js';
 import { scanPageFiles } from './page-files.js';
 import { publicEnv } from './public-env.js';
 
-// The framework's own compiled output (this file lives in `dist/builder/`), which is what the two
-// compilers consume: the entries and loaders below are the *built* framework, not its TypeScript.
+// This file lives in `dist/builder/`, so the entries and loaders below are the *built* framework.
 const FRAMEWORK_DIST = join(import.meta.dirname, '..');
 const FRAMEWORK_ROOT = join(FRAMEWORK_DIST, '..');
 
 const BUNDLED_PACKAGES = /^(@rshono\/core|react|react-dom|react-server-dom-rspack|hono|@hono\/node-server)(\/|$)/;
 
 /**
- * The directory a command writes its bundles to, relative to the project root — one per command,
- * never shared.
+ * The directory a command writes its bundles to, relative to the project root — one per command, never
+ * shared: a `rshono build` alongside a running `rshono dev` would `clean` away the route chunks that
+ * server imports lazily, and Rspack's watch-mode emit never re-emits a file it believes it wrote.
  *
- * `rshono build` run while `rshono dev` is up would otherwise write over the dev server's own
- * output: the build's `clean` empties `<out>/server`, and the route chunks it deletes are exactly
- * the ones the running server worker imports *lazily, at request time*. Every route the worker had
- * not already loaded then fails with `ERR_MODULE_NOT_FOUND`, and no later edit repairs it, because
- * Rspack's watch-mode emit compares against what it believes it already wrote rather than against
- * the disk — so it never re-emits the deleted files. The dev server 500s until it is restarted.
- *
- * Both names are a single level under the root, which {@link ../deploy/filesystem.ts} relies on: it
- * derives the project root from where the bundle ended up, `<out>/server/main.mjs` → `../..`.
+ * Both names are a single level under the root, which `deploy/filesystem.ts` relies on to derive the
+ * project root from where the bundle ended up.
  */
 export const BUILD_OUT_DIR = 'dist';
 export const DEV_OUT_DIR = '.rshono';
 
 /**
- * Packages that end up imported *by app source* without the app ever mentioning them: the RSC
- * transform rewrites a `'use client'` module, a page or a server action into imports of the RSC
- * runtime, and those requests resolve from the app's own `src/`.
+ * Packages the app's source ends up importing without ever naming them: the RSC transform rewrites a
+ * `'use client'` module, a page or an action into imports of the RSC runtime, resolved from the app's `src/`.
  */
 const INJECTED_PACKAGES = ['react-server-dom-rspack'];
 
@@ -52,17 +44,13 @@ function enclosingNodeModules(file: string): string | undefined {
 }
 
 /**
- * Where packages are resolved from: the app's own `node_modules`, then the framework's.
+ * Where packages are resolved from: the app's own `node_modules`, then the framework's — which is what makes
+ * {@link INJECTED_PACKAGES} resolvable from app source under pnpm, where the framework's dependencies are
+ * installed as siblings of `@rshono/core` rather than hoisted into the app's tree.
  *
- * The second part is what makes {@link INJECTED_PACKAGES} resolvable from app source. npm, yarn and
- * bun hoist the framework's dependencies into the app's own `node_modules`; pnpm installs them as
- * *siblings* of `@rshono/core` where nothing under the app's tree can see them, and the build then
- * fails with `Can't resolve 'react-server-dom-rspack/client'` in a file the user never wrote that
- * import into.
- *
- * Asking Node where the framework itself resolves the package finds the directory in any layout, and
- * a search path rather than an alias keeps the package's own `exports` conditions in play — the RSC
- * layer, the SSR layer and each deploy target need a different build of it.
+ * Asking Node where the framework resolves the package finds it in any layout, and a search path rather than
+ * an alias keeps the package's own `exports` conditions in play — the RSC layer, the SSR layer and each
+ * deploy target need a different build of it.
  */
 function resolveModules(): string[] {
   const require = createRequire(import.meta.url);
@@ -75,8 +63,7 @@ function resolveModules(): string[] {
       // Left to the resolver to report against the request that actually needed it.
     }
   }
-  // A checkout or a vendored copy, where the framework has real dependencies of its own and the lookup
-  // above found nothing to add.
+  // A checkout or a vendored copy, where the framework has real dependencies of its own.
   dirs.add(join(FRAMEWORK_ROOT, 'node_modules'));
   return ['node_modules', ...dirs];
 }
@@ -84,11 +71,9 @@ function resolveModules(): string[] {
 /**
  * Whether a request names a file rather than a package, and so belongs in the bundle.
  *
- * Rspack's RSC plugins ask for their client and server-entry proxies by *absolute path*, which on
- * Windows means a drive letter (`D:\app\src\home.tsx`) instead of a leading slash. Externalizing one
- * of those emits `import("D:\\app\\src\\home.tsx")`, which Node rejects with
- * `ERR_UNSUPPORTED_ESM_URL_SCHEME`. `win32.isAbsolute` also accepts the POSIX form, so it is used on
- * every platform — one code path, and the Windows shapes stay testable off Windows.
+ * Rspack's RSC plugins ask for their proxies by absolute path, which on Windows carries a drive letter —
+ * externalizing one emits an `import("D:\\…")` Node rejects. `win32.isAbsolute` accepts the POSIX form too,
+ * so it runs on every platform and the Windows shapes stay testable off Windows.
  */
 function isPathRequest(request: string): boolean {
   return request.startsWith('.') || win32.isAbsolute(request);
@@ -98,14 +83,11 @@ const BROWSER_TARGETS = ['last 2 versions', '> 0.2%', 'not dead', 'Firefox ESR']
 const NODE_TARGETS = ['node >= 22'];
 
 /**
- * Rspack's native CSS pipeline, which both compilers get.
+ * Rspack's native CSS pipeline, which both compilers get. It parses *finished* CSS, so a stylesheet needing
+ * PostCSS — Tailwind, most obviously — adds that loader through the {@link RshonoConfig.rspack} hook, which
+ * keeps `postcss` a dependency of the apps that want one.
  *
- * It parses *finished* CSS, so a stylesheet needing a PostCSS plugin — Tailwind, most obviously —
- * adds the loader through the {@link RshonoConfig.rspack} hook, along with the packages a PostCSS
- * pass takes. `postcss` is then a dependency of the apps that want one rather than of every app.
- *
- * A fresh object per compiler, so an app that reaches in to change this rule does not find it has
- * changed the other bundle's too.
+ * A fresh object per compiler, so an app changing this rule does not silently change the other bundle's.
  */
 function cssRule(): RuleSetRule {
   return { test: /\.css$/i, type: 'css/auto' };
@@ -162,9 +144,8 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     modules: resolveModules(),
   };
 
-  // The platform's own resolve conditions, ahead of whatever the Rspack target implies ('...'). This
-  // is what hands the server bundle the right build of React and the RSC runtime, both of which ship
-  // one per runtime. Left unset for Node, where the target already implies the `node` condition.
+  // Ahead of whatever the Rspack target implies ('...'), which is what hands the server bundle the right
+  // build of React and the RSC runtime. Unset for Node, whose target already implies the `node` condition.
   const runtimeConditions = preset.resolveConditions ?? [];
   const serverResolveBase = runtimeConditions.length > 0 ? { ...resolveBase, conditionNames: [...runtimeConditions, '...'] } : resolveBase;
   const rscConditionNames = ['react-server', ...runtimeConditions, '...'];
@@ -226,9 +207,8 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     entry: { main: rscEntry },
     output: {
       path: join(rootDir, outDir, 'server'),
-      // Off in dev, matching the client compiler above: route chunks are imported lazily, at request
-      // time, so leaving a superseded one on disk is harmless where deleting one mid-request is not.
-      // `rshono dev` empties the directory on startup, so nothing accumulates across sessions.
+      // Off in dev: route chunks are imported lazily, so a superseded one on disk is harmless where deleting
+      // one mid-request is not. `rshono dev` empties the directory on startup instead.
       clean: !isDev,
       module: true,
       chunkFormat: 'module',
@@ -264,8 +244,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
       alias: {
         '@rshono/routes$': routesFile,
         '@rshono/server-app$': serverAppAlias,
-        // The one import that decides which platform the server bundle is for. Split on '/' so the
-        // preset can declare a POSIX-looking path and still resolve on Windows.
+        // Split on '/' so a preset can declare a POSIX-looking path and still resolve on Windows.
         '@rshono/deploy$': join(FRAMEWORK_DIST, ...preset.runtimeModule.split('/')),
         '@': srcDir,
       },
@@ -317,8 +296,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     performance: false,
   };
 
-  // The platform's own overrides, then the user's hook — so an app can still adjust whatever a
-  // preset decided.
+  // The platform's overrides first, then the user's hook — so an app can adjust whatever a preset decided.
   preset.configureServer?.(serverConfig);
 
   const rspackHook = config.rspack;

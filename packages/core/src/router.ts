@@ -1,19 +1,18 @@
 import type { Env, Handler } from 'hono';
 import type { ParamKeys, ParamKeyToRecord } from 'hono/types';
 import type { ReactNode } from 'react';
-// Type-only, so this stays a build-time module: the import is erased and none of `context.ts`'s
-// runtime machinery (AsyncLocalStorage, hono/cookie) is pulled in by importing `@rshono/core`.
+// Type-only, so importing `@rshono/core` pulls in none of `context.ts`'s runtime machinery.
 import type { RequestContext } from './runtime/context.js';
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (k: infer I) => void ? I : never;
 
 /**
- * The `params` record implied by a route path pattern — one required `string` key
- * per `:param` segment, `Record<string, never>` for a path with no params.
+ * The `params` record implied by a route path pattern — one required `string` key per `:param`
+ * segment, `Record<string, never>` for a path with none. Paths use Hono's syntax, so `:id`,
+ * `:id{[0-9]+}` and `*` all work.
  *
- * Paths use Hono's syntax, so `:id`, `:id{[0-9]+}` and `*` all work. You rarely
- * name this type directly; {@link PageProps} applies it for you.
+ * You rarely name this directly; {@link PageProps} applies it for you.
  *
  * @typeParam P - The literal route path, e.g. `'/users/:id/posts/:postId'`.
  *
@@ -28,16 +27,12 @@ export type PathParams<P extends string> =
   ParamKeys<P> extends never ? Record<string, never> : Simplify<UnionToIntersection<ParamKeyToRecord<ParamKeys<P>>>>;
 
 /**
- * Props every page component receives. Pass the route's path as the type
- * argument to get `params` typed key-by-key; without it `params` falls back to
- * an open `Record<string, string>`.
+ * Props every page component receives. Pass the route's path as the type argument to get `params`
+ * typed key-by-key; without it `params` falls back to an open `Record<string, string>`.
  *
- * `defineRoutes` checks each page's props against `PageProps<path>` at compile
- * time, so a mismatched path literal is a type error at the route definition.
- *
- * The location props (`url` and `params`) mirror what a `'use client'` component
- * gets from `useNavigation()` — same names, same types — so moving a read across
- * the server/client line is a copy-paste.
+ * `defineRoutes` checks each page's props against `PageProps<path>`, so a mismatched path literal is
+ * a type error at the route definition. `url` and `params` mirror what `useNavigation()` gives a
+ * `'use client'` component, so a read moves across the server/client line unchanged.
  *
  * @typeParam Path - The literal path this page is mounted at, e.g. `'/profile/:id'`.
  * @typeParam E - The app's Hono {@link Env}, to type {@link RequestContext.var} and
@@ -58,40 +53,27 @@ export type PathParams<P extends string> =
  */
 export interface PageProps<Path extends string = string, E extends Env = Env> {
   /**
-   * The absolute browser-facing request {@link URL}, proxy-header aware
-   * (`X-Forwarded-Host` / `-Proto`). Read `url.pathname`, `url.searchParams` and
-   * the rest off it.
+   * The absolute browser-facing request {@link URL}, proxy-header aware (`X-Forwarded-Host` /
+   * `-Proto`). A fresh instance per request, so mutating it is local to the page; it is not
+   * serializable, so hand a `'use client'` component `url.href` rather than `url`.
    *
-   * A fresh instance per request that nothing else holds, so mutating it is local
-   * to the page. It is not serializable, so a `'use client'` component has to be
-   * handed `url.href` rather than `url`.
-   *
-   * On a `render: 'static'` route this is the build-time URL — rendered once
-   * against `siteUrl` with no query string, and that one file answers every
-   * request whatever its own query. So `url.searchParams` is always empty there:
-   * read the query from `useNavigation().url` in a `'use client'` component
-   * instead, or mark the route `render: 'dynamic'`.
+   * On a `render: 'static'` route this is the build-time URL — rendered once against `siteUrl`, so
+   * `url.searchParams` is always empty. Read the query from `useNavigation().url` in a `'use client'`
+   * component instead, or mark the route `render: 'dynamic'`.
    */
   url: URL;
   /** Matched route params for this request, e.g. `{ id: '42' }` for `/profile/:id`. */
   params: string extends Path ? Record<string, string> : PathParams<Path>;
   /**
-   * The request context — the very object `getRequestContext()` returns, handed to the
-   * page so cookies, headers, env and middleware variables are reachable without
-   * an import.
+   * The request context — the object `getRequestContext()` returns, handed to the page so cookies,
+   * headers, env and middleware variables are reachable without an import.
    *
-   * Server-only and never serialized: React puts a server component's *output* on
-   * the wire, not its props. It is also deliberately **non-enumerable**, so
-   * `Object.keys(props)`, `JSON.stringify(props)` and a `{...props}` spread all
-   * skip it. Handing it to a `'use client'` component directly
-   * (`<Counter ctx={ctx} />`) fails the render — it wraps the live request and
-   * response, which do not exist in the browser. Read what you need here and pass
-   * plain values down.
+   * Server-only, non-enumerable (a `{...props}` spread and `JSON.stringify` both skip it) and never
+   * serialized. Passing it to a `'use client'` component fails the render, because it wraps the live
+   * request — read what you need here and pass plain values down.
    *
-   * Reading it on a `render: 'static'` route throws: a prerendered page has no
-   * per-request context at build time. Mark the route `render: 'dynamic'`, or use
-   * the `url` / `params` props — available either way, with the build-time caveat
-   * noted on `url`.
+   * Reading it on a `render: 'static'` route throws: a prerendered page has no per-request context.
+   * Mark the route `render: 'dynamic'`, or use the `url` / `params` props.
    *
    * @example
    * ```tsx
@@ -106,12 +88,11 @@ export interface PageProps<Path extends string = string, E extends Env = Env> {
 }
 
 /**
- * A page: a React **server component** that renders the entire document
- * (`<html>…</html>`), usually via a shared layout. It may be `async` and await
- * data directly.
+ * A page: a React **server component** rendering the entire document (`<html>…</html>`), usually via
+ * a shared layout. It may be `async` and await data directly.
  *
- * Each page module must default-export exactly one of these. Interactive parts
- * belong in `'use client'` components the page imports — only those ship JS.
+ * Each page module default-exports exactly one. Interactive parts belong in `'use client'` components
+ * the page imports — only those ship JS.
  *
  * @typeParam P - The component's props; for a page these are {@link PageProps}.
  *
@@ -121,9 +102,9 @@ export interface PageProps<Path extends string = string, E extends Env = Env> {
 export type PageComponent<P = any> = (props: P) => ReactNode | Promise<ReactNode>;
 
 /**
- * The shape an `{ type: 'endpoint' }` route's server module must have: a single
- * named `handler` export. The module only ever loads on the server, so it is
- * safe to import a database client or read secrets from it.
+ * The shape an `{ type: 'endpoint' }` route's server module must have: a single named `handler`
+ * export. It only ever loads on the server, so importing a database client or reading secrets from it
+ * is safe.
  *
  * @example
  * ```ts
@@ -137,9 +118,9 @@ export type PageComponent<P = any> = (props: P) => ReactNode | Promise<ReactNode
  */
 export interface EndpointServerModule {
   /**
-   * A Hono {@link Handler} handling every request matched by the route. It is passed Hono's
-   * `Context`, so the request, response builders (`c.json`, `c.text`, `c.body`) and middleware
-   * variables are all reached through it.
+   * A Hono {@link Handler} for every request the route matches. It is passed Hono's `Context`, so the
+   * request, the response builders (`c.json`, `c.text`, `c.body`) and middleware variables are all
+   * reached through it.
    *
    * @see {@link https://hono.dev/docs/api/context | Hono — Context}
    */
@@ -166,16 +147,17 @@ export interface PageRoute {
    */
   path: string;
   /**
-   * Dynamic import of the page module, whose default export is the
-   * {@link PageComponent}.
+   * Dynamic import of the page module, whose default export is the {@link PageComponent}.
    *
-   * Write it inline as shown — the framework detects that exact
-   * `() => import('…')` form and injects Rspack's `'use server-entry'`
-   * directive into the module for you (that directive is what attaches the
-   * page's client JS/CSS, giving per-page code splitting). If you wire the
-   * component up any other way — a variable, a barrel re-export, a computed
-   * specifier — add `'use server-entry'` as the first line of the page module
-   * yourself; the framework throws a descriptive error when neither happened.
+   * Write it inline as `() => import('…')`: the framework detects that exact form and injects the
+   * `'use server-entry'` directive that attaches the page's client JS and CSS. Wire the component up
+   * any other way — a variable, a barrel re-export, a computed specifier — and you have to put
+   * `'use server-entry'` on the page module's first line yourself.
+   *
+   * @example
+   * ```ts
+   * component: () => import('./components/profile')
+   * ```
    *
    * @see {@link https://www.rshono.com/docs/pages#the-use-server-entry-directive | Docs — the `'use server-entry'` directive}
    */
@@ -183,13 +165,11 @@ export interface PageRoute {
   /** `'static'` prerenders the route at build time; `'dynamic'` (the default) renders per request. */
   render?: 'static' | 'dynamic';
   /**
-   * For a `render: 'static'` route with params: the param sets to prerender, one
-   * HTML file each. Runs at build time only, on the server, so it may hit a
-   * database or read the filesystem.
+   * For a `render: 'static'` route with params: the param sets to prerender, one page each. Runs at
+   * build time on the server, so it may hit a database or read the filesystem.
    *
-   * A parameterised static route without `staticPaths` falls back to rendering
-   * per request (with a build warning). Wildcard (`*`), optional and regex
-   * params can't be prerendered.
+   * A parameterised static route without this falls back to rendering per request, with a build
+   * warning. Wildcard (`*`), optional and regex params cannot be prerendered.
    *
    * @example
    * ```ts
@@ -240,11 +220,8 @@ export type HTTPMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 
 export type Route = PageRoute | EndpointRoute;
 
 /**
- * Type guard narrowing a {@link Route} to a {@link PageRoute}. Because `type` is
- * optional on page routes, anything not explicitly `'endpoint'` is a page.
- *
- * Framework internal — not re-exported from `index.ts`. The request renderer and
- * the SSG pass use it to split the route table.
+ * Narrows a {@link Route} to a {@link PageRoute} — `type` is optional on page routes, so anything not
+ * explicitly `'endpoint'` is one.
  *
  * @internal
  */
@@ -253,9 +230,8 @@ export function isPageRoute(route: Route): route is PageRoute {
 }
 
 /**
- * A page the framework falls back to rather than routes to — `notFound` and
- * `error` in {@link RouteConfig}. Same contract as a {@link PageRoute}
- * `component`, without a path of its own.
+ * A page the framework falls back to rather than routes to — `notFound` and `error` in
+ * {@link RouteConfig}. Same contract as a {@link PageRoute} `component`, without a path of its own.
  */
 export interface FallbackPage {
   /** Dynamic import of the page module; its default export is the {@link PageComponent}. */
@@ -263,9 +239,8 @@ export interface FallbackPage {
 }
 
 /**
- * The error detail handed to the `error` page. Redacted in production: the
- * message is a generic `'Internal Server Error'` and there is no `stack`. In dev
- * you get the real message plus the stack.
+ * The error detail handed to the `error` page. Redacted in production — a generic
+ * `'Internal Server Error'` and no `stack`; in dev, the real message and stack.
  */
 export interface ErrorPageInfo {
   /** The thrown error's message in dev; `'Internal Server Error'` in production. */
@@ -275,8 +250,8 @@ export interface ErrorPageInfo {
 }
 
 /**
- * Props for the `error` page declared in {@link RouteConfig.error} — the usual
- * {@link PageProps} plus the redaction-aware {@link ErrorPageInfo}.
+ * Props for the `error` page declared in {@link RouteConfig.error} — the usual {@link PageProps} plus
+ * the redaction-aware {@link ErrorPageInfo}.
  *
  * @typeParam E - The app's Hono {@link Env}, forwarded to {@link PageProps.ctx}.
  *
@@ -312,10 +287,8 @@ export interface RouteConfig<TRoutes extends readonly Route[] = readonly Route[]
   error?: FallbackPage;
 }
 
-// `PageProps<P, any>`, not `PageProps<P>`: this checks the *path* against the page's `params`, and
-// pinning the Env to the default would additionally demand that a page declaring its own
-// (`PageProps<'/x', MyEnv>`, to type `ctx.var`) accept a `RequestContext<Env>` — which it doesn't, so
-// every such page would fail its own route check. `any` makes `ctx` compatible either way.
+// `PageProps<P, any>`, not `PageProps<P>`: only the *path* is being checked, and pinning the Env would
+// fail every page that declares its own (`PageProps<'/x', MyEnv>`, to type `ctx.var`).
 type ValidateRoute<R> = R extends {
   path: infer P extends string;
   component: () => Promise<{ default: PageComponent<infer CP> }>;
@@ -328,22 +301,16 @@ type ValidateRoute<R> = R extends {
 type ValidateRoutes<TRoutes extends readonly Route[]> = { [K in keyof TRoutes]: ValidateRoute<TRoutes[K]> };
 
 /**
- * Declares the app's route table. Default-export the result as `routes` from
- * `src/routes.ts` — the one file rshono requires.
+ * Declares the app's route table. Export the result as `routes` from `src/routes.ts` — the one file
+ * rshono requires. It only ever runs on the server, so importing server-only modules from it (inside
+ * `staticPaths`, say) is safe.
  *
- * `routes.ts` only ever runs on the server, so importing server-only modules
- * from it (e.g. inside `staticPaths`) is safe.
+ * Beyond typing the config, every page is cross-checked against its own path: props not satisfied by
+ * `PageProps<'<its path>'>` make the `component` field a type error. A bare {@link Route} array is
+ * accepted as shorthand — see the second overload.
  *
- * Beyond typing the config, this cross-checks every page against its own path:
- * if a component's props aren't satisfied by `PageProps<'<its path>'>`, the
- * `component` field errors with `component props are not satisfied by
- * PageProps<'/…'>`. Fix it by matching the page's `PageProps<Path>` type
- * argument to the path it's mounted at.
- *
- * A bare {@link Route} array is accepted as shorthand — see the second overload.
- *
- * @param config - A {@link RouteConfig}: the `routes` array plus the optional
- *   `notFound` and `error` pages.
+ * @param config - A {@link RouteConfig}: the `routes` array plus the optional `notFound` and `error`
+ *   pages.
  * @returns The config, unchanged and fully typed.
  *
  * @example

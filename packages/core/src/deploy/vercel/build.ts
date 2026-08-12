@@ -4,25 +4,22 @@ import { join } from 'node:path';
 import type { DeployBuildContext } from '../presets.js';
 
 /**
- * The Build Output API v3 layout, which is what `vercel deploy --prebuilt` uploads verbatim. Producing
- * it directly means Vercel runs no build of its own — everything it needs already exists.
+ * The Build Output API v3 layout, which `vercel deploy --prebuilt` uploads verbatim — producing it directly
+ * means Vercel runs no build of its own.
  */
 const OUTPUT_DIR = join('.vercel', 'output');
 const FUNCTION_DIR = join('functions', 'index.func');
 
 /**
- * The function's own view of the build.
- *
- * `dist/server/main.mjs` is kept at that exact path inside the function because the runtime derives the
- * project root from where the bundle sits (see `deploy/filesystem.ts`) — so `dist/ssg` and `dist/public`
- * land where it already looks for them, and no runtime code needs to know it is on Vercel.
+ * The bundle keeps this exact path inside the function because the runtime derives the project root from where
+ * it sits (see `deploy/filesystem.ts`), so `dist/ssg` and `dist/public` land where it already looks — and no
+ * runtime code needs to know it is on Vercel.
  */
 const HANDLER = 'dist/server/main.mjs';
 
 /**
- * Routes, in the order Vercel evaluates them: hashed assets get the immutable header the CDN cannot
- * infer, then anything present in the static output is served from it, and whatever is left is the
- * app's to render.
+ * Routes, in the order Vercel evaluates them: hashed assets get the immutable header the CDN cannot infer,
+ * then anything in the static output is served from it, and whatever is left is the app's to render.
  */
 const ROUTES = [
   { src: '^/_static/(.*)$', headers: { 'cache-control': 'public, max-age=31536000, immutable' }, continue: true },
@@ -35,7 +32,7 @@ export async function finalizeVercelBuild(ctx: DeployBuildContext): Promise<void
   const staticOut = join(outputDir, 'static');
   const functionDir = join(outputDir, FUNCTION_DIR);
 
-  // Rebuilt from scratch, so a deleted page or asset cannot survive in the uploaded output.
+  // From scratch, so a deleted page or asset cannot survive in the uploaded output.
   await rm(outputDir, { recursive: true, force: true });
   mkdirSync(staticOut, { recursive: true });
   mkdirSync(functionDir, { recursive: true });
@@ -56,7 +53,7 @@ export async function finalizeVercelBuild(ctx: DeployBuildContext): Promise<void
         runtime: 'nodejs22.x',
         handler: HANDLER,
         launcherType: 'Nodejs',
-        // Without this the platform buffers the whole response, which would undo streamed SSR.
+        // Without this the platform buffers the whole response, undoing streamed SSR.
         supportsResponseStreaming: true,
       },
       null,

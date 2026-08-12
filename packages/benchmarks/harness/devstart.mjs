@@ -1,13 +1,11 @@
 /**
- * `dev` command to a page you can actually look at, measured cold (dev cache cleared) and warm.
+ * `dev` command to a page you can actually look at, measured cold (dev cache cleared) and warm — the
+ * developer-facing counterpart to build.mjs.
  *
- * The developer-facing counterpart to build.mjs, and the one a developer pays for many times a day.
- * Every dev server here compiles routes lazily, so waiting on `/interactive` rather than
- * `/api/health` is the point: it includes compiling a real route with three client components, not
- * just binding a socket.
+ * Every dev server here compiles routes lazily, so waiting on `/interactive` rather than `/api/health` is the
+ * point: it includes compiling a real route with three client components, not just binding a socket.
  *
- * HMR round-trip time is the other number worth having and is not in here — it needs a browser
- * driving the page and asserting the patch arrived, which is a bigger harness than this.
+ * HMR round-trip time is the other number worth having, and needs a browser driving the page — a bigger harness.
  */
 import { resolveTargets, flagValue, hasFlag } from './lib/targets.mjs';
 import { startServer, run } from './lib/proc.mjs';
@@ -62,10 +60,9 @@ await merge('devstart', out);
 console.log('\nwrote results/latest.json → sections.devstart');
 
 /**
- * A dev server writes into the same output directory the production build uses, so leaving here
- * without rebuilding leaves an unminified dev bundle where `start` expects a production one — and
- * every payload and throughput number measured afterwards would be quietly wrong. Rebuild unless
- * explicitly told not to.
+ * A dev server writes into the same directory the production build uses, so leaving without rebuilding would put
+ * an unminified dev bundle where `start` expects a production one — and every payload and throughput number
+ * measured afterwards would be quietly wrong.
  */
 if (!hasFlag('no-restore')) {
   console.log('\n› restoring production builds (dev clobbered them)');

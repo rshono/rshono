@@ -10,11 +10,8 @@ export interface PackageManager {
   /** What precedes a script name: `pnpm dev`, but `npm run dev`. */
   run: string;
   /**
-   * How this manager runs a CLI it has *not* installed — `npx`, `pnpm dlx`, `yarn dlx` (Berry), `bunx`.
-   *
-   * The Vercel target needs it: wrangler is a devDependency because `wrangler dev` is how a Cloudflare app
-   * previews, but the Vercel CLI is not installed, so its `deploy` script fetches the CLI through this
-   * rather than assuming a global `vercel` on the PATH.
+   * How this manager runs a CLI it has *not* installed — `npx`, `pnpm dlx`, `yarn dlx`, `bunx`. The Vercel
+   * target needs it: its `deploy` script fetches the CLI through this rather than assuming a global `vercel`.
    */
   dlx: string;
 }
@@ -49,11 +46,9 @@ export function packageManager(name: PackageManagerName, version?: string): Pack
 }
 
 /**
- * Which package manager invoked us. Every one of them sets `npm_config_user_agent` on the process it
- * spawns — `pnpm/11.9.0 npm/? node/v22.14.0 darwin arm64` — so `pnx @rshono/create` scaffolds a pnpm
- * project without asking, and the exact version comes along for the `packageManager` field.
- *
- * Falls back to npm, which is also what a bare `node bin/create-rshono.mjs` gets.
+ * Which package manager invoked us. All four set `npm_config_user_agent` on the process they spawn — `pnpm/11.9.0
+ * npm/? node/v22.14.0 darwin arm64` — so `pnx @rshono/create` scaffolds a pnpm project without asking, exact
+ * version included. Falls back to npm, which is also what a bare `node bin/create-rshono.mjs` gets.
  */
 export function detectPackageManager(userAgent = process.env.npm_config_user_agent): PackageManager {
   const [spec] = (userAgent ?? '').split(' ');
@@ -63,9 +58,8 @@ export function detectPackageManager(userAgent = process.env.npm_config_user_age
 }
 
 /**
- * Runs the install, streaming its output. `shell: true` on Windows because npm, pnpm and yarn are all
- * `.cmd` shims there, which `spawn` cannot execute directly — and with a shell involved the arguments
- * are all fixed strings from the tables above, never anything the user typed.
+ * Runs the install, streaming its output. `shell: true` on Windows, where npm, pnpm and yarn are `.cmd` shims
+ * `spawn` cannot execute directly — safe because every argument is a fixed string from the tables above.
  */
 export function runInstall(pm: PackageManager, cwd: string): boolean {
   return run(pm, pm.install, cwd);

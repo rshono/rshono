@@ -1,17 +1,10 @@
 /**
- * Proves the rshono app is measuring the `@rshono/core` in this checkout, and not an older one.
+ * Proves the rshono app is measuring the `@rshono/core` in this checkout, not an older one. The app installs
+ * core from `.pack/rshono-core.tgz` (see install.mjs), and nothing re-packs that except `setup:apps` — so every
+ * `bench` after a change to packages/core would otherwise measure whatever was packed last.
  *
- * The app installs core from `.pack/rshono-core.tgz` rather than a workspace link (see install.mjs for
- * why — a link gives the app two Reacts). Nothing re-packs that tarball except `setup:apps`, so every
- * `bench` after a change to packages/core silently measures whatever was packed last. Once observed as
- * a `/ssr` 500ing on every request against a four-RC-old core and reporting 2,828 rps — ten times the
- * real figure, because a 500 skips the render entirely.
- *
- * The comparison is over file *contents*, not the version in `package.json`. npm writes that field
- * from the lockfile entry rather than from the tarball, so a re-pack at the same path leaves
- * `node_modules/@rshono/core/package.json` claiming the version it was first locked at over a `dist`
- * that is new. A version check would flag staleness already fixed and miss every rebuild that did not
- * change the version — which is every rebuild during development.
+ * The comparison is over file *contents*, not the version in `package.json`: npm writes that field from the
+ * lockfile rather than the tarball, so a re-pack at the same path leaves the old version over a new `dist`.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -20,10 +13,8 @@ import path from 'node:path';
 /**
  * A content hash of every file under `dir`, path-sensitive and order-independent. `null` if absent.
  *
- * Dotfiles are skipped on both sides because npm refuses to pack several of them whatever `files`
- * says — `.DS_Store` above all. Counting one would put it in the workspace hash and never in the
- * installed one, and the two trees could then never agree: every benchmark would refuse to run,
- * blaming a stale core that was perfectly current. Nothing `tsc` emits into `dist` begins with a dot.
+ * Dotfiles are skipped on both sides: npm refuses to pack several of them whatever `files` says, so counting
+ * one would put it in the workspace hash and never in the installed one — and the two could never agree.
  */
 function hashTree(dir) {
   if (!existsSync(dir)) return null;
@@ -56,12 +47,8 @@ export function coreStaleness(benchmarksRoot, appDir) {
 }
 
 /**
- * Stops the stage rather than letting it measure the wrong code. Called from `resolveTargets`, so
- * every runner inherits it; `install.mjs` opts out, being the thing that fixes what this detects.
- *
- * Prints and exits rather than throwing, unlike the rest of `resolveTargets`: this is a setup
- * precondition, and its whole value is the two lines saying what to run — under a stack trace those
- * are something to scroll past.
+ * Stops the stage rather than letting it measure the wrong code. Prints and exits rather than throwing, unlike
+ * the rest of `resolveTargets`: the whole value is the two lines saying what to run.
  */
 export function assertCoreFresh(benchmarksRoot, targets) {
   const app = targets.find((t) => t.id === 'rshono');

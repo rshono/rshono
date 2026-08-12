@@ -1,11 +1,9 @@
 /**
- * What the browser is committed to loading for a route's *initial* paint, read off the served
- * document: script tags, stylesheets, and the preload/modulepreload hints the framework emitted.
+ * What the browser is committed to loading for a route's *initial* paint, read off the served document: script
+ * tags, stylesheets, and the preload/modulepreload hints the framework emitted.
  *
- * Deliberately not a browser. A real browser also fetches chunks triggered after hydration, which
- * is a different question ("what does interacting cost") from the one this metric answers ("what
- * does the framework commit to before the page is usable"). A static read of the document is also
- * reproducible to the byte, which a browser run is not.
+ * Deliberately not a browser: one would also fetch chunks triggered after hydration, which answers a different
+ * question. A static read is reproducible to the byte, which a browser run is not.
  */
 
 const SCRIPT_BLOCK = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
@@ -31,9 +29,8 @@ export function parseDocument(html) {
     if (a.src) {
       external.push({ url: a.src, as: 'script', hint: 'script' });
     } else if (m[2].trim()) {
-      // The inlined flight payload lives here in all three frameworks (rshono via `__FLIGHT_DATA`,
-      // Next via `self.__next_f`, TanStack via its dehydrated router state). It ships on every
-      // request and it is not a file, so counting only external assets would hide it entirely.
+      // Where the inlined flight payload lives in all three frameworks. It ships on every request and is not a
+      // file, so counting only external assets would hide it entirely.
       inlineScriptBytes += Buffer.byteLength(m[2], 'utf8');
       inlineScripts += 1;
     }
@@ -68,9 +65,8 @@ export function parseDocument(html) {
 }
 
 /**
- * Every one of these dev servers writes into the same directory its production build uses, so it is
- * entirely possible to point a runner at a dev bundle by accident and get a payload number several
- * times too large. Cheap to detect, and much cheaper than publishing it.
+ * Every one of these dev servers writes into the directory its production build uses, so a runner can be pointed
+ * at a dev bundle by accident and report a payload several times too large. Cheaper to detect than to publish.
  */
 const DEV_MARKERS = [
   ['react-refresh', 'react-refresh runtime'],

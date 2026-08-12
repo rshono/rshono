@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// Thin launcher for the compiled CLI. Everything it does has to happen *before* the CLI module
-// graph loads, which is why the import below is dynamic rather than a static one at the top.
+// Thin launcher for the compiled CLI. Everything here has to happen before the CLI module graph loads, which is
+// why the import at the bottom is dynamic.
 const args = process.argv.slice(2);
 
-// `build` and `start` are the production commands, so they default NODE_ENV accordingly — the
-// value is read during config resolution and baked into the bundle, so it has to be set this early.
+// The production commands default NODE_ENV, which is read during config resolution and baked into the bundle.
 if ((args[0] === 'build' || args[0] === 'start') && !process.env.NODE_ENV) {
   process.env.NODE_ENV = 'production';
 }

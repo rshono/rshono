@@ -3,14 +3,11 @@ import { ESLINT_TYPESCRIPT, TOOL_VERSIONS } from '../versions.js';
 import type { Feature } from './types.js';
 
 /**
- * The formatter and linter features. Biome answers to both slots and appears once — `selectFeatures`
- * deduplicates by `id`, so `formatter: 'biome', linter: 'biome'` contributes one set of files, one
- * dependency and one pair of scripts.
+ * The formatter and linter features. Biome answers to both slots and appears once, because `selectFeatures`
+ * deduplicates by `id`.
  *
- * A formatter brings `format:check` beside `format`, because the writing half and the CI half want
- * different exit-code behaviour: `format` rewrites files, `format:check` fails instead. A linter brings
- * `lint:fix` beside `lint`, for the same reason in the other direction — `lint` is already the failing
- * one. Biome adds a `check` of its own, which is the pair of them in a single pass.
+ * Each brings a pair of scripts, since the writing half and the CI half want different exit codes: `format`
+ * rewrites and `format:check` fails, `lint:fix` rewrites and `lint` fails. Biome's `check` is both in one pass.
  */
 const PRETTIER: Feature = {
   id: 'prettier',
@@ -34,11 +31,10 @@ const OXLINT: Feature = {
 };
 
 /**
- * The one feature that changes a dependency the framework otherwise decides: typescript-eslint cannot
- * be installed alongside the TypeScript rshono is tested against, so an ESLint app pins the newest one
- * its peer range accepts (see {@link ESLINT_TYPESCRIPT}). Its rules are type-aware — the reason to
- * reach for ESLint over a syntax-only linter — so the config it ships hands the parser the whole
- * program rather than linting file by file.
+ * The one feature that changes a dependency the framework otherwise decides: typescript-eslint cannot be
+ * installed alongside the TypeScript rshono is tested against, so an ESLint app pins the newest its peer range
+ * accepts (see {@link ESLINT_TYPESCRIPT}). Its rules are type-aware — the reason to reach for ESLint at all —
+ * so the config it ships hands the parser the whole program.
  */
 const ESLINT: Feature = {
   id: 'eslint',

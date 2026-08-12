@@ -12,30 +12,24 @@ export interface RenderHTMLOptions {
   signal?: AbortSignal;
   nonce?: string;
   /**
-   * Called when SSR fails before the shell is sent. Reporting is the RSC layer's job — this module
-   * is compiled into the SSR layer, which gets its own instance of every module it imports, so a
-   * handler registered through `@rshono/core/server` isn't reachable from in here.
+   * Called when SSR fails before the shell is sent. Reporting is the RSC layer's job: this module is
+   * compiled into the SSR layer, which gets its own instance of every module it imports, so a handler
+   * registered through `@rshono/core/server` is not reachable from here.
    */
   onShellError?: (error: unknown) => void;
   /**
-   * Called for an error that happened during SSR and *originated* in SSR — a client component that
-   * threw while rendering on the server, whether a boundary went on to contain it or it took the
-   * shell down with it. See {@link renderHTML} for why the ones that didn't originate here are
-   * dropped instead.
+   * Called for an error that *originated* in SSR — a client component that threw while rendering on the
+   * server. See {@link renderHTML} for why the others are dropped.
    */
   onError?: (error: unknown) => void;
   /**
-   * Called once the response stream has ended, however it ended.
-   *
-   * The RSC layer uses it to detach the listener forwarding client-disconnect aborts into this render —
-   * see `renderComponent`. Without a hook here that listener outlives the request and retains the whole
-   * rendered tree, so this is load-bearing rather than a convenience.
+   * Called once the response stream has ended, however it ended. Load-bearing: the RSC layer uses it to
+   * detach the abort forwarder that would otherwise retain the whole rendered tree.
    */
   onDone?: () => void;
 }
 
-// From the baked config, not `process.env.NODE_ENV`: this is a property of the build, and a deploy
-// target need not have a `process` at all.
+// The baked config, not `process.env.NODE_ENV`: a deploy target need not have a `process`.
 const isDev = __RSHONO_CONFIG__.isDev;
 
 /** Escapes text going into HTML body content — a stack trace is untrusted input. */
@@ -44,19 +38,14 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * The last-resort 500 document, for when SSR fails before a single byte of the real shell was sent.
+ * The last-resort 500 document, for when SSR fails before a byte of the real shell was sent.
  *
- * Deliberately plain HTML with no client runtime attached: the flight payload comes from the same
- * failed render, so hydrating it would mismatch and React — whose root container is the whole
- * `document` — would tear the page down, blanking the very message being rendered here. Styling is
- * inline because the page's stylesheet links were part of the render that just failed.
+ * Plain HTML with no client runtime and no stylesheet links: both came from the render that just failed,
+ * and hydrating a mismatched payload would tear the page down over this very message. A string rather than
+ * a component for the same reason — React is what failed. It must end with the document trailer, which
+ * `injectFlightPayload` holds back and re-emits.
  *
- * A string rather than a component, for the same reason: React is what just failed, and rendering
- * this through it again is a dependency the fallback does not need. It must end with the document
- * trailer, which is what `injectFlightPayload` holds back and re-emits.
- *
- * The detail is dev-only. In production this stays a generic message, matching how the `error` page
- * from routes.ts redacts.
+ * The detail is dev-only, matching how the app's `error` page redacts.
  */
 function failureDocument(error: unknown): ReadableStream<Uint8Array> {
   const detail = isDev ? (error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error)) : null;
@@ -95,13 +84,10 @@ export async function renderHTML(rscStream: ReadableStream<Uint8Array>, options:
     return React.use(payload).root;
   }
 
-  // React hands `onError` every error it meets while streaming, including ones an error boundary
-  // contained — and with no handler installed it logs each one itself. Almost all of them are errors
-  // it read out of the flight payload, where they arrive as React's redacted stand-in: a `digest`
-  // and no message. The RSC layer has already reported the real one in full, so the default handler
-  // prints an alarming, detail-free duplicate for a request a boundary handled perfectly well. Only
-  // an error carrying no digest started life in this render — a client component that threw during
-  // SSR — and that one nothing else will report.
+  // React hands `onError` every error it meets while streaming, contained ones included. Almost all arrive
+  // out of the flight payload as its redacted stand-in — a `digest` and no message — and the RSC layer has
+  // already reported those in full. Only an error carrying no digest started life in this render, and that
+  // one nothing else will report.
   let reported: unknown;
   const onError = (error: unknown): void => {
     if (typeof (error as { digest?: unknown } | null)?.digest === 'string') return;
@@ -118,14 +104,12 @@ export async function renderHTML(rscStream: ReadableStream<Uint8Array>, options:
       formState: options.formState,
       signal: options.signal,
       nonce: options.nonce,
-      // Deliberately returns nothing, so the digest React gives the client's `onRecoverableError`
-      // stays exactly what it was before a handler was installed here.
+      // Returns nothing, so the digest React gives the client's `onRecoverableError` is unchanged.
       onError,
     });
   } catch (error) {
     if (isControlDigest((error as { digest?: unknown } | null)?.digest)) throw error;
-    // `onError` runs first for the failure that aborts the shell, so this reports only what it let
-    // through: an error out of the flight payload, whose detail the RSC layer alone has.
+    // `onError` runs first for the failure that aborts the shell, so this reports only what it let through.
     if (!options.signal?.aborted && error !== reported) options.onShellError?.(error);
     status = 500;
     htmlStream = failureDocument(error);

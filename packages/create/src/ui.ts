@@ -5,9 +5,8 @@ import type { PackageManager } from './pm.js';
 import { buildScripts, invoke } from './scripts.js';
 
 /**
- * The two halves of the closing line, in the words of the app's own scripts: what produces something
- * shippable, and where it goes from there. The target with no command to give keeps the framework's hint,
- * which is a sentence about the platform rather than something to type.
+ * The two halves of the closing line, in the words of the app's own scripts: what produces something shippable,
+ * and where it goes from there. A target with no command to give falls back to the framework's hint.
  */
 function productionSteps(answers: Answers, plan: Plan, pm: PackageManager): string {
   const scripts = buildScripts(plan.features);
@@ -21,8 +20,8 @@ function productionSteps(answers: Answers, plan: Plan, pm: PackageManager): stri
 }
 
 /**
- * What to do next, in the order to do it — the last thing the user reads, and for most people the only
- * documentation they will read today. `installed` decides whether the install step is still theirs.
+ * What to do next, in the order to do it — the last thing the user reads. `installed` decides whether the install
+ * step is still theirs.
  */
 export function nextSteps(answers: Answers, plan: Plan, pm: PackageManager, options: { directory: string; installed: boolean }): string {
   const steps: string[] = [];

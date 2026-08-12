@@ -1,10 +1,9 @@
 /**
  * Installs each benchmark app into its own isolated node_modules.
  *
- * The apps are deliberately *not* pnpm workspace members: the root pnpm-workspace.yaml pins react,
- * react-dom and @rspack/core with `overrides`, and forcing those onto Next and TanStack Start would
- * be measuring a configuration nobody ships. Isolated npm installs also make the install-footprint
- * numbers in footprint.mjs mean something.
+ * The apps are deliberately *not* pnpm workspace members: the root `pnpm-workspace.yaml` pins react, react-dom
+ * and @rspack/core with `overrides`, and forcing those onto Next and TanStack Start would measure a configuration
+ * nobody ships. Isolated installs are also what make footprint.mjs's numbers mean anything.
  */
 import { existsSync } from 'node:fs';
 import { mkdir, copyFile, readFile, rm, readdir, writeFile } from 'node:fs/promises';
@@ -26,12 +25,10 @@ if (core.code !== 0) process.exit(1);
 console.log(`  ✓ ${ms(core.ms)}`);
 
 /**
- * The rshono app installs @rshono/core from a packed tarball rather than a `file:` link to
- * packages/core. A link resolves core's own `react` import to packages/core/node_modules/react while
- * the app's components resolve to the app's copy — two real paths, two React instances, and a null
- * hook dispatcher the moment a client component is SSR'd. A tarball is extracted into the app's
- * node_modules, so everything walks up to one react. It is also what an `npm i @rshono/core` does,
- * which is the thing being benchmarked.
+ * The rshono app installs @rshono/core from a packed tarball rather than a `file:` link: a link resolves core's
+ * own `react` to packages/core/node_modules/react while the app's components resolve to the app's copy — two
+ * React instances, and a null hook dispatcher the moment a client component is SSR'd. A tarball is extracted
+ * into the app's node_modules, so everything walks up to one react, and it is what `npm i @rshono/core` does.
  */
 console.log('› packing @rshono/core');
 await rm(packDir, { recursive: true, force: true });
@@ -47,16 +44,14 @@ await copyFile(path.join(packDir, tarball), path.join(packDir, 'rshono-core.tgz'
 console.log(`  ✓ ${tarball} → .pack/rshono-core.tgz`);
 
 /**
- * Drops the `@rshono/core` entry from the app's lockfile, so npm re-resolves the tarball instead of
- * trusting what it recorded last time.
+ * Drops the `@rshono/core` entry from the app's lockfile, so npm re-resolves the tarball instead of trusting what
+ * it recorded last time.
  *
- * Deleting `node_modules/@rshono` is not enough, and what it leaves behind is worse than a stale
- * install: the lockfile pins the *previous* tarball's integrity hash at a path whose contents have
- * since changed, so npm reifies a **merge** — writing the new files, keeping every file the new core
- * no longer ships, and leaving the old `version` in the extracted `package.json`.
+ * Deleting `node_modules/@rshono` is not enough, and leaves something worse than a stale install: the lockfile
+ * pins the *previous* tarball's integrity hash at a path whose contents changed, so npm reifies a **merge** —
+ * new files written, files the new core no longer ships kept, and the old `version` left in `package.json`.
  *
- * Only this one entry is removed. The lockfile's job is pinning react, react-dom and the rest so the
- * three apps stay comparable run to run.
+ * Only this entry is removed; pinning react and the rest is what keeps the three apps comparable run to run.
  */
 async function forgetLockedTarball(lockPath) {
   if (!existsSync(lockPath)) return;
@@ -95,13 +90,10 @@ for (const target of targets) {
   console.log(`  ✓ npm ${args[0]} in ${ms(res.ms)}`);
 
   /*
-   * The build that linked the *previous* core must not outlive it.
-   *
-   * `rshono build` inlines core into `dist`, and the freshness guard only compares the *installed*
-   * core against the workspace — so `setup:apps` followed by a single stage (`bench:load` without the
-   * build stage in front of it) would pass the guard and then measure a bundle compiled against the
-   * core that was just replaced. Deleting `dist` leaves no artifact to measure by mistake, and costs
-   * nothing on a full run where `build.mjs` clears it for the cold trials anyway.
+   * The build that linked the *previous* core must not outlive it. `rshono build` inlines core into `dist`, and
+   * the freshness guard only compares the *installed* core — so `setup:apps` followed by a single stage would
+   * pass the guard and then measure a bundle compiled against the core that was just replaced. Deleting `dist`
+   * costs nothing on a full run, where `build.mjs` clears it for the cold trials anyway.
    */
   if (tarballDep) {
     await rm(path.join(target.dir, 'dist'), { recursive: true, force: true });

@@ -107,9 +107,8 @@ async function main(): Promise<void> {
   if (values.help) return console.log(HELP);
   if (values.version) return console.log(__CREATE_RSHONO_VERSION__);
 
-  // A pipe, a CI job or an agent gets the defaults rather than a prompt nothing can answer. Both
-  // streams have to be a terminal: the prompts draw on stdout but *read from stdin*, so
-  // `echo | npx @rshono/create` would otherwise ask a question with nothing behind the keyboard.
+  // A pipe, a CI job or an agent gets the defaults rather than a prompt nothing can answer. Both streams have to
+  // be a terminal: the prompts draw on stdout but read from stdin.
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY) && !values.yes;
 
   const pmFlag = oneOf(values.pm, PACKAGE_MANAGERS, 'pm');
@@ -127,8 +126,7 @@ async function main(): Promise<void> {
   const installFlag = tristate(values.install, values['no-install'], 'install');
   const gitFlag = tristate(values.git, values['no-git'], 'git');
 
-  // The framework version, not this package's: it is the one the app will be pinned to, and the one
-  // worth reading here. `--version` reports create-rshono's own.
+  // The framework version, not this package's: it is the one the app gets pinned to. `--version` reports ours.
   prompts.intro(`create-rshono  ·  rshono ${RSHONO_VERSION}`);
 
   // ── Where ───────────────────────────────────────────────────────────────────────────────────────
@@ -189,8 +187,8 @@ async function main(): Promise<void> {
     );
   }
 
-  // One question instead of two. The axes stay independent underneath: a `--formatter` or `--linter`
-  // flag addresses either on its own, and skips the question entirely.
+  // One question instead of two; the axes stay independent underneath, and a `--formatter` or `--linter` flag
+  // addresses either on its own.
   let preset: QualityPreset | undefined = QUALITY_PRESETS.find((candidate) => candidate.id === qualityFlag);
   if (!preset && !formatterFlag && !linterFlag) {
     const fallback = QUALITY_PRESETS[0]!;

@@ -1,7 +1,6 @@
-// Hand-written declarations for `react-server-dom-rspack` and the manifest global its Rspack plugins
-// inject. Deliberately narrowed to what the framework actually calls: the package is still `0.0.x`, so
-// anything declared here that nothing uses would be an unverified guess about an API that moves
-// underneath us.
+// Hand-written declarations for `react-server-dom-rspack` and the manifest global its Rspack plugins inject.
+// Narrowed to what the framework calls: the package is still `0.0.x`, so anything declared here that nothing
+// uses would be an unverified guess about an API that moves underneath us.
 
 declare const __rspack_rsc_manifest__: {
   serverManifest: Record<string, { id: string; name: string; chunks: string[]; async?: boolean }>;

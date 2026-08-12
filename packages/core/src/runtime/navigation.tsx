@@ -5,9 +5,9 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 /**
  * Imperative navigation actions, reached as `useNavigation().router`.
  *
- * `push` / `replace` / `refresh` are **soft** navigations: the new page's flight
- * payload is fetched and applied in place, so client component state outside the
- * changed subtree survives. Off-site or non-HTTP hrefs fall back to a full load.
+ * `push` / `replace` / `refresh` are **soft** navigations: the new page's flight payload is fetched and
+ * applied in place, so client component state outside the changed subtree survives. Off-site hrefs fall
+ * back to a full load.
  *
  * @example
  * ```tsx
@@ -28,15 +28,14 @@ export interface NavigationRouter {
   pending: boolean;
 }
 
-// No `back()` / `forward()` — `history.back()` and `history.forward()` need no framework, and the
-// traversal is picked up by the runtime's `popstate` listener either way.
+// No `back()` / `forward()`: `history.back()` needs no framework, and the runtime's `popstate` listener
+// picks the traversal up either way.
 
 /** The current location plus the {@link NavigationRouter}, as returned by {@link useNavigation}. */
 export interface NavigationState {
   /**
-   * The full current {@link URL} — read `url.pathname`, `url.searchParams` and the
-   * rest off it. A fresh instance per navigation, so mutating it affects nothing
-   * else; it is not written back to the address bar either.
+   * The full current {@link URL}. A fresh instance per navigation, so mutating it affects nothing else
+   * — it is not written back to the address bar.
    */
   url: URL;
   /** Matched route params for the current page, e.g. `{ id: '42' }` for `/profile/:id`. */
@@ -50,9 +49,7 @@ const noop = () => {};
 const defaultRouter: NavigationRouter = { push: noop, replace: noop, refresh: noop, pending: false };
 
 /**
- * Carries the live {@link NavigationRouter} implementation from the hydration runtime down
- * to {@link RouterProvider}. Framework internal — read the router through
- * {@link useNavigation} instead.
+ * Carries the live {@link NavigationRouter} from the hydration runtime down to {@link RouterProvider}.
  *
  * @internal
  */
@@ -61,8 +58,8 @@ export const RouterContext = createContext<NavigationRouter>(defaultRouter);
 const NavigationContext = createContext<NavigationState | null>(null);
 
 /**
- * Publishes the per-render location and params so {@link useNavigation} can read
- * them. Framework internal — the RSC entry wraps every page in one.
+ * Publishes the per-render location and params for {@link useNavigation} to read. The RSC entry wraps
+ * every page in one.
  *
  * @internal
  */
@@ -74,16 +71,14 @@ export function RouterProvider({ href, params, children }: { href: string; param
 }
 
 /**
- * Reactive access to the current URL and programmatic navigation, in one hook.
+ * Reactive access to the current URL and programmatic navigation, in one hook. Call it from a
+ * `'use client'` component.
  *
- * Call it from a `'use client'` component. The location fields (`url` and
- * `params`) are computed on the server and travel in the flight payload, so they
- * are correct during SSR — no hydration flicker — and update automatically on
- * every navigation. The `router` sub-object holds the imperative actions plus a
- * `pending` flag that is `true` while a client navigation is in flight.
+ * `url` and `params` are computed on the server and travel in the flight payload, so they are correct
+ * during SSR — no hydration flicker — and update on every navigation. `router` holds the imperative
+ * actions plus a `pending` flag, `true` while a soft navigation is in flight.
  *
- * Hooks can't run in a server component; read the same URL data there from
- * `getRequestContext()` (`@rshono/core/server`) instead.
+ * Hooks can't run in a server component; read the same data there from `getRequestContext()`.
  *
  * @example
  * ```tsx

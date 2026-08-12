@@ -4,16 +4,14 @@ import type { PackageManager } from './pm.js';
 import { deployStep, scriptTable } from './scripts.js';
 
 /**
- * The substitutions applied to every template file. Deliberately a handful of scalars: anything that
- * needs a *branch* is a separate file in an overlay, so template files stay valid TypeScript, CSS and
- * JSON that an editor can check and a formatter can format.
+ * The substitutions applied to every template file. A handful of scalars on purpose: anything needing a *branch*
+ * is a separate file in an overlay, so templates stay valid TypeScript, CSS and JSON that tools can check.
  */
 export type Tokens = Record<string, string>;
 
 /**
- * `{{NAME}}`, deliberately not `__NAME__`: templates are real files that real tools run over, and in
- * markdown `__NAME__` *is* strong emphasis — Prettier rewrites it to `**NAME**` and the token stops
- * matching. `{{…}}` means nothing to any format these templates are written in.
+ * `{{NAME}}`, not `__NAME__`: in markdown the latter is strong emphasis, so Prettier rewrites it to `**NAME**`
+ * and the token stops matching. `{{…}}` means nothing to any format these templates are written in.
  */
 const TOKEN_PATTERN = /\{\{[A-Z][A-Z\d_]*\}\}/g;
 
@@ -21,8 +19,7 @@ export function tokensFor(answers: Answers, features: Feature[], pm: PackageMana
   return {
     '{{PROJECT_NAME}}': answers.packageName,
     '{{DEPLOY_TARGET}}': answers.deploy,
-    // Derived from the features rather than the answers, because all three are about the scripts the app
-    // actually got: its command table, the one command that ships it, and what its platform asks for.
+    // From the features rather than the answers, because all three are about the scripts the app actually got.
     '{{SCRIPT_TABLE}}': scriptTable(answers, features, pm),
     '{{DEPLOY_STEP}}': deployStep(features, pm),
     '{{PLATFORM_SETUP}}': features.map((feature) => feature.platformSetup ?? '').join(''),
@@ -30,9 +27,8 @@ export function tokensFor(answers: Answers, features: Feature[], pm: PackageMana
 }
 
 /**
- * Substitutes tokens, and throws on one it doesn't know — a typo in a template would otherwise ship a
- * literal `{{PORJECT_NAME}}` into somebody's new app, which no test of the generator's logic would
- * catch.
+ * Substitutes tokens, and throws on one it does not know — a typo in a template would otherwise ship a literal
+ * `{{PORJECT_NAME}}` into somebody's new app, which no test of the generator's logic would catch.
  */
 export function render(contents: string, tokens: Tokens, source: string): string {
   return contents.replace(TOKEN_PATTERN, (token) => {

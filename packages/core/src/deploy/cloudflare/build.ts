@@ -9,12 +9,9 @@ const ASSETS_DIR = join('cloudflare', 'assets');
 const WRANGLER_FILES = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml'];
 
 /**
- * Caching and crawler rules for the assembled tree, in the file Workers Assets reads them from.
- *
- * The hashed bundle is immutable by construction, which is the one thing the CDN cannot infer. The
- * prerender tree is reachable under its own prefix (see `SSG_PREFIX` in `runtime.ts`) and holds a
- * second copy of pages that already have real URLs, so it is marked `noindex` rather than left for a
- * crawler to find twice.
+ * Caching and crawler rules for the assembled tree, in the file Workers Assets reads them from: the hashed
+ * bundle is immutable by construction, which the CDN cannot infer, and the prerender tree holds a second copy
+ * of pages that already have real URLs — so it is marked `noindex`.
  */
 const HEADERS_FILE = `/_static/*
   Cache-Control: public, max-age=31536000, immutable
@@ -33,7 +30,7 @@ function workerName(rootDir: string): string {
 }
 
 // Fixed, not the day the build ran: wrangler's bundled workerd refuses a date newer than its own, so a config
-// dated today would deploy fine and never start under `wrangler dev`. See the test that holds it behind today.
+// dated today would deploy fine and never start under `wrangler dev`.
 const COMPATIBILITY_DATE = '2026-07-01';
 
 function wranglerConfig(rootDir: string): string {
@@ -43,7 +40,7 @@ function wranglerConfig(rootDir: string): string {
       name: workerName(rootDir),
       main: 'dist/server/main.mjs',
       compatibility_date: COMPATIBILITY_DATE,
-      // AsyncLocalStorage — how the framework binds the request context that `getRequestContext()` reads.
+      // For AsyncLocalStorage, which is how the request context behind `getRequestContext()` is bound.
       compatibility_flags: ['nodejs_compat'],
       assets: {
         directory: `dist/${ASSETS_DIR.split(/[\\/]/).join('/')}`,
@@ -62,8 +59,7 @@ function wranglerConfig(rootDir: string): string {
  */
 export async function finalizeCloudflareBuild(ctx: DeployBuildContext): Promise<void> {
   const assetsDir = join(ctx.distDir, ASSETS_DIR);
-  // Rebuilt from scratch, so a file deleted from `public/` or a route that stopped being static does
-  // not survive in the deployed tree.
+  // From scratch, so a deleted `public/` file or a route that stopped being static does not survive here.
   await rm(assetsDir, { recursive: true, force: true });
   mkdirSync(assetsDir, { recursive: true });
 

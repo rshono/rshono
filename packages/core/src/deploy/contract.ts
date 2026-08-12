@@ -3,70 +3,53 @@ import type { PrerenderVariant, PrerenderedPage } from '../server/prerendered.js
 
 /**
  * A hosting platform `rshono build` targets. Selected with `deploy` in `rshono.config.ts`, the
- * `--deploy` flag or the `RSHONO_DEPLOY` env var, and resolved to a preset by `deploy/presets.ts`.
+ * `--deploy` flag or the `RSHONO_DEPLOY` env var.
  *
- * - `'node'` (the default) — rshono binds the port itself and you run the build with `rshono start`.
- *   Covers a VPS, a container, a PaaS, and — through `node:` compatibility — Bun and Deno.
+ * - `'node'` (the default) — rshono binds the port and you run the build with `rshono start`. Covers a
+ *   VPS, a container, a PaaS, and — through `node:` compatibility — Bun and Deno.
  * - `'cloudflare'` — a Worker; the entry exports `{ fetch }`.
- * - `'vercel'` — a Vercel function, plus the on-disk layout and config file streaming needs there.
+ * - `'vercel'` — a Vercel function, plus the on-disk layout and config streaming needs there.
  * - `'aws-lambda'` — a streaming Lambda handler.
  *
- * One entry per *handoff* — who opens the socket, and what shape a request arrives in — because that
- * is the part an app cannot arrange for itself. There is deliberately no target whose only content
- * would be "run the Node build", which is why Bun and Deno have none: importing the `node` bundle
- * under those runtimes is the whole of what one would say.
+ * There is one target per *handoff* — who opens the socket, and what shape a request arrives in — since
+ * that is the part an app cannot arrange for itself. `rshono dev` always runs the `node` server.
  *
- * `rshono dev` always runs the `node` server whatever this says — the dev server owns the process,
- * watches both compilers and fronts them on one port, none of which a hosting platform provides.
+ * @example
+ * ```ts
+ * export default defineConfig({ deploy: 'cloudflare' });
+ * ```
  *
  * @see {@link https://www.rshono.com/docs/deployment#the-targets | Docs — the targets}
  */
 export type DeployTarget = 'node' | 'cloudflare' | 'vercel' | 'aws-lambda';
 
 /**
- * Everything the app server needs from the platform it is running on.
+ * Everything the app server needs from the platform it runs on — the whole of what "which platform is
+ * this" means at request time, since `runtime/entry.rsc.tsx` is written against this and nothing else.
  *
- * One preset implements this per target, and the `@rshono/deploy` alias resolves to exactly that
- * module at build time (see `builder/rspack-config.ts`), so only the selected platform's code is
- * ever in the bundle. `runtime/entry.rsc.tsx` is written against this interface and nothing else —
- * it is the whole of what "which platform is this" means at request time.
- *
- * The members are the capabilities that genuinely differ between a host with a disk and one without:
- * who opens the socket, who serves the assets, where a prerendered page is read from, and whether
- * there is a `.env` to load at all.
+ * One preset implements it per target, and the build-time `@rshono/deploy` alias resolves to exactly
+ * that module, so only the selected platform's code is ever in the bundle.
  */
 export interface DeployRuntime {
   /**
-   * Hands the assembled app to the platform, and returns whatever the entry module should
-   * `export default` there.
-   *
-   * The two shapes hosting takes, in one call: where rshono owns the process this binds a port and
-   * returns nothing; where the host owns it, it returns the export the platform looks for —
-   * `{ fetch }` on Workers, a handler function on Vercel and Lambda.
+   * Hands the app to the platform and returns whatever the entry module should `export default` there:
+   * nothing where rshono owns the process (this binds the port), otherwise the export the platform looks
+   * for — `{ fetch }` on Workers, a handler function on Vercel and Lambda.
    */
   serveApp(app: Hono): unknown;
-  /**
-   * Mounts the hashed client bundle at `/_static`. A no-op where the platform's own CDN serves it
-   * before a request ever reaches the app.
-   *
-   * Called *before* the app's routes, so the bundle is never shadowed by one.
-   */
+  /** Mounts the hashed client bundle at `/_static`, ahead of the app's routes. A no-op where a CDN serves it. */
   mountStaticAssets(app: Hono): void;
-  /**
-   * Mounts the `public/` fallback at the web root — files served verbatim, and only for paths no
-   * route claimed. Called *after* every route for exactly that reason.
-   */
+  /** Mounts `public/` at the web root, after every route, so it only answers paths no route claimed. */
   mountPublicFallback(app: Hono): void;
   /**
-   * Reads the page prerendered for `c.req.path` by `rshono build`, or `null` when there is none (in
-   * which case the route renders per request, which is always a valid answer).
+   * Reads the page prerendered for `c.req.path`, or `null` when there is none — in which case the route
+   * renders per request.
    *
-   * Takes the whole {@link Context} rather than just the path because on a platform with no
-   * filesystem the store *is* a request-scoped binding — `c.env.ASSETS` on Workers. The path is
-   * untrusted either way, so an implementation has to treat traversal as a miss, not a lookup
-   * (see `prerenderedRelPath`).
+   * Takes the whole {@link Context} because without a filesystem the store *is* a request-scoped
+   * binding (`c.env.ASSETS` on Workers). The path is untrusted either way, so an implementation treats
+   * traversal as a miss — see `prerenderedRelPath`.
    */
   readPrerendered(c: Context, variant: PrerenderVariant): Promise<PrerenderedPage | null>;
-  /** Loads `.env` files, where the platform has a filesystem to read them from. Env is bindings elsewhere. */
+  /** Loads `.env` files where the platform has a filesystem. Env is bindings elsewhere. */
   loadEnv(): void;
 }

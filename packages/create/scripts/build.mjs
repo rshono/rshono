@@ -1,5 +1,5 @@
-// Rspack through its Node API rather than `@rspack/cli`, which is a dependency this package would carry
-// only to parse a config file it already has in hand.
+// Rspack through its Node API rather than `@rspack/cli`, a dependency whose only job would be parsing a config
+// file this already has in hand.
 import { rspack } from '@rspack/core';
 import config from '../rspack.config.mjs';
 

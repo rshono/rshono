@@ -10,11 +10,9 @@ import { fileSystemRuntime } from '../filesystem.js';
 const WILDCARD_HOST = '0.0.0.0';
 
 /**
- * Resolves the address to listen on: an explicit override (the dev server, which picks the port for its
- * worker) beats the environment, which beats the built-in default.
- *
- * `PORT` and `HOST` are the whole interface, because that is the deployment convention everywhere
- * this runs. `??` rather than `||` so an explicit `PORT=0`, meaning "any free port", is honoured.
+ * The address to listen on: an explicit override (the dev server, which picks the port for its worker) beats
+ * `PORT` / `HOST`, which beat the built-in default. `??` rather than `||`, so an explicit `PORT=0` — "any free
+ * port" — is honoured.
  */
 function listenAddress(overrides?: { port?: number; hostname?: string }): { port: number; hostname: string } {
   const envPort = process.env.PORT !== undefined ? Number(process.env.PORT) : undefined;
@@ -25,24 +23,20 @@ function listenAddress(overrides?: { port?: number; hostname?: string }): { port
 }
 
 /**
- * Node: a long-lived process that owns its own port, with a filesystem behind every asset. The shape
- * the framework was built against, and the only target `rshono dev` ever produces.
+ * Node: a long-lived process that owns its own port, with a filesystem behind every asset — the shape the
+ * framework was built against, and the only target `rshono dev` produces.
  *
- * Anything that runs a Node process runs this build — a VPS, a container, a PaaS — and Bun and Deno
- * are expected to as well, since the listener below is `@hono/node-server` and both implement the
- * `node:` APIs it needs.
+ * Anything that runs a Node process runs this build, Bun and Deno included: the listener is
+ * `@hono/node-server`, and both implement the `node:` APIs it needs.
  */
 export const runtime: DeployRuntime = {
   ...fileSystemRuntime,
 
   serveApp(app: Hono): undefined {
-    // `rshono build` imports this bundle to prerender `render: 'static'` routes. That pass renders
-    // through `app.fetch` directly and must not bind a port — nothing is listening for it, and the
-    // build would never exit.
+    // The prerender pass renders through `app.fetch` directly, and a bound port would keep the build alive.
     if (process.env.RSHONO_PRERENDER) return;
 
-    // The dev server runs this bundle in a worker thread and picks the port itself, so its choice wins
-    // over the environment.
+    // The dev server runs this in a worker thread and picks the port itself, so its choice wins.
     const devWorker = workerData as { port?: number; hostname?: string } | null;
     const address = listenAddress(devWorker ?? undefined);
 

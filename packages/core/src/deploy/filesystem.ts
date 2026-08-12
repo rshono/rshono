@@ -10,13 +10,11 @@ const { isDev, outDir } = __RSHONO_CONFIG__;
 
 /**
  * The project root, derived from where the bundle ended up: this module is compiled into
- * `<root>/<outDir>/server/main.mjs`, so `import.meta.dirname` is `<root>/<outDir>/server` at
- * runtime — which is why every output directory sits exactly one level under the root.
+ * `<root>/<outDir>/server/main.mjs`, which is why every output directory sits one level under the root.
  *
- * Derived rather than baked in at build time, because an absolute build-time path would tie the
- * output to the machine that produced it — and building in CI to run somewhere else is the normal
- * case. A preset that relocates the bundle keeps `dist/server/main.mjs` intact inside its own layout
- * for exactly this reason.
+ * Derived rather than baked in, because an absolute build-time path would tie the output to the machine that
+ * produced it — building in CI to run elsewhere is the normal case. A preset that relocates the bundle keeps
+ * `dist/server/main.mjs` intact inside its own layout for this reason.
  */
 const rootDir = join(import.meta.dirname, '..', '..');
 
@@ -26,11 +24,9 @@ const ssgDir = join(rootDir, outDir, 'ssg');
 const publicDir = isDev ? join(rootDir, 'public') : join(rootDir, outDir, 'public');
 
 /**
- * Everything a deploy target with a real filesystem does the same way.
- *
- * Node and the serverless runtimes that unpack a bundle onto a read-only disk (Vercel, AWS Lambda)
- * differ only in how the finished app is handed over — so each of those presets is this object plus
- * its own {@link DeployRuntime.serveApp}, and the implementations live once, in `server/`.
+ * Everything a deploy target with a real filesystem does the same way. Node and the serverless runtimes that
+ * unpack onto a read-only disk (Vercel, AWS Lambda) differ only in how the app is handed over, so each of
+ * those presets is this object plus its own {@link DeployRuntime.serveApp}.
  */
 export const fileSystemRuntime: Omit<DeployRuntime, 'serveApp'> = {
   mountStaticAssets(app: Hono): void {

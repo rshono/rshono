@@ -1,6 +1,6 @@
-// One bundled file, no runtime dependencies. `npx @rshono/create@latest` downloads this package before
-// it can ask its first question, so every dependency left unbundled is latency the user waits through
-// — @clack/prompts (MIT) and its own dependency tree are compiled in instead.
+// One bundled file, no runtime dependencies: `npx @rshono/create@latest` downloads this package before it can ask
+// its first question, so anything left unbundled is latency the user waits through. @clack/prompts (MIT) and its
+// own tree are compiled in instead.
 import { rspack } from '@rspack/core';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,8 +12,8 @@ export default {
   mode: 'production',
   target: 'node22',
   context: dir,
-  // Two entries: the CLI, and the generator on its own — which is what the tests drive and what another
-  // tool would import. Keeping them apart means importing the generator cannot start a prompt.
+  // Two entries: the CLI, and the generator on its own — what the tests drive and what another tool would import.
+  // Keeping them apart means importing the generator cannot start a prompt.
   entry: { cli: join(dir, 'src', 'cli.ts'), api: join(dir, 'src', 'api.ts') },
   output: {
     path: join(dir, 'dist'),
@@ -42,14 +42,13 @@ export default {
     ],
   },
   optimization: {
-    // Readable stack traces from a published CLI are worth more than the handful of kilobytes
-    // minification would save on a file that is downloaded once and run once.
+    // Readable stack traces are worth more than the kilobytes minification saves on a file downloaded once.
     minimize: false,
   },
   plugins: [
     new rspack.BannerPlugin({ banner: '// Bundled by rspack — edit src/ and rebuild. Includes @clack/prompts (MIT).', raw: true }),
-    // Read from this package's own manifest rather than the framework's: the two ship together today,
-    // but `--version` should not start lying the day one of them gets a patch release of its own.
+    // This package's own manifest, not the framework's: the two ship together today, but `--version` should not
+    // start lying the day one of them gets a patch release of its own.
     new rspack.DefinePlugin({ __CREATE_RSHONO_VERSION__: JSON.stringify(version) }),
   ],
   performance: false,

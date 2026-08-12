@@ -1,11 +1,8 @@
-// Copies the one kind of file `tsc` does not emit into dist/: builder/*.cjs, the Rspack loaders.
-// Hand-written CommonJS on purpose — Rspack loads them by absolute path — so they are copied verbatim
-// rather than compiled.
+// Copies the one kind of file `tsc` does not emit into dist/: the Rspack loaders in builder/, hand-written
+// CommonJS that Rspack loads by absolute path.
 //
-// `src/types/*.d.ts` deliberately stays behind. Those are ambient declarations for things only the
-// framework's own sources touch, `tsc` reads them straight out of `src/` as compilation inputs, and
-// nothing in the emitted declarations names them — so shipping them would only risk leaking those
-// globals into a consumer's scope.
+// `src/types/*.d.ts` stays behind deliberately: those are ambient declarations only the framework's own sources
+// touch, and shipping them would risk leaking the globals into a consumer's scope.
 import { cpSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

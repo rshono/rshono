@@ -4,15 +4,14 @@
 export const RSHONO_VERSION = '1.0.0-rc.12';
 
 /**
- * The Node range rshono itself declares, restated in every scaffolded app's `engines` — so a CI image
- * or a contributor on an older Node hears it from their package manager rather than from a stack trace.
+ * The Node range rshono declares, restated in every scaffolded app's `engines` — so a CI image or a contributor
+ * on an older Node hears it from their package manager rather than from a stack trace.
  */
 export const NODE_ENGINE = '>=22.18.0';
 
 /**
- * The dependency versions rshono is tested against, copied from its own manifest. Exact where it is
- * exact — React's RSC internals are coupled across builds, and a generated app has no workspace
- * overrides to fall back on.
+ * The dependency versions rshono is tested against, copied from its own manifest. Exact where it is exact:
+ * React's RSC internals are coupled across builds, and a generated app has no workspace overrides.
  */
 export const FRAMEWORK_DEPS = {
   hono: '^4.12.31',

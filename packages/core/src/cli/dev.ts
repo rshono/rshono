@@ -21,12 +21,9 @@ function describe(error: unknown): string {
 }
 
 /**
- * Whether nothing is listening on the port yet — checked before the output directory is emptied.
- *
- * `rshono dev` clears its own output on startup, so a second one started against a running server
- * wipes the directory that server is still importing route chunks from, and only then exits on
- * EADDRINUSE. The first server keeps serving from files that no longer exist, and its watcher never
- * re-emits them — it believes it already wrote them — so it 500s until it is restarted.
+ * Whether nothing is listening on the port yet — checked before the output directory is emptied, because a
+ * second `rshono dev` would otherwise wipe the chunks the running one is still importing and only then exit
+ * on EADDRINUSE.
  */
 function portAvailable(port: number, hostname: string): Promise<boolean> {
   const { promise, resolve } = Promise.withResolvers<boolean>();
@@ -45,11 +42,11 @@ interface DevOptions {
 export async function devCommand(options: DevOptions): Promise<void> {
   const { rootDir, config } = options;
   const port = options.port ?? SERVER_DEFAULTS.port;
-  // Its own directory, never `dist/`: a `rshono build` in another terminal must not be able to
-  // delete the chunks this server is still importing. See DEV_OUT_DIR.
+  // Its own directory, never `dist/`: a `rshono build` in another terminal must not be able to delete the
+  // chunks this server is still importing.
   const outDir = join(rootDir, DEV_OUT_DIR);
 
-  // Before the `rm` below, not at `serve` where the bind actually happens: see {@link portAvailable}.
+  // Before the `rm` below, not at `serve` where the bind happens — see {@link portAvailable}.
   if (!(await portAvailable(port, '127.0.0.1'))) {
     console.error(`  ✗ port ${port} is already in use`);
     process.exit(1);
@@ -65,9 +62,8 @@ export async function devCommand(options: DevOptions): Promise<void> {
   const sseChunk = (data: unknown) => encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
 
   /**
-   * Writes one already-encoded SSE frame to every open client, dropping the ones that have gone away.
-   * A browser that navigated or closed leaves a controller whose `enqueue` throws, and `cancel` is not
-   * always reached first — so a failed write is what retires a client.
+   * Writes one already-encoded SSE frame to every open client. A failed write is what retires a client:
+   * `cancel` is not always reached first when a browser navigates away.
    */
   function sendToAll(chunk: Uint8Array): void {
     for (const controller of sseClients) {
@@ -88,8 +84,8 @@ export async function devCommand(options: DevOptions): Promise<void> {
     rootDir,
     isDev: true,
     config,
-    // Always Node, whatever `deploy` says: the dev server runs the bundle in a worker thread of this
-    // process and fronts it on one port. `deploy` is a property of `build` output, not of developing.
+    // Always Node, whatever `deploy` says: that is a property of `build` output, and the dev server runs the
+    // bundle in a worker thread of this process.
     preset: NODE_PRESET,
     onServerComponentChanges: () => {
       serverComponentsChanged = true;
@@ -128,9 +124,8 @@ export async function devCommand(options: DevOptions): Promise<void> {
           resolve({ worker, port: message.port });
         }
       });
-      // `on`, not `once`: an error *after* the worker is ready has no pending promise left to reject,
-      // and a consumed `once` would leave that error with no listener at all — which Node turns into
-      // an uncaught exception that takes the dev server down with the worker.
+      // `on`, not `once`: an error after the worker is ready has no pending promise left to reject, and a
+      // consumed `once` would leave it unlistened — which Node turns into an uncaught exception here.
       worker.on('error', (error) => {
         if (ready) {
           console.error('  ✗ server worker crashed:', error);
@@ -143,10 +138,8 @@ export async function devCommand(options: DevOptions): Promise<void> {
         if (worker === currentWorker && code !== 0) {
           console.error(`  ✗ server worker exited with code ${code} — waiting for the next rebuild`);
           currentWorker = null;
-          // Opened with the reason rather than left closed: a request arriving before the next rebuild
-          // parks on this gate, and an unopened one would hang the browser with only the terminal
-          // saying why. `hooks.invalid` installs a fresh closed gate the moment a file changes, so the
-          // next build still holds requests until the worker is back.
+          // Opened with the reason rather than left closed, so a request arriving before the next rebuild sees
+          // it instead of hanging. `hooks.invalid` installs a fresh closed gate as soon as a file changes.
           workerGate = createGate();
           workerGate.open({ error: `The server worker exited with code ${code}. See the terminal for the error it crashed with.` });
         }
@@ -185,9 +178,8 @@ export async function devCommand(options: DevOptions): Promise<void> {
         gate.open({ error: describe(error) });
       }
     });
-    // No link in this queue may be left rejected: `.then` on a rejected promise short-circuits, and
-    // from that point no worker is ever spawned again and no gate is ever opened — a dev server that
-    // answers nothing and explains nothing. The `try` above covers the restart; this covers the rest.
+    // No link in this queue may be left rejected: `.then` on a rejected promise short-circuits, and from there
+    // no worker is spawned and no gate is opened again.
     restartChain = restartChain.catch((error) => {
       console.error('  ✗ dev server restart failed:', error);
       gate.open({ error: describe(error) });
@@ -243,8 +235,8 @@ export async function devCommand(options: DevOptions): Promise<void> {
     });
   });
 
-  // An SSE comment, not a message: it keeps an idle connection off a proxy's timeout without the
-  // client having to know about a frame type that means nothing.
+  // An SSE comment, not a message: it keeps an idle connection off a proxy's timeout without the client
+  // having to know a frame type that means nothing.
   const ping = encoder.encode(': ping\n\n');
   setInterval(() => sendToAll(ping), 15_000).unref();
 
@@ -257,28 +249,24 @@ export async function devCommand(options: DevOptions): Promise<void> {
     const incoming = new URL(c.req.url);
     const target = `http://127.0.0.1:${workerPort}${incoming.pathname}${incoming.search}`;
 
-    // Hono's proxy helper rather than a hand-rolled `fetch`: it carries the method, the streamed body
-    // (with the `duplex` Node requires) and the client's abort signal, so a browser that goes away
-    // takes the worker's render with it. On the way back it strips the hop-by-hop headers. `headers`
-    // replaces the set wholesale, so the request's own are spread back in first.
+    // Hono's proxy helper rather than a hand-rolled `fetch`: it carries the method, the streamed body (with
+    // the `duplex` Node requires) and the client's abort signal, and strips the hop-by-hop headers on the way
+    // back. `headers` replaces the set wholesale, so the request's own are spread back in first.
     const response = await proxy(target, {
       raw: c.req.raw,
-      // The worker's redirects are the app's answer to this request, not something to follow here —
-      // they have to reach the browser, with the internal address rewritten off them below.
+      // The worker's redirects are the app's answer to this request, to be rewritten below and passed on.
       redirect: 'manual',
       headers: {
         ...c.req.header(),
-        // This front-end *is* the proxy the app sits behind, and `trustProxy` is forced on in dev for
-        // exactly that reason: without these the app resolves every URL against the worker's random
-        // 127.0.0.1 port instead of the address the browser actually used.
+        // This front-end *is* the proxy the app sits behind, which is why `trustProxy` is forced on in dev:
+        // without these the app resolves every URL against the worker's random 127.0.0.1 port.
         'x-forwarded-host': incoming.host,
         'x-forwarded-proto': incoming.protocol.replace(':', ''),
       },
     });
 
-    // A redirect to the worker's own address has to become a relative one, or the browser leaves the
-    // dev server for a random port only this process knows about. `proxy` hands back a response whose
-    // headers are still mutable, so the rewrite happens in place.
+    // A redirect to the worker's own address has to become a relative one, or the browser leaves the dev
+    // server for a random port only this process knows about.
     const location = response.headers.get('location');
     const loc = location ? URL.parse(location, target) : null;
     if (loc && loc.host === `127.0.0.1:${workerPort}`) {

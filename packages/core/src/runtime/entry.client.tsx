@@ -10,8 +10,8 @@ import {
 import { isControlDigest, parseRedirectDigest } from './control.js';
 import type { DevMessage } from './dev-protocol.js';
 import type { RscPayload } from './entry.rsc.js';
-// Dev-only, and reached only from inside an `import.meta.webpackHot` branch — which a production
-// build compiles to `false`, leaving this module unreferenced and dropped.
+// Dev-only: its one caller sits behind `import.meta.webpackHot`, which a production build compiles to
+// `false` — so this module is dropped there.
 import { walkHotUpdates } from './hot-update.js';
 import { RouterContext, type NavigationRouter } from './navigation.js';
 import { createRscRequest } from './request.js';
@@ -23,7 +23,7 @@ declare global {
   var __FLIGHT_DATA: Array<string | Uint8Array> | undefined;
 }
 
-/** The flight payload the document carried, read back out of `__FLIGHT_DATA` — see `flight-inject.ts`, which writes it. */
+/** The flight payload the document carried, read back out of `__FLIGHT_DATA` — see `flight-inject.ts`. */
 function readFlightPayload(): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   // Assigned synchronously by `start`, which `new ReadableStream` runs before it returns.
@@ -33,14 +33,13 @@ function readFlightPayload(): ReadableStream<Uint8Array> {
   });
   const enqueue = (chunk: string | Uint8Array) => controller.enqueue(typeof chunk === 'string' ? encoder.encode(chunk) : chunk);
 
-  // Payload scripts interleave with the document, so some have already run by the time this module
-  // is evaluated — those are in the array — and the rest run after it, arriving through `push`.
+  // Payload scripts interleave with the document: the ones that already ran are in the array, the rest
+  // arrive through `push`.
   const data = (self.__FLIGHT_DATA ??= []);
   for (const chunk of data) enqueue(chunk);
   data.push = enqueue as typeof data.push;
 
-  // The last payload script lands before the document finishes parsing, so that is what says there
-  // is no more of it to come.
+  // The last payload script lands before parsing finishes, so that is what closes the stream.
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => controller.close(), { once: true });
   } else {
@@ -52,10 +51,7 @@ function readFlightPayload(): ReadableStream<Uint8Array> {
 /** Created at module evaluation, not inside `main()`, so no chunk can be pushed before it is watching. */
 const flightStream = readFlightPayload();
 
-/**
- * Guarantees somewhere to attach the fatal overlay. React's root container is the whole `document`,
- * so by the time an uncaught error has torn the tree down, `<body>` — or even `<html>` — may be gone.
- */
+/** Guarantees somewhere to attach the fatal overlay: the root container is `document`, so a teardown can take `<body>` with it. */
 function overlayHost(): HTMLElement {
   if (!document.documentElement) document.appendChild(document.createElement('html'));
   if (!document.body) document.documentElement.appendChild(document.createElement('body'));
@@ -63,26 +59,21 @@ function overlayHost(): HTMLElement {
 }
 
 /**
- * Replaces the white screen of death with something readable.
+ * Paints the reason for an uncaught render error over the blank page it leaves behind — the full stack in
+ * dev, a generic notice and a reload button in production.
  *
- * Because the root container is `document`, an uncaught render error leaves a genuinely blank page
- * with the reason only in the console — so this paints the reason over it instead. In development
- * that's the full stack; in production it's a generic notice plus a reload button, since the tree is
- * unrecoverable and reloading is the only way forward.
- *
- * Written with DOM calls rather than React (the renderer is what just failed) and `textContent`
- * rather than `innerHTML` (an error message is untrusted input).
+ * DOM calls rather than React (the renderer is what just failed), and `textContent` rather than
+ * `innerHTML` (an error message is untrusted input).
  */
 function showFatal(error: unknown, componentStack?: string | null): void {
-  // Queued rather than run inline: React's teardown happens after this callback returns, and would
-  // remove a node appended synchronously along with the rest of the tree.
+  // Queued: React's teardown runs after this callback returns and would remove a node appended inline.
   setTimeout(() => {
     const host = overlayHost();
     host.querySelector('[data-rshono-fatal]')?.remove();
 
     const box = document.createElement('div');
     box.setAttribute('data-rshono-fatal', '');
-    box.setAttribute('role', 'alert'); // the page is gone; announce it rather than leaving silence
+    box.setAttribute('role', 'alert');
     box.style.cssText =
       'position:fixed;inset:0;z-index:2147483647;overflow:auto;padding:1.5rem;background:#18181b;color:#f4f4f5;' +
       'font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;text-align:left';
@@ -118,11 +109,8 @@ function showFatal(error: unknown, componentStack?: string | null): void {
 }
 
 /**
- * Asks a URL for its flight payload.
- *
- * Deliberately uncached: every navigation fetches at the moment it is asked for, so a payload can
- * never be staler than the click that wanted it, and the browser's own HTTP cache is what makes a
- * repeat visit cheap.
+ * Asks a URL for its flight payload. Deliberately uncached — a payload can never be staler than the click
+ * that wanted it, and the browser's own HTTP cache is what makes a repeat visit cheap.
  */
 function requestPayload(href: string): Promise<RscPayload> {
   return createFromFetch<RscPayload>(fetch(createRscRequest(new URL(href, location.href).href)));
@@ -132,9 +120,8 @@ async function main() {
   const cspMeta = document.querySelector('meta[property="csp-nonce"]') as HTMLMetaElement | null;
   if (cspMeta?.nonce) __webpack_nonce__ = cspMeta.nonce;
 
-  // Both are replaced by BrowserRoot's own on mount. The defaults matter: `setServerCallback` is
-  // registered before hydration, so an action or refresh firing in that window would otherwise call
-  // an unassigned binding. Until there's a root to update, a full reload is the honest fallback.
+  // Both are replaced by BrowserRoot's own on mount. The defaults cover the window before hydration, where
+  // `setServerCallback` is already registered but there is no root to update — a reload is the honest answer.
   let setPayload: (v: RscPayload) => void = () => {
     window.location.reload();
   };
@@ -163,8 +150,7 @@ async function main() {
     window.history.replaceState(null, '', target.href);
   }
 
-  // A refresh keeps the URL, so it can't ride the history patch like push/replace — it drives the
-  // flight re-fetch directly.
+  // A refresh keeps the URL, so it can't ride the history patch like push/replace and drives the re-fetch itself.
   const refresh = () =>
     startNav(async () => {
       try {
@@ -176,12 +162,10 @@ async function main() {
 
   /**
    * Turns a control-signal digest — how `redirect()` / `notFound()` reach the browser — into a real
-   * navigation. Returns false for anything else, so callers can fall through to their own handling.
+   * navigation. Returns false for anything else, so callers fall through to their own handling.
    *
-   * `hard` forces a full document load, for signals that surfaced *through React* (a nested
-   * component's redirect, reported via the root error handlers). React unmounts the root on an
-   * uncaught error, so there is no live tree left to soft-navigate with. A signal caught earlier —
-   * a top-level payload rejection — still swaps the payload in place.
+   * `hard` forces a full document load, for signals that surfaced *through React*: it unmounts the root on
+   * an uncaught error, leaving no live tree to soft-navigate with.
    */
   function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean } = {}): boolean {
     const digest = (error as { digest?: unknown } | null)?.digest;
@@ -221,11 +205,8 @@ async function main() {
     }, [startTransition]);
 
     /**
-     * Scrolls where the navigation asked, once React has put its payload in the DOM.
-     *
-     * This has to wait for the commit rather than the fetch: a `#hash` target does not exist until the
-     * new tree does, and until then the page a scroll would move is still the outgoing one. A layout
-     * effect runs before the browser paints, so the pre-scroll position is never on screen.
+     * Scrolls where the navigation asked, once React has put its payload in the DOM — a `#hash` target does
+     * not exist until the new tree does. A layout effect, so the pre-scroll position is never painted.
      */
     React.useLayoutEffect(() => {
       const scroll = pendingScroll.current;
@@ -280,25 +261,21 @@ async function main() {
     return result.value;
   });
 
-  // A `redirect()` / `notFound()` from a component *below* the page root reaches us through React: it
-  // rides the flight payload as an error at that component's position, and boundaries re-throw it
-  // (see boundaries.tsx) so it lands here rather than rendering an error fallback.
+  // A `redirect()` / `notFound()` from a component below the page root reaches us through React: it rides the
+  // flight payload as an error, and boundaries re-throw it so it lands here rather than in a fallback.
   //
-  // Installing these hooks opts out of React's own defaults, so anything that isn't a control signal
-  // has to be put back by hand: console for a caught error, `reportError` (i.e. window.onerror, so
-  // error-reporting tools still see it) for an uncaught one.
+  // Installing these hooks opts out of React's own defaults, so everything that isn't a control signal has to
+  // be put back by hand — `reportError` rather than a bare log, so error-reporting tools still see it.
   hydrateRoot(document, <BrowserRoot />, {
     formState: initialPayload.formState,
     onCaughtError: (error, errorInfo) => {
       if (handleControlDigest(error, { hard: true })) return;
-      // A boundary handled this and the tree is intact, so no overlay: whatever fallback the app
-      // chose is the right thing to have on screen.
+      // A boundary handled it and the tree is intact, so no overlay over the app's own fallback.
       console.error(error, errorInfo.componentStack ?? '');
     },
     onUncaughtError: (error, errorInfo) => {
       if (handleControlDigest(error, { hard: true })) return;
-      // Nothing caught it, so React tears the root down — and the root is `document`. This is the
-      // white screen; paint the reason over it.
+      // Nothing caught it, so React tears the root down — and the root is `document`.
       globalThis.reportError(error);
       showFatal(error, errorInfo.componentStack);
     },
@@ -311,10 +288,7 @@ async function main() {
 
 type NavigationType = 'push' | 'replace' | 'pop';
 
-/**
- * Runs teardown in reverse and empties the list, so a second call is a no-op. Collecting these as
- * setup goes keeps each undo next to the thing it undoes.
- */
+/** Runs teardown in reverse and empties the list, so a second call is a no-op. */
 function disposeAll(undo: Array<() => void>): void {
   for (const dispose of undo.splice(0).reverse()) dispose();
 }
@@ -332,10 +306,8 @@ function isRouterLink(link: HTMLAnchorElement): boolean {
 }
 
 /**
- * Upgrades the app's anchors: a plain left-click becomes a soft navigation.
- *
- * Kept apart from `listenNavigation` because the two share no state — a click here only calls
- * `history.pushState`, which is where that function picks the navigation up.
+ * Upgrades the app's anchors: a plain left-click becomes a soft navigation. It shares no state with
+ * `listenNavigation` — a click only calls `history.pushState`, which is where that picks the navigation up.
  */
 function listenLinks(): () => void {
   const undo: Array<() => void> = [];
@@ -365,11 +337,8 @@ function listenLinks(): () => void {
 }
 
 /**
- * The element the current `#fragment` names, if it is on the page.
- *
- * A fragment is percent-encoded and an `id` attribute is not, so it has to be decoded first. A
- * hand-written URL can carry a `%` that is not an escape, which throws — take the fragment literally
- * then, since that is the closest thing to an id it could have meant.
+ * The element the current `#fragment` names, if it is on the page. A fragment is percent-encoded and an `id`
+ * is not, so it is decoded first — and taken literally when a hand-written `%` makes that throw.
  */
 function fragmentTarget(): HTMLElement | null {
   const fragment = location.hash.slice(1);
@@ -384,8 +353,7 @@ function fragmentTarget(): HTMLElement | null {
 function listenNavigation(onNavigation: (afterRender: () => void) => void): () => void {
   const undo: Array<() => void> = [];
 
-  // Scroll restoration is the browser's. `auto` is set explicitly rather than left at the default,
-  // because it is a statement: the browser remembers a traversal's offset for us, and nothing here
+  // Set explicitly as a statement of intent: the browser remembers a traversal's offset, and nothing here
   // tracks one.
   const prevRestoration = window.history.scrollRestoration;
   try {
@@ -398,17 +366,11 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
   });
 
   /**
-   * A push is not a real navigation to the browser, so nothing resets the scroll offset — without
-   * this a click through to a new page lands wherever the last one was scrolled to. A `#hash` names
-   * where to land instead, and one naming nothing on the page falls back to the top, as a browser
-   * does. `replace` keeps its position deliberately, and a traversal is the browser's to restore.
+   * A push is not a real navigation to the browser, so nothing resets the scroll offset. A `#hash` names
+   * where to land instead; `replace` keeps its position, and a traversal is the browser's to restore.
    *
-   * `scrollIntoView` rather than `scrollTo`, because it is the algorithm a browser's own fragment jump
-   * uses — so `scroll-padding-top` still applies. Neither call passes a `behavior`, leaving
-   * `scroll-behavior: smooth` the app's to ask for.
-   *
-   * The caller decides *when* this runs; for a navigation that fetched a payload it has to be after
-   * the commit — see the layout effect in `BrowserRoot`.
+   * `scrollIntoView` is the algorithm a browser's own fragment jump uses, so `scroll-padding-top` still
+   * applies. Neither call passes a `behavior`, leaving `scroll-behavior: smooth` the app's to ask for.
    */
   const afterRenderFor = (type: NavigationType) => () => {
     if (type !== 'push') return;
@@ -419,17 +381,13 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
 
   const documentUrl = () => location.pathname + location.search;
 
-  // What the payload on screen was rendered for. Only the document part: the server never sees the
-  // fragment, so two URLs differing by one render identically.
+  // What the payload on screen was rendered for. The document part only: the server never sees the fragment.
   let renderedUrl = documentUrl();
 
   /**
-   * A navigation that moves only the fragment — `#a` → `#b`, or back out of a same-page anchor —
-   * leaves the document unchanged, so the payload already on screen is the right one. Fetching
-   * another would be a wasted round-trip that re-renders the page out from under the jump.
-   *
-   * `router.refresh()` is unaffected: it drives the re-fetch directly rather than through here, and
-   * remains the way to ask for fresh data at an unchanged URL.
+   * A navigation that moves only the fragment leaves the document unchanged, so the payload on screen is
+   * already the right one — fetching another would re-render the page out from under the jump.
+   * `router.refresh()` is unaffected, and remains the way to ask for fresh data at an unchanged URL.
    */
   const notify = (type: NavigationType) => {
     const afterRender = afterRenderFor(type);
@@ -469,16 +427,11 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
 }
 
 /**
- * Dev-only refresh client (stripped from prod bundles: the whole call is
- * guarded by import.meta.webpackHot). Listens to the CLI's SSE endpoint:
+ * Dev-only refresh client, listening to the CLI's SSE endpoint:
  *
- *   client-built  → hot-apply the waiting updates (react-refresh keeps
- *                   component state); anything the page can't be patched
- *                   up to falls back to a reload — see walkHotUpdates.
- *   rsc-update    → server component code changed: re-fetch the flight
- *                   payload for the current URL, state preserved.
- *   hello         → sent on (re)connect with the latest build hash; a
- *                   mismatch means events were missed — resync.
+ *   client-built  → hot-apply the waiting updates; anything the page can't be patched up to reloads.
+ *   rsc-update    → server component code changed: re-fetch the flight payload, state preserved.
+ *   hello         → sent on (re)connect with the latest build hash; a mismatch means a missed event.
  */
 function initDevRefresh(fetchRscPayload: () => Promise<void>) {
   const hot = import.meta.webpackHot!;
@@ -486,7 +439,6 @@ function initDevRefresh(fetchRscPayload: () => Promise<void>) {
   /** The newest build the dev server has announced — what {@link applyClientUpdate} walks towards. */
   let targetHash: string | undefined;
 
-  /** Gives up on patching the page and takes the whole document from the dev server instead. */
   function reload(reason: string, error?: unknown): void {
     console.warn(`[rshono] ${reason} — reloading`, ...(error === undefined ? [] : [error]));
     window.location.reload();
@@ -523,11 +475,9 @@ function initDevRefresh(fetchRscPayload: () => Promise<void>) {
   }
 
   const source = new EventSource('/_rshono/hmr');
-  // Chained rather than handled as they arrive: a burst of saves puts several frames on the wire
-  // inside the time one `hot.check` takes, and two of those overlapping is an error webpack throws
-  // on ("check() is only allowed in idle status") — which would turn every burst into a full reload.
-  // Nothing is dropped by queueing, because `targetHash` is shared: whichever handler runs next
-  // walks to the newest build rather than to the one its own frame named.
+  // Chained rather than handled as they arrive: `hot.check` may only run from `idle`, and a burst of saves
+  // puts several frames on the wire inside the time one takes. Queueing drops nothing, because `targetHash`
+  // is shared — whichever handler runs next walks to the newest build.
   let queue: Promise<void> = Promise.resolve();
   source.onmessage = (event) => {
     const message = JSON.parse(event.data) as DevMessage;
@@ -535,8 +485,8 @@ function initDevRefresh(fetchRscPayload: () => Promise<void>) {
   };
 }
 
-// Bootstrap failures (a truncated or malformed initial flight payload, most likely) would otherwise
-// be an unhandled rejection: nothing hydrates, nothing is reported, and the page just sits there.
+// A bootstrap failure — a truncated initial payload, most likely — would otherwise be an unhandled
+// rejection: nothing hydrates, nothing is reported, and the page just sits there.
 main().catch((error) => {
   console.error('[rshono] the client runtime failed to start:', error);
   showFatal(error);

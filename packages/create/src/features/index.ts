@@ -9,12 +9,11 @@ import type { Feature } from './types.js';
 export type { Feature };
 
 /**
- * The features a set of answers selects, in application order — so an overlay listed later wins a file
- * both of them ship. Deduplicated by `id`, which is what lets one feature answer two questions (Biome
- * is both the formatter and the linter) without contributing twice.
+ * The features a set of answers selects, in application order — so an overlay listed later wins a file both
+ * ship. Deduplicated by `id`, which is what lets one feature answer two questions (Biome is both formatter and
+ * linter) without contributing twice.
  *
- * `pm` reaches the deploy target because one script has to name the runner that fetches an uninstalled
- * CLI; nothing else here depends on which package manager the app is for.
+ * `pm` reaches the deploy target because one script has to name the runner that fetches an uninstalled CLI.
  */
 export function selectFeatures(answers: Answers, pm: PackageManager): Feature[] {
   const selected = [

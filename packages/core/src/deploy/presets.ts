@@ -18,12 +18,11 @@ export interface DeployBuildContext {
 }
 
 /**
- * The build-time half of a deploy target: which runtime module the bundle gets, how the server
- * compiler has to change to produce something the platform can run, and how the output is arranged
- * once it exists.
+ * The build-time half of a deploy target: which runtime module the bundle gets, how the server compiler has
+ * to change to produce something the platform can run, and how the output is arranged once it exists.
  *
- * The runtime half is {@link DeployRuntime}, in its own file because it is compiled *into* the app
- * bundle — this side only ever runs in the CLI.
+ * The runtime half is `DeployRuntime`, in its own file because it is compiled *into* the app bundle — this
+ * side only ever runs in the CLI.
  */
 export interface DeployPreset {
   readonly name: DeployTarget;
@@ -35,35 +34,28 @@ export interface DeployPreset {
   /** How to run what was just built, completing the "build complete —" line. */
   readonly deployHint: string;
   /**
-   * Extra resolve conditions for the server bundle, most specific first.
-   *
-   * This is what picks the right build of React and the RSC runtime: both ship one per runtime behind
-   * `workerd` / `deno` / `edge-light` / `node` conditions. Omit it to accept whatever the Rspack
-   * target implies, which is correct for Node.
+   * Extra resolve conditions for the server bundle, most specific first — what picks the right build of React
+   * and the RSC runtime, both of which ship one per runtime. Omit to accept whatever the Rspack target
+   * implies, which is correct for Node.
    */
   readonly resolveConditions?: readonly string[];
   /** browserslist-style targets for the server bundle's swc pass. Defaults to Node. */
   readonly syntaxTargets?: readonly string[];
   /**
-   * Adjusts the generated server Rspack config for this platform — target, externals policy, output
-   * shape. Mutates in place, and runs *before* the user's `rspack` hook so that hook keeps the last
-   * word.
+   * Adjusts the generated server Rspack config for this platform — target, externals policy, output shape.
+   * Mutates in place, and runs before the user's `rspack` hook so that hook keeps the last word.
    */
   configureServer?(config: RspackOptions): void;
   /**
-   * Arranges the finished build for the platform: assembles whatever directory layout it expects,
-   * emits its config file, and prints how to deploy.
-   *
-   * Runs last — after both bundles, the `public/` copy and the prerender pass — so everything it
-   * needs to move is already on disk.
+   * Arranges the finished build for the platform: assembles the directory layout it expects, emits its config
+   * file, and prints how to deploy. Runs last, so everything it needs to move is already on disk.
    */
   finalize?(ctx: DeployBuildContext): Promise<void> | void;
 }
 
 /**
- * Node: a long-lived server process. The generated config is already this shape, so the preset has
- * nothing to contribute — the settings in `builder/rspack-config.ts` (`target: 'node'`, the externals
- * policy, ESM chunk output) are the Node ones by default.
+ * Node: a long-lived server process. The generated config is already this shape — `target: 'node'`, the
+ * externals policy and ESM chunk output are all defaults — so the preset has nothing to contribute.
  */
 export const NODE_PRESET: DeployPreset = {
   name: 'node',
@@ -74,12 +66,10 @@ export const NODE_PRESET: DeployPreset = {
 /**
  * Cloudflare Workers: the host owns the process, the CDN owns the assets, and there is no filesystem.
  *
- * Every compiler setting here follows from `workerd` not being Node. Dependencies are bundled because
- * nothing resolves `node_modules` at runtime; `node:` and `cloudflare:` imports stay external because
- * the runtime provides them (`nodejs_compat`, which the scaffolded config enables for
- * `AsyncLocalStorage`); and async chunks are inlined because Wrangler's bundler cannot follow the
- * computed specifier Rspack's ESM chunk loader emits — a split bundle would deploy and then fail on
- * the first page render.
+ * Every setting here follows from `workerd` not being Node. Dependencies are bundled because nothing resolves
+ * `node_modules` at runtime; `node:` and `cloudflare:` imports stay external because the runtime provides
+ * them under `nodejs_compat`; and async chunks are inlined because Wrangler's bundler cannot follow the
+ * computed specifier Rspack's ESM chunk loader emits — a split bundle deploys and then fails on first render.
  */
 const CLOUDFLARE_PRESET: DeployPreset = {
   name: 'cloudflare',
@@ -97,11 +87,10 @@ const CLOUDFLARE_PRESET: DeployPreset = {
 };
 
 /**
- * Vercel: one Node function behind the platform's CDN, which serves the assets and reaches the function
- * only for a page. `finalize` assembles the Build Output API layout the platform uploads — including the
- * `supportsResponseStreaming` flag, without which Vercel buffers the whole response and streamed SSR is
- * silently undone. That flag, and the exact path the bundle has to keep, are the reason this is a preset
- * rather than a snippet in the docs.
+ * Vercel: one Node function behind the platform's CDN, which serves the assets and reaches the function only
+ * for a page. `finalize` assembles the Build Output API layout the platform uploads — including the
+ * `supportsResponseStreaming` flag, without which Vercel buffers the whole response and silently undoes
+ * streamed SSR.
  */
 const VERCEL_PRESET: DeployPreset = {
   name: 'vercel',
@@ -111,10 +100,9 @@ const VERCEL_PRESET: DeployPreset = {
 };
 
 /**
- * AWS Lambda behind a Function URL in `RESPONSE_STREAM` mode — the AWS shape that keeps streaming.
- *
- * Same reasoning as Vercel: the runtime wraps the app in `awslambda.streamifyResponse`, and the buffered
- * alternative would deploy fine and then hold every page until its last byte rendered.
+ * AWS Lambda behind a Function URL in `RESPONSE_STREAM` mode — the AWS shape that keeps streaming. The
+ * runtime wraps the app in `awslambda.streamifyResponse`; the buffered alternative would deploy fine and then
+ * hold every page until its last byte rendered.
  */
 const AWS_LAMBDA_PRESET: DeployPreset = {
   name: 'aws-lambda',
@@ -133,8 +121,8 @@ const PRESETS: Record<DeployTarget, DeployPreset> = {
 export const DEPLOY_TARGETS = Object.keys(PRESETS) as DeployTarget[];
 
 /**
- * How to deploy what a given target built, or `null` for a name this rshono does not know — which a
- * `dist/` produced by a newer version can legitimately carry.
+ * How to deploy what a given target built, or `null` for a name this rshono does not know — which a `dist/`
+ * from a newer version can legitimately carry.
  */
 export function deployHintFor(target: string): string | null {
   return (PRESETS as Record<string, DeployPreset | undefined>)[target]?.deployHint ?? null;
@@ -146,16 +134,14 @@ export interface DeploySources {
   flag?: string;
   /** The `RSHONO_DEPLOY` env var — for a CI job that deploys the same app to more than one place. */
   env?: string;
-  /** {@link RshonoConfig.deploy} from `rshono.config.ts`. */
+  /** The `deploy` field in `rshono.config.ts`. */
   config?: string;
 }
 
 /**
- * Resolves the preset to build with: the flag wins over the environment, which wins over the config
- * file, which wins over the `node` default.
- *
- * Blank values are ignored at every level, so an unset-but-present `RSHONO_DEPLOY=` in a CI
- * environment falls through to the config file instead of failing the build.
+ * Resolves the preset to build with: the flag wins over the environment, which wins over the config file,
+ * which wins over the `node` default. Blank values are ignored at every level, so an unset-but-present
+ * `RSHONO_DEPLOY=` in CI falls through rather than failing the build.
  */
 export function resolveDeployPreset(sources: DeploySources = {}): DeployPreset {
   const target = sources.flag?.trim() || sources.env?.trim() || sources.config?.trim();

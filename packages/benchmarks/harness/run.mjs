@@ -1,9 +1,6 @@
 /**
- * Runs every section in order and snapshots the result.
- *
- * Order matters: build has to run first because the other three need artifacts on disk, and it is
- * also the runner most sensitive to a busy machine — running it while nothing else is happening is
- * the closest thing to a controlled measurement available here.
+ * Runs every section in order and snapshots the result. Order matters: build goes first because the other three
+ * need artifacts on disk, and it is also the runner most sensitive to a busy machine.
  */
 import { copyFile } from 'node:fs/promises';
 import path from 'node:path';

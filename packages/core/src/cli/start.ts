@@ -20,9 +20,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
     process.exit(1);
   }
 
-  // A bundle built for a hosting platform has no listener in it — its entry hands a `fetch` handler to
-  // whatever is running it. Starting one here would exit silently the moment the module finished
-  // evaluating, so say what happened and point at the command that does deploy it.
+  // A bundle built for a hosting platform has no listener in it, so starting one here would exit silently the
+  // moment the module finished evaluating.
   const target = readBuildMarker(distDir);
   if (target !== null && target !== 'node') {
     const hint = deployHintFor(target);

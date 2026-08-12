@@ -7,24 +7,19 @@ import type { Feature } from './types.js';
 /**
  * What a deploy target adds beyond the `deploy` line in `rshono.config.ts`, which the template carries.
  *
- * Deliberately thin: the framework arranges its own output for every platform, and `rshono build`
- * writes the one platform config that has to exist (`wrangler.jsonc`) if the project has none — a second
- * copy generated here would only go stale. So a target contributes the commands that run and ship the
- * build, the CLI they need, the directories to gitignore, and a note for the step no command covers.
+ * Thin on purpose: the framework arranges its own output for every platform, and `rshono build` writes the one
+ * platform config that has to exist. So a target contributes the commands that run and ship the build, the CLI
+ * they need, the directories to gitignore, and a note for the step no command covers.
  *
- * What the three script names promise is documented once, above `BASE_SCRIPTS` in `scripts.ts`. Only `node`
- * has a `start`, because `rshono start` refuses a bundle built for anywhere else, and it needs no `preview`:
- * `build` then `start` already is one.
- *
- * `pm` is here because two things have to be spelled for the app's package manager — the runner that fetches
- * the uninstalled Vercel CLI ({@link PackageManager.dlx}), and every command in {@link Feature.platformSetup}.
+ * What the three script names promise is documented above `BASE_SCRIPTS` in `scripts.ts`. Only `node` has a
+ * `start` — `rshono start` refuses a bundle built for anywhere else — and it needs no `preview`, since `build`
+ * then `start` already is one.
  */
 function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
   const build = invoke(pm, 'build');
 
   return {
-    // Where a Node build goes from here is a Dockerfile or a process manager, neither of which this can
-    // guess — so the target contributes only the command that runs what was built.
+    // Where a Node build goes next is a Dockerfile or a process manager, neither of which this can guess.
     node: {
       id: 'deploy-node',
       scripts: { start: 'rshono start' },
@@ -41,13 +36,11 @@ function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
     cloudflare: {
       id: 'deploy-cloudflare',
       devDependencies: { wrangler: TOOL_VERSIONS.wrangler },
-      // The only two install scripts a scaffolded app can end up with, and wrangler brings both. Each
-      // one merely picks the platform binary out of the optional dependency that already carries it, so
-      // neither needs to run — `workerd --version` and `esbuild --version` both answer without it.
+      // The only two install scripts a scaffolded app can end up with, and wrangler brings both. Each merely
+      // picks the platform binary out of the optional dependency already carrying it, so neither needs to run.
       allowBuilds: { esbuild: false, workerd: false },
-      // `wrangler dev` is the one preview that runs the code in the runtime it will actually run in:
-      // workerd, not Node, serving the assets the build assembled. Both scripts read the wrangler.jsonc the
-      // build wrote, so nothing here has to know where the bundle or the assets went.
+      // `wrangler dev` is the one preview that runs the code in workerd rather than Node. Both scripts read the
+      // wrangler.jsonc the build wrote, so nothing here has to know where the bundle went.
       scripts: { preview: 'rshono build && wrangler dev', deploy: 'rshono build && wrangler deploy' },
       scriptHelp: {
         preview: 'build, then run it in workerd — port 8787',
@@ -62,9 +55,8 @@ function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
     },
     vercel: {
       id: 'deploy-vercel',
-      // `--prod` because the script is called `deploy`: without it the CLI uploads to a throwaway preview
-      // URL, which is a useful thing to have but not what the word means. The local `preview` is a Node
-      // build run here — the platform has no way to run its own prebuilt output on your machine.
+      // `--prod` because the script is called `deploy`: without it the CLI uploads to a throwaway preview URL.
+      // `preview` is a Node build run here — the platform cannot run its own prebuilt output on your machine.
       scripts: {
         preview: 'rshono build --deploy node && rshono start',
         deploy: `rshono build && ${pm.dlx} vercel deploy --prebuilt --prod`,
@@ -88,8 +80,7 @@ function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
     },
     'aws-lambda': {
       id: 'deploy-aws-lambda',
-      // No CLI to wrap, and no upload this could guess at. `preview` still applies — the bundle is a Node
-      // handler, so it runs here.
+      // No CLI to wrap and no upload to guess at, but `preview` still applies: the bundle is a Node handler.
       scripts: { preview: 'rshono build --deploy node && rshono start' },
       scriptHelp: { preview: 'build for Node and run that here' },
       notes: ['Use a Function URL in RESPONSE_STREAM mode — a buffered invoke mode drops the streaming.'],

@@ -6,10 +6,8 @@ import { signup, type SignupResult } from '../actions';
 /**
  * Calls the server function directly from client code and renders what came back.
  *
- * Deliberately not `useActionState` / `<form action={fn}>`, even though rshono and Next both support
- * it: TanStack Start has no equivalent, and a benchmark comparing three client bundles has to have
- * the same client component in all three. Progressive enhancement is a real rshono feature — it is
- * just not a thing this benchmark can measure fairly, so it is out of scope rather than half-in.
+ * Deliberately not `useActionState` / `<form action={fn}>`, which rshono and Next both support: TanStack Start
+ * has no equivalent, and a benchmark comparing three client bundles needs the same component in all three.
  */
 export function SignupForm() {
   const [result, setResult] = useState<SignupResult | null>(null);

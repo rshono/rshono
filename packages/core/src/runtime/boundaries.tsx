@@ -3,41 +3,37 @@
 import { Component, Suspense, type ReactNode } from 'react';
 import { isControlDigest } from './control.js';
 
-/**
- * `redirect()` and `notFound()` reach the browser as a thrown error carrying a control digest.
- * They are navigation, not failure, so no boundary may absorb one — otherwise a `redirect()` from
- * a component inside a `<CatchBoundary>` would render "something went wrong" instead of navigating.
- * They're re-thrown to the root, where the runtime turns the digest into a real navigation.
- */
+// `redirect()` and `notFound()` reach the browser as a thrown error carrying a control digest. They are
+// navigation, not failure, so no boundary absorbs one — they are re-thrown to the root, where the
+// runtime turns the digest into a real navigation.
 function isControlError(error: unknown): boolean {
   return isControlDigest((error as { digest?: unknown } | null)?.digest);
 }
 
 /**
- * What a {@link CatchBoundary} / {@link AsyncBoundary} renders once a child throws.
- * Either a static node, or a render function that also gets a `reset` callback
- * to clear the error and re-render the children (e.g. a "Try again" button).
+ * What a {@link CatchBoundary} / {@link AsyncBoundary} renders once a child throws: either a static
+ * node, or a render function given the error and a `reset` callback that clears it and re-renders the
+ * children (a "Try again" button, say).
  *
- * The render-function form only works when the boundary is used from a `'use
- * client'` component — functions can't cross the server→client boundary. From a
- * server component, pass a `ReactNode`.
+ * The function form only works from a `'use client'` component — functions can't cross the
+ * server→client boundary. From a server component, pass a `ReactNode`.
  */
 export type ErrorFallback = ReactNode | ((error: Error, reset: () => void) => ReactNode);
 
 /** Props for {@link CatchBoundary}. */
 export interface CatchBoundaryProps {
   /**
-   * Rendered in place of the children after one of them throws. Omit it to
-   * report the error via `onError` and re-throw to the next boundary out (or
-   * the global error page) instead of handling it here.
+   * Rendered in place of the children after one of them throws. Omit it to report the error via
+   * `onError` and re-throw to the next boundary out — or the app's `error` page — instead of handling it
+   * here.
    */
   fallback?: ErrorFallback;
-  /** Called with the caught error (for logging / reporting). */
+  /** Called with the caught error, for logging or reporting. */
   onError?: (error: Error) => void;
   /**
-   * When any value in this array changes while the boundary is showing its
-   * fallback, the error is cleared automatically. Pass the current pathname to
-   * recover when the user navigates away: `resetKeys={[useNavigation().url.pathname]}`.
+   * Clears the error automatically when any value in this array changes while the fallback is showing.
+   * Pass the current pathname to recover when the user navigates away:
+   * `resetKeys={[useNavigation().url.pathname]}`.
    */
   resetKeys?: readonly unknown[];
   /** The subtree this boundary protects. */
@@ -53,14 +49,12 @@ function keysChanged(a: readonly unknown[], b: readonly unknown[]): boolean {
 }
 
 /**
- * A general-purpose error boundary. Catches errors thrown while rendering its
- * children — a client island that blew up, or a server component that rejected
- * on a soft navigation — and renders `fallback` in their place instead of
- * tearing down the whole page.
+ * A general-purpose error boundary: catches what its children throw — a client island that blew up, a
+ * server component that rejected on a soft navigation — and renders `fallback` in their place rather
+ * than tearing down the page.
  *
- * It's a `'use client'` component (React error boundaries must be), so drop it
- * anywhere in the tree from a server or client component. Use {@link AsyncBoundary}
- * when you also want a Suspense loading fallback in the same wrapper.
+ * It is a `'use client'` component (React error boundaries must be), so a server component can render
+ * it too. Reach for {@link AsyncBoundary} when you also want a Suspense loading fallback.
  *
  * @example
  * ```tsx
@@ -87,7 +81,7 @@ export class CatchBoundary extends Component<CatchBoundaryProps, CatchBoundarySt
   }
 
   componentDidCatch(error: Error): void {
-    if (isControlError(error)) return; // a redirect isn't an error to report
+    if (isControlError(error)) return;
     this.props.onError?.(error);
   }
 
@@ -105,9 +99,9 @@ export class CatchBoundary extends Component<CatchBoundaryProps, CatchBoundarySt
   render(): ReactNode {
     const { error } = this.state;
     if (error !== null) {
-      if (isControlError(error)) throw error; // navigation in flight — never show a fallback for it
+      if (isControlError(error)) throw error;
       const { fallback } = this.props;
-      if (fallback === undefined) throw error; // no local fallback → propagate to an outer boundary
+      if (fallback === undefined) throw error; // propagate to an outer boundary
       return typeof fallback === 'function' ? fallback(error, this.reset) : fallback;
     }
     return this.props.children;
@@ -117,10 +111,9 @@ export class CatchBoundary extends Component<CatchBoundaryProps, CatchBoundarySt
 /** Props for {@link AsyncBoundary}. */
 export interface AsyncBoundaryProps {
   /**
-   * Suspense fallback, shown while the children (or their data) are still
-   * loading. Required — a loading state is the reason to reach for this over
-   * {@link CatchBoundary}, so showing nothing is an explicit `loading={null}`
-   * rather than something you get by leaving the prop off.
+   * Suspense fallback, shown while the children or their data are still loading. Required — a loading
+   * state is the reason to reach for this over {@link CatchBoundary}, so showing nothing is an explicit
+   * `loading={null}`.
    */
   loading: ReactNode;
   /** Error fallback, shown if a child throws. See {@link ErrorFallback}. */
@@ -134,8 +127,8 @@ export interface AsyncBoundaryProps {
 }
 
 /**
- * A loading + error boundary in one wrapper — the common case for an async
- * section of a page. It always renders the same shape:
+ * A loading and error boundary in one wrapper — the common case for an async section of a page. It
+ * always renders the same shape:
  *
  * ```tsx
  * <CatchBoundary fallback={error}>
@@ -143,10 +136,8 @@ export interface AsyncBoundaryProps {
  * </CatchBoundary>
  * ```
  *
- * so `error` catches anything the children throw (including while suspended) and
- * `loading` shows until they resolve. `error` is optional: omit it and thrown
- * errors propagate to the next boundary out (or the global error page) rather
- * than being caught here.
+ * so `loading` shows until the children resolve and `error` catches whatever they throw, suspended or
+ * not. `error` is optional: omit it and errors propagate to the next boundary out.
  *
  * @example
  * ```tsx

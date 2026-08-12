@@ -5,9 +5,8 @@ export type { DeployTargetName };
 export type Styling = 'css' | 'tailwind';
 
 /*
- * The names each option accepts, spelled once. The types below are derived from them, the CLI validates
- * its flags against them and prints them in `--help`, and `pm.ts` recognises a package manager by them
- * — so a name added here reaches all three without a second list to remember.
+ * The names each option accepts, spelled once: the types below are derived from them, the CLI validates its
+ * flags against them and prints them in `--help`, and `pm.ts` recognises a package manager by them.
  */
 export const FORMATTER_NAMES = ['prettier', 'biome', 'oxfmt', 'none'] as const;
 export const LINTER_NAMES = ['oxlint', 'eslint', 'biome', 'none'] as const;
@@ -21,9 +20,8 @@ export type PackageManagerName = (typeof PACKAGE_MANAGERS)[number];
 /**
  * Everything the generator needs to know. One prompt or flag per field, and every field has a default.
  *
- * Which package manager the app is for is *not* here: it reaches the generator as `plan`'s second
- * argument, because the same value also drives the install and the printed commands. One copy, so the
- * two cannot disagree.
+ * Which package manager the app is for is *not* here: it reaches the generator as `plan`'s second argument,
+ * because the same value drives the install and the printed commands.
  */
 export interface Answers {
   /** An npm-safe package name, written into `package.json`. */
@@ -42,14 +40,11 @@ export function deployHint(name: DeployTargetName): string {
 
 /**
  * The curated formatter/linter combinations the prompt offers. The two axes stay independent in
- * {@link Answers} — `--formatter` and `--linter` address them separately, and a future feature can
- * fill either slot — but presenting them as one question keeps combinations that make no sense
- * (Biome formatting next to a second linter) out of the flow.
+ * {@link Answers} — `--formatter` and `--linter` address them separately — but presenting them as one question
+ * keeps nonsense combinations, like Biome formatting beside a second linter, out of the flow.
  *
- * **What the ESLint preset costs.** `typescript-eslint` reads the compiler API directly and so accepts
- * `typescript >=4.8.4 <6.1.0`, below the version rshono is built against — an app that picks ESLint
- * therefore pins TypeScript 6 (`ESLINT_TYPESCRIPT` in `versions.ts`). That is why it is a preset a user
- * chooses rather than the default; every other one leaves TypeScript where the framework put it.
+ * The ESLint presets pin TypeScript 6 (`ESLINT_TYPESCRIPT` in `versions.ts`), which is all typescript-eslint
+ * accepts. That is why ESLint is a preset a user picks rather than the default.
  */
 export interface QualityPreset {
   id: string;
@@ -80,9 +75,8 @@ export const QUALITY_PRESETS: readonly QualityPreset[] = [
 ];
 
 /**
- * Turns whatever the user typed into a name npm will accept, or returns `null` when nothing usable is
- * left. Lowercasing and replacing runs of invalid characters covers the ordinary cases (`My App`,
- * `my_app`); a scoped name is kept intact, since `@scope/name` is legal.
+ * Turns whatever the user typed into a name npm will accept, or `null` when nothing usable is left.
+ * Lowercasing and replacing runs of invalid characters covers the ordinary cases (`My App`, `my_app`).
  */
 export function toPackageName(input: string): string | null {
   const trimmed = input
@@ -91,8 +85,8 @@ export function toPackageName(input: string): string | null {
     .replace(/\/+$/, '');
   if (!trimmed || trimmed === '.') return null;
 
-  // A scoped name is a name, not a path: `@scope/pkg` stays whole rather than becoming `pkg`. Anything
-  // else is a path, and the last segment is the one that names the project.
+  // A scoped name is a name, not a path: `@scope/pkg` stays whole. Anything else is a path, whose last
+  // segment names the project.
   const scoped = /^@[^\\/]+[\\/][^\\/]+$/.test(trimmed);
   const base = scoped ? trimmed : (trimmed.split(/[\\/]/).filter(Boolean).pop() ?? '');
   if (!base) return null;

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Thin launcher, kept deliberately old-syntax and dependency-free: it is the one file that has to
-// parse and run on whatever Node the user happens to have. The CLI itself is a bundle — its imports
-// are evaluated before any statement in it, so a version check *inside* it would be too late to
-// produce anything friendlier than a stack trace.
+// Thin launcher, deliberately old-syntax and dependency-free: it is the one file that has to parse and run on
+// whatever Node the user happens to have. A version check inside the CLI bundle would be too late — its imports
+// evaluate before any statement in it.
+//
 // Kept in step with `engines.node` in @rshono/core's manifest, which is what a scaffolded app pins.
 var MINIMUM = [22, 18, 0];
 

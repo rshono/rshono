@@ -2,9 +2,8 @@ const HEADER_ACTION_ID = 'x-rsc-action';
 const RSC_CONTENT_TYPE = 'text/x-component';
 
 /**
- * The four distinct shapes an incoming render request can take, modeled as a
- * discriminated union so illegal combinations (e.g. an action id on a GET) are
- * unrepresentable and every consumer dispatches exhaustively on `kind`.
+ * The four shapes an incoming render request can take, as a discriminated union so that illegal
+ * combinations — an action id on a GET — are unrepresentable.
  *
  * - `document` — a normal navigation; respond with a full SSR HTML document.
  * - `rsc` — a soft-navigation flight fetch (`Accept: text/x-component`).
@@ -48,9 +47,8 @@ export function wantsRsc(renderRequest: RenderRequest): boolean {
 }
 
 /**
- * {@link wantsRsc} straight off the request, for the error and control-signal paths that have no
- * parsed {@link RenderRequest} to hand — they are reached from Hono's `onError` / `notFound` rather
- * than from the render.
+ * {@link wantsRsc} straight off the request, for the error and control-signal paths — reached from Hono's
+ * `onError` / `notFound`, so they have no parsed {@link RenderRequest} to hand.
  */
 export function requestWantsRsc(request: Request): boolean {
   return wantsRsc(parseRenderRequest(request));

@@ -1,14 +1,12 @@
 /**
- * What the framework costs before a single request is served: the size of a production-only install,
- * and how much application code the spec took to express.
+ * What the framework costs before a single request is served: the size of a production-only install, and how much
+ * application code the spec took to express.
  *
- * The install is done into a throwaway directory from the app's package.json with devDependencies
- * omitted — which is what a deploy image actually contains. Slow (three real npm installs), so it is
- * not part of `run.mjs` by default; pass --footprint.
+ * The install goes into a throwaway directory from the app's package.json with devDependencies omitted, which is
+ * what a deploy image contains. Slow — three real npm installs — so `run.mjs` skips it unless passed --footprint.
  *
- * Note for rshono specifically: `@rspack/core` is in @rshono/core's `dependencies`, not
- * `devDependencies`, so the bundler lands in a production install. That is a real cost and this
- * metric will show it.
+ * For rshono specifically: `@rspack/core` is in core's `dependencies`, so the bundler lands in a production
+ * install. That is a real cost and this metric shows it.
  */
 import { mkdtemp, rm, readFile, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

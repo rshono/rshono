@@ -2,12 +2,12 @@ import type { Answers } from '../options.js';
 import type { Feature } from './types.js';
 
 /**
- * Biome's CSS parser rejects Tailwind's syntax — `@apply` and a `@layer` block are parse errors, not
- * unknown-at-rule warnings — so a project with both needs Biome pointed away from stylesheets. The
- * overlay is a second `biome.json` listed after the first, which is all "later overlay wins" means.
+ * Biome's CSS parser rejects Tailwind's syntax — `@apply` is a parse error, not an unknown-at-rule warning — so
+ * a project with both needs Biome pointed away from stylesheets. The overlay is a second `biome.json` listed
+ * after the first.
  *
- * Narrow on purpose: the alternative was excluding CSS for everybody, which would quietly give up
- * formatting the plain-CSS template that Biome handles perfectly well.
+ * Narrow on purpose: excluding CSS for everybody would give up formatting the plain-CSS template that Biome
+ * handles perfectly well.
  */
 const BIOME_TAILWIND: Feature = {
   id: 'biome-tailwind',

@@ -14,11 +14,9 @@ export function writeBuildMarker(distDir: string, deploy: DeployTarget): void {
 }
 
 /**
- * The target the build in `distDir` was produced for, or `null` when there is nothing to go on.
- *
- * A missing or unreadable marker is deliberately not an error: a build from an older rshono has none,
- * and refusing to start one that would have worked is worse than the confusing failure this guards
- * against.
+ * The target the build in `distDir` was produced for, or `null` when there is nothing to go on — a missing
+ * marker is not an error, since a build from an older rshono has none and refusing to start one that would
+ * have worked is worse than the failure this guards against.
  */
 export function readBuildMarker(distDir: string): DeployTarget | null {
   const file = join(distDir, MARKER_FILE);

@@ -14,8 +14,8 @@ export function run(cmd, args, { cwd, env, capture = true, label } = {}) {
         shell: false,
       });
     } catch (error) {
-      // spawn can throw synchronously — EPERM under a sandbox, ENOENT for a missing binary. The
-      // caller decides whether that is fatal; a metric that needs an external tool should degrade.
+      // spawn can throw synchronously — EPERM under a sandbox, ENOENT for a missing binary. The caller decides
+      // whether that is fatal; a metric needing an external tool should degrade.
       resolve({ code: -1, ms: 0, stdout: '', stderr: error.message, error });
       return;
     }
@@ -43,11 +43,8 @@ export function tail(text, lines) {
 }
 
 /**
- * A failure printed as one block: `✗` against the headline, the detail indented under it.
- *
- * Beside {@link startServer} because that is what builds the messages this formats — a headline with
- * the server's own output appended, where the reason a stage cannot run always is. Print only the
- * first line and that half is thrown away.
+ * A failure printed as one block: `✗` against the headline, the detail indented under it — which for a
+ * {@link startServer} message is the server's own output, where the reason a stage cannot run always is.
  */
 export function indent(message) {
   const [headline, ...rest] = String(message).split('\n');

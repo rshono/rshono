@@ -10,11 +10,9 @@ import { render, tokensFor } from './render.js';
 const TEMPLATES_DIR = join(import.meta.dirname, '..', 'templates');
 
 /**
- * Every file the scaffold will consist of, keyed by its path relative to the project root (POSIX
- * separators, so a snapshot taken on one platform matches the next).
- *
- * Text only, so a plan can be token-substituted and diffed in a test. An overlay wanting to ship a
- * binary asset would need this to widen.
+ * Every file the scaffold will consist of, keyed by its path relative to the project root — POSIX separators,
+ * so a snapshot taken on one platform matches the next. Text only, so a plan can be token-substituted and
+ * diffed in a test.
  */
 export interface Plan {
   files: Map<string, string>;
@@ -39,11 +37,9 @@ function readTemplateDir(dir: string): Map<string, string> {
 }
 
 /**
- * `_gitignore` → `.gitignore`, and so on for every dotfile.
- *
- * npm strips a literal `.gitignore` out of a published tarball, so a template cannot contain one — it
- * would exist in the repo, pass every local test, and be missing from the package everybody installs.
- * Applies to the basename only, so `src/lib/_x.ts` is a dotfile but `templates/_x/y.ts` is not.
+ * `_gitignore` → `.gitignore`, and so on for every dotfile: npm strips a literal `.gitignore` out of a
+ * published tarball, so a template that contained one would pass every local test and be missing from the
+ * package everybody installs. The basename only, so `templates/_x/y.ts` is left alone.
  */
 function undotted(path: string): string {
   const segments = path.split(posix.sep);
@@ -51,10 +47,7 @@ function undotted(path: string): string {
   return [...segments, name.startsWith('_') ? `.${name.slice(1)}` : name].join(posix.sep);
 }
 
-/**
- * A feature's `.gitignore` lines, appended under a heading naming it — so somebody reading the file six
- * months later can tell why `.wrangler/` is in there.
- */
+/** A feature's `.gitignore` lines, under a heading naming it — so a reader can tell why `.wrangler/` is there. */
 function appendGitignore(existing: string, features: Feature[]): string {
   const additions = features.filter((feature) => feature.gitignore?.length);
   if (additions.length === 0) return existing;
@@ -64,9 +57,9 @@ function appendGitignore(existing: string, features: Feature[]): string {
 }
 
 /**
- * Turns answers into the exact set of files to write, without touching the target directory — the
- * decisions and the I/O are separated so the whole matrix of answers can be asserted on in a test, and
- * so `--dry-run` is the same code path minus the last step.
+ * Turns answers into the exact set of files to write, without touching the target directory. Separating the
+ * decisions from the I/O is what lets a test assert on the whole matrix of answers, and makes `--dry-run` the
+ * same code path minus the last step.
  */
 export function plan(answers: Answers, pm: PackageManager): Plan {
   const features = selectFeatures(answers, pm);

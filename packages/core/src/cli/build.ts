@@ -65,10 +65,10 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   if (written.length > 0) console.log(`  • prerendered ${written.length} static page(s): ${written.join(', ')}`);
   if (skipped.length > 0) console.log(`  • skipped ${skipped.length} (will SSR per request)`);
 
-  // Written before `finalize`, so a preset that copies `dist/` into a platform layout takes it along.
+  // Before `finalize`, so a preset that copies `dist/` into a platform layout takes it along.
   writeBuildMarker(distDir, preset.name);
 
-  // Last, so a preset arranging its output finds every piece of the build already written.
+  // Last, so a preset arranging its output finds every piece of the build on disk.
   await preset.finalize?.({
     rootDir,
     distDir,

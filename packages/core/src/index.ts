@@ -1,14 +1,18 @@
 /**
- * `@rshono/core` — the build-time surface: route and config declaration plus the types
- * your pages and endpoints are written against. Everything here is safe to
- * import from server code; none of it pulls in runtime machinery.
+ * `@rshono/core` — the build-time surface: route and config declaration, plus the types
+ * your pages and endpoints are written against. Nothing here pulls in runtime machinery.
  *
- * The two companion entry points are runtime-only:
- * - `@rshono/core/server` — {@link https://hono.dev | Hono} request context inside
- *   server components and actions (`getRequestContext`, `redirect`, `notFound`), plus
- *   `onServerError` for reporting the errors the framework catches.
- * - `@rshono/core/client` — hooks and components for `'use client'` modules
- *   (`useNavigation`, `AsyncBoundary`, `CatchBoundary`).
+ * Two companion entry points are runtime-only:
+ * - `@rshono/core/server` — request context, `redirect`, `notFound`, `onServerError`.
+ * - `@rshono/core/client` — `useNavigation`, `AsyncBoundary`, `CatchBoundary`.
+ *
+ * @example
+ * ```ts
+ * // src/routes.ts
+ * import { defineRoutes } from '@rshono/core';
+ *
+ * export const routes = defineRoutes([{ path: '/', component: () => import('./components/home') }]);
+ * ```
  *
  * @see {@link https://www.rshono.com/docs/api | Docs — API reference}
  *
@@ -35,6 +39,5 @@ export { defineConfig, type RshonoConfig, type RspackHookContext } from './confi
 
 export type { DeployTarget } from './deploy/contract.js';
 
-// Hono's `Context` and `Handler` are deliberately not re-exported: `hono` is a peer dependency every
-// app already has, so an endpoint module imports them from there rather than choosing between two
-// spellings of the same type.
+// Hono's `Context` and `Handler` are deliberately not re-exported — `hono` is a peer dependency, so
+// endpoints import them from there rather than from two spellings of the same type.

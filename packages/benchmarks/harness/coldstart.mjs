@@ -1,11 +1,9 @@
 /**
- * Process spawn → first successful response, measured `--trials` times with a fresh process each
- * time. This is the number that decides what a request pays on a scale-from-zero platform, and it
+ * Process spawn → first successful response, measured `--trials` times with a fresh process each time. It
  * tracks server-bundle size closely enough that the two belong next to each other in the report.
  *
- * Not a real serverless cold start: no container, no network, no platform overhead. It isolates the
- * part the framework controls — how much JavaScript has to be parsed and executed before the first
- * byte can be answered.
+ * Not a real serverless cold start — no container, no network, no platform overhead. It isolates the part the
+ * framework controls: how much JavaScript is parsed and executed before the first byte can be answered.
  */
 import { resolveTargets, flagValue } from './lib/targets.mjs';
 import { startServer } from './lib/proc.mjs';

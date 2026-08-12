@@ -9,13 +9,11 @@ import { SignupForm } from '../components/signup-form';
 import type { User } from '../server-fns';
 
 /**
- * APP_SPEC.md `/interactive`: three interactive components — local state, a filtered list over the
- * full fixture, and a server function.
+ * APP_SPEC.md `/interactive`: three interactive components — local state, a filtered list over the full fixture,
+ * and a server function.
  *
- * The shell is a server component and the three stay client components, slotted in as *component
- * props* — the only one of TanStack's three slot kinds where the server can hand data across the
- * boundary, which `Filter` needs (all 100 users, the same prop rshono passes it). A `children` slot
- * is opaque to the server and could not carry it.
+ * They are slotted into the server shell as *component props*, the only one of TanStack's slot kinds where the
+ * server can hand data across the boundary — which `Filter` needs, since it takes all 100 users as a prop.
  */
 const getInteractiveShell = createServerFn().handler(async () => {
   const { users } = await import('../data');

@@ -4,9 +4,8 @@ import { DEPLOY_TARGETS, resolveDeployPreset } from '../deploy/presets.js';
 import { loadConfig } from '../server/load-config.js';
 import { loadEnvFiles } from '../server/load-env.js';
 
-// The commands are imported where they are dispatched, not here: `build` and `dev` pull in Rspack — a
-// native binding and a large module graph — and a static import would load it for `start` too, which
-// does nothing but spawn the built server. ~30 MB of RSS and ~70ms of startup on a production host.
+// The commands are imported where they are dispatched: `build` and `dev` pull in Rspack, and a static import
+// would load it for `start` too — ~30 MB of RSS and ~70ms of startup for a command that only spawns a server.
 
 const HELP = `rshono — Hono + Rspack + React Server Components
 

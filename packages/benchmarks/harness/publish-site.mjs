@@ -1,19 +1,13 @@
 /**
- * Copies the rendered results into `apps/website/content/benchmarks.md`.
+ * Copies the rendered results into `apps/website/content/benchmarks.md`. `results/latest.md` is gitignored, so
+ * the website cannot import it — the published copy is committed instead, and this is how it gets refreshed.
  *
- * `results/latest.md` is generated and gitignored, so the website cannot import it — a fresh clone or a
- * CI build would have nothing to read. The published copy is committed instead, and this script is how
- * it gets refreshed: run `bench`, then run this.
+ * Only the measured tables land in the content file. The framing — what the numbers mean and don't — is authored
+ * JSX in the website's own component, so regenerating data cannot overwrite prose that took judgement to write.
  *
- * What lands in the content file is **only the measured tables**. The framing — what the numbers mean,
- * what they don't, which caveats change how you should read them — is authored JSX in
- * `apps/website/src/components/benchmarks.tsx`, so regenerating data can never quietly overwrite prose
- * that took judgement to write.
- *
- * A second file, `benchmarks-summary.json`, carries the at-a-glance scorecard: headline metrics pulled
- * out of `latest.json`, each with every target's value and which one won. Generated for one reason — a
- * hand-written "2.7× smaller" in the page would drift from the tables underneath it the first time
- * anyone re-ran the benchmark.
+ * `benchmarks-summary.json` carries the at-a-glance scorecard beside it: headline metrics with every target's
+ * value and which one won. Generated because a hand-written "2.7× smaller" would drift from the tables below it
+ * the first time anyone re-ran the benchmark.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -34,9 +28,8 @@ const report = await results();
 const markdown = await readFile(source, 'utf8');
 
 /*
- * Everything from the first `##` on. The report's own H1 and its "Generated … see ../README.md" line
- * are both dropped: the page component renders the heading, and that relative link resolves to nothing
- * once the file is served from a website.
+ * Everything from the first `##` on: the page component renders its own heading, and the report's relative
+ * "see ../README.md" link resolves to nothing once the file is served from a website.
  */
 const firstSection = markdown.indexOf('\n## ');
 if (firstSection === -1) {
@@ -66,17 +59,13 @@ console.log(`✓ wrote ${path.relative(path.resolve(ROOT, '..', '..'), destinati
 const loadHeapMb = report?.sections?.load?.settings?.heapMb ?? 0;
 
 /**
- * The scorecard metrics, in the order the page shows them.
+ * The scorecard metrics, in the order the page shows them. `anchor` is the id `markdown-it-anchor` gives the
+ * matching heading, so every summary row links down to the table it came from.
  *
- * `anchor` is the id `markdown-it-anchor` gives the matching heading in the generated markdown, so every
- * summary row can link down to the table it came from — the overview is a way into the detail, not a
- * replacement for it.
- *
- * Every metric is emitted with its `winner`, including the ones rshono loses. The website's scorecard
- * shows only the wins — that filter lives in the page component, deliberately, so this file stays a
- * faithful dump of what was measured and the editorial choice is visible where it is made. Which rows
- * rshono wins is not fixed either: `coldstart` has changed hands between runs by less than the
- * measurement noise, so nothing anywhere hard-codes the split.
+ * Every metric is emitted with its `winner`, including the ones rshono loses; the website shows only the wins,
+ * and that filter lives in the page component so this file stays a faithful dump and the editorial choice is
+ * visible where it is made. Which rows rshono wins is not fixed — `coldstart` has changed hands between runs by
+ * less than the measurement noise — so nothing hard-codes the split.
  */
 const METRICS = [
   {
@@ -182,13 +171,12 @@ const METRICS = [
   /*
    * Memory, and only the three rows that mean something.
    *
-   * `largest` rather than the tree total on both RSS rows: the tree sums whatever `npm run start` left
-   * running and double-counts shared pages, while the largest process is the server itself in all
-   * three apps.
+   * `largest` rather than the tree total on both RSS rows: the tree sums whatever `npm run start` left running
+   * and double-counts shared pages, while the largest process is the server itself in all three apps.
    *
-   * `churn` is the row to trust. RSS after a fixed-duration load is a high-water mark including
-   * uncollected garbage, and V8 sizes the old generation against the *allocation rate* — so the server
-   * that answered the most requests grows the largest heap. Dividing growth by requests removes that.
+   * `churn` is the row to trust: RSS after a fixed-duration load is a high-water mark including uncollected
+   * garbage, so the server that answered the most requests grows the largest heap. Dividing by requests removes
+   * that.
    */
   {
     id: 'rss-idle',
@@ -275,18 +263,15 @@ for (const metric of METRICS) {
     anchor: metric.anchor,
     lowerIsBetter: metric.lowerIsBetter,
     /*
-     * The comparative word is per metric, not derived from `lowerIsBetter`. Picking it from the
-     * direction gives "7.4× less than Next.js" for a build time, which is not what anyone means —
-     * durations are faster, byte counts smaller, request counts fewer, throughput more.
+     * Per metric, not derived from `lowerIsBetter`: taking it from the direction gives "7.4× less than Next.js"
+     * for a build time. Durations are faster, byte counts smaller, request counts fewer, throughput more.
      */
     comparative: metric.comparative,
     winner: best.target,
     /*
-     * `relativeToBest` is what the bar length draws, deliberately not the raw value: milliseconds and
-     * kilobytes share no axis, so a bar has to be normalised per row. Normalised against the raw
-     * maximum, the longest bar would be the worst result on a lower-is-better row and the best on a
-     * throughput row. Against the winner, longer is always better. The measured value is printed
-     * beside every bar, so nothing is inferred from the geometry.
+     * What the bar length draws, deliberately not the raw value: milliseconds and kilobytes share no axis, so a
+     * bar is normalised per row — and against the winner rather than the maximum, so longer is always better.
+     * The measured value is printed beside every bar, so nothing is inferred from the geometry.
      */
     values: values.map((v) => ({
       ...v,

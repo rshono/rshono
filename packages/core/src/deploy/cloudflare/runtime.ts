@@ -5,13 +5,10 @@ import type { DeployRuntime } from '../contract.js';
 /**
  * Where `finalize` puts the prerendered pages inside the assets directory.
  *
- * A prefix of its own, rather than the pages' real URLs, is what keeps every page URL reaching the
- * worker: one URL answers with a document or a flight payload depending on `Accept`, and a CDN keyed
- * on the path alone cannot make that choice. Assets miss, the worker runs, the worker negotiates.
- *
- * The bytes are public either way — they are a public page — but they are also reachable under this
- * path, so `finalize` writes a `_headers` rule marking the tree `noindex` rather than leaving a
- * crawler to find the same page twice.
+ * A prefix of its own, rather than the pages' real URLs, is what keeps every page URL reaching the worker: one
+ * URL answers with a document or a flight payload depending on `Accept`, and a path-keyed CDN cannot make that
+ * choice. The tree is reachable here too, so `finalize` marks it `noindex` rather than leaving a crawler to
+ * find the same page twice.
  */
 const SSG_PREFIX = '/__ssg';
 
@@ -26,27 +23,23 @@ function assetsBinding(c: Context): AssetsBinding | null {
 }
 
 /**
- * Asks the assets binding for one path, or `null` when there is no binding at all — so a caller can
- * tell "this deployment serves its assets some other way" from "that file is not there".
+ * Asks the assets binding for one path, or `null` when there is no binding — which is how a caller tells "this
+ * deployment serves its assets some other way" from "that file is not there".
  *
- * `headers` is passed on only where the *client's* conditional and range requests should be answered
- * by the store: forwarding an `If-None-Match` while fetching a page to serve would come back 304 with
- * no body, which is a useless answer to "give me this page".
+ * `headers` is forwarded only where the *client's* conditional and range requests should be answered by the
+ * store: an `If-None-Match` on a page being fetched to serve would come back 304 with no body.
  */
 async function assetResponse(c: Context, path: string, headers?: Headers): Promise<Response | null> {
   const binding = assetsBinding(c);
   if (!binding) return null;
-  // Resolved against the request so the asset request carries this deployment's own origin; only the
-  // path is ever used to look one up.
+  // Resolved against the request so the lookup carries this deployment's own origin; only the path is used.
   const url = new URL(path, c.req.url);
   return binding.fetch(new Request(url, { method: 'GET', headers }));
 }
 
 /**
- * Hands an asset response back as the app's own.
- *
- * Rebuilt rather than returned as-is because a `Response` that came from `fetch` has immutable
- * headers, and the framework's outermost middleware sets its baseline security headers on the way out.
+ * Hands an asset response back as the app's own. Rebuilt rather than returned as-is, because a `Response` from
+ * `fetch` has immutable headers and the framework's outermost middleware writes to them on the way out.
  */
 function serveAsset(asset: Response): Response {
   return new Response(asset.body, asset);
@@ -56,23 +49,18 @@ function serveAsset(asset: Response): Response {
 const pageCache = createPageCache();
 
 /**
- * Cloudflare Workers: the host owns the process, so there is nothing to listen on; the CDN owns the
- * assets, so there is nothing to serve from disk; and there is no filesystem, so `.env` files and a
- * streaming gzip are both out.
- *
- * What is left is the assets binding, which every read here goes through.
+ * Cloudflare Workers: the host owns the process, so there is nothing to listen on, and there is no filesystem,
+ * so `.env` files are out. What is left is the assets binding, which every read here goes through.
  */
 export const runtime: DeployRuntime = {
   serveApp(app: Hono): unknown {
-    // What Workers looks for on the default export. `app.fetch` already takes `(request, env, ctx)`,
-    // which is why bindings arrive as `c.env` — and so why `getRequestContext().env` sees them.
+    // `app.fetch` already takes `(request, env, ctx)`, which is why bindings arrive as `c.env`.
     return { fetch: app.fetch };
   },
 
   mountStaticAssets(app: Hono): void {
-    // Normally dead: with the scaffolded config the CDN answers `/_static/*` before the worker is
-    // invoked at all. It exists so the deployment is still correct — if slower — under an assets
-    // configuration that routes everything to the worker first.
+    // Normally dead — the CDN answers `/_static/*` before the worker is invoked — but keeps the deployment
+    // correct, if slower, under an assets configuration that routes everything to the worker first.
     app.on(['GET', 'HEAD'], '/_static/*', async (c, next) => {
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);
       return asset && asset.status !== 404 ? serveAsset(asset) : next();
@@ -81,8 +69,7 @@ export const runtime: DeployRuntime = {
 
   mountPublicFallback(app: Hono): void {
     app.on(['GET', 'HEAD'], '/*', async (c, next) => {
-      // The prerender tree lives in the same store; it is reachable directly from the CDN by design,
-      // but the app itself only ever serves it through `readPrerendered`, negotiated on `Accept`.
+      // The prerender tree lives in the same store, but the app only serves it through `readPrerendered`.
       if (c.req.path.startsWith(`${SSG_PREFIX}/`)) return next();
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);
       return asset && asset.status !== 404 ? serveAsset(asset) : next();
@@ -107,7 +94,7 @@ export const runtime: DeployRuntime = {
   },
 
   loadEnv(): void {
-    // Nothing to load: a Worker has no filesystem and no `.env`. Secrets and bindings arrive per
-    // request as `c.env`, which `getRequestContext().env` already merges — see `runtime/context.ts`.
+    // Nothing to load: secrets and bindings arrive per request as `c.env`, which `getRequestContext().env`
+    // already merges.
   },
 };
