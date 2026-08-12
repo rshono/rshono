@@ -23,7 +23,7 @@ export function readBuildMarker(distDir: string): DeployTarget | null {
   if (!existsSync(file)) return null;
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<BuildMarker>;
-    return typeof parsed.deploy === 'string' ? (parsed.deploy as DeployTarget) : null;
+    return typeof parsed.deploy === 'string' ? parsed.deploy : null;
   } catch {
     return null;
   }

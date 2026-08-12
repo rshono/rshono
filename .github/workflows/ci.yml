@@ -18,6 +18,8 @@ on:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
+      # One config governs every package, so a rule change is a change to all of them.
+      - 'eslint.config.mjs'
   pull_request:
     paths:
       - 'packages/**'
@@ -26,12 +28,38 @@ on:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
+      - 'eslint.config.mjs'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The type-aware rules need the same modules `tsc` resolves, and the apps reach the framework
+      # through its published `exports` — which point at `dist/`. Without this step every
+      # `@rshono/core` import lints as an unresolved type and the run fills with `no-unsafe-*`.
+      - name: Build the framework
+        run: pnpm --filter @rshono/core build
+
+      # One config, one pass, every package.
+      - name: Lint
+        run: pnpm lint
+
   test:
     name: test (node ${{ matrix.node }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -270,7 +270,7 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       const args = await decodeReply<unknown[]>(body, { temporaryReferences });
       const action = loadServerAction(renderRequest.actionId);
       try {
-        returnValue = { ok: true, value: await action.apply(null, args) };
+        returnValue = { ok: true, value: await action(...args) };
       } catch (error) {
         if (isControlSignal(error)) throw error;
         // In production React sends a thrown action error to the client as an opaque marker, so this is
@@ -401,6 +401,9 @@ function buildApp(): Hono {
       const loadEndpoint = once(() => route.server());
       const handler: Handler = async (c, next) => {
         const { handler: endpointHandler } = await loadEndpoint();
+        // Hono's `Handler` leaves its return parameter defaulted to `any`, so this hands back exactly what
+        // the app's own handler is declared to return — there is nothing narrower to assert here.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return endpointHandler(c, next);
       };
       const method = route.method ?? 'all';

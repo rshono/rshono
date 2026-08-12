@@ -53,8 +53,8 @@ export default async function Documentation({ params, url }: PageProps<'/docs/:s
               .filter((d) => d.slug !== doc.slug)
               .map((other) => (
                 <p key={other.slug}>
-                  <a href={`/docs/${other.slug}#${other.sections[2]!.id}`}>
-                    {other.title}: {other.sections[2]!.title}
+                  <a href={`/docs/${other.slug}#${other.sections[2].id}`}>
+                    {other.title}: {other.sections[2].title}
                   </a>
                 </p>
               ))}

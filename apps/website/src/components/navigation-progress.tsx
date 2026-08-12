@@ -12,20 +12,24 @@ import { useNavigation } from '@rshono/core/client';
  */
 export function NavigationProgress() {
   const { router } = useNavigation();
-  const [bar, setBar] = useState({ width: 0, opacity: 0 });
+  const pending = router.pending;
+  // The bar is a pure function of `pending` and how long that has been true, so only the *delayed* half of
+  // the animation is state — both transitions below happen inside a timer rather than in the effect body,
+  // which is what keeps a navigation from costing an extra render pass.
+  const [crept, setCrept] = useState(false);
 
   useEffect(() => {
-    if (router.pending) {
-      // Jump in, then creep toward — but never reach — the end while we wait.
-      setBar({ width: 15, opacity: 1 });
-      const ramp = setTimeout(() => setBar({ width: 85, opacity: 1 }), 80);
+    if (pending) {
+      const ramp = setTimeout(() => setCrept(true), 80);
       return () => clearTimeout(ramp);
     }
-    // Done: snap to full, then fade out. (No-op if it was never shown.)
-    setBar((current) => (current.opacity === 0 ? current : { width: 100, opacity: 1 }));
-    const hide = setTimeout(() => setBar({ width: 0, opacity: 0 }), 220);
+    const hide = setTimeout(() => setCrept(false), 220);
     return () => clearTimeout(hide);
-  }, [router.pending]);
+  }, [pending]);
+
+  // Jump in, creep toward — but never reach — the end while we wait, snap to full once the page arrives,
+  // then fade out. A navigation that resolves before the creep starts never shows a bar at all.
+  const bar = pending ? { width: crept ? 85 : 15, opacity: 1 } : crept ? { width: 100, opacity: 1 } : { width: 0, opacity: 0 };
 
   return (
     <div

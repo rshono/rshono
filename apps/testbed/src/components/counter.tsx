@@ -1,15 +1,21 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { readSecretFromHelper } from '../leak-helper';
+
+// Never fires: hydration happens once, and the value it reports cannot change afterwards. Module scope so
+// the reference is stable — a new function each render would resubscribe on every pass.
+const neverChanges = () => () => {};
 
 export function Counter() {
   const [count, setCount] = useState(0);
-  const [hydrated, setHydrated] = useState(false);
-
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
+  // The server snapshot is `false` and the client's is `true`, so this reads as hydrated exactly when it
+  // is — without the extra render an effect-then-setState pass costs.
+  const hydrated = useSyncExternalStore(
+    neverChanges,
+    () => true,
+    () => false,
+  );
 
   return (
     <div className="feature-card" style={{ margin: '1.5rem auto', maxWidth: '28rem' }}>

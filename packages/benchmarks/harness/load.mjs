@@ -67,7 +67,9 @@ for (const target of targets) {
   }
 
   const routes = {};
-  let rssIdle = null;
+  // No initialiser: the first statement in the `try` assigns it, and every read is past the point where
+  // a throw would have left the loop. `rssLoaded` keeps its null — the route loop may never set one.
+  let rssIdle;
   let rssLoaded = null;
   // One sample per route rather than one at the end: a single after-load reading lands straight after
   // the highest-throughput route, catching each server at its churniest moment with no way to tell
