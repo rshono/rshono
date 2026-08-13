@@ -275,6 +275,18 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
     throw error;
   }
   if (controlSignal) {
+    // The shell resolved, so this response is live: React is being pumped into the payload-injecting
+    // transform, and a `redirect()` that surfaced from a boundary settling just before the shell was ready
+    // lands here. Nothing will read that stream now — the signal becomes a redirect instead — so it is stopped
+    // rather than left to render to completion for a response that was replaced.
+    //
+    // Both calls, because they stop different halves. `abort` reaches the two renders through the signal they
+    // were handed; cancelling the response readable propagates back through the transform to release the teed
+    // flight branch it holds a reader on, which `abort` alone does not.
+    renderAbort.abort();
+    void ssrResult.stream.cancel().catch(() => {
+      // Already errored or locked — there is nothing left to release either way.
+    });
     release();
     throw controlSignal;
   }

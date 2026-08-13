@@ -42,12 +42,23 @@ describe('injectFlightPayload', () => {
       },
     });
 
-  async function inject(htmlChunks, { nonce } = {}) {
-    const out = streamOf(htmlChunks).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']), nonce ? { nonce } : {}));
+  async function readAll(stream) {
     const decoder = new TextDecoder();
     let html = '';
-    for await (const chunk of out) html += decoder.decode(chunk, { stream: true });
+    for await (const chunk of stream) html += decoder.decode(chunk, { stream: true });
     return html + decoder.decode();
+  }
+
+  /** Fails loudly instead of hanging the suite: a transformer that never settles is exactly the bug below. */
+  function withTimeout(promise, ms, message) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms).unref()),
+    ]);
+  }
+
+  function inject(htmlChunks, { nonce } = {}) {
+    return readAll(streamOf(htmlChunks).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']), nonce ? { nonce } : {})));
   }
 
   const countOf = (html, needle) => html.split(needle).length - 1;
@@ -97,6 +108,20 @@ describe('injectFlightPayload', () => {
   test('re-emits a trailer even when the document never had one', async () => {
     const html = await inject(['<p>fragment</p>']);
     assert.equal(countOf(html, '</body></html>'), 1);
+  });
+
+  test('ends the response even when the HTML side produced no chunks at all', async () => {
+    // `transform` is what starts the payload write and so what eventually settles the promise `flush` awaits.
+    // An HTML stream that closes having emitted nothing never reaches it, and `flush` used to park on that
+    // promise forever — a response held open rather than ended, with `onDone` never firing to release the
+    // abort forwarder that retains the rendered tree.
+    let released = false;
+    const out = streamOf([]).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']), { onDone: () => (released = true) }));
+
+    const html = await withTimeout(readAll(out), 2000, 'flush never resolved for a zero-chunk HTML stream');
+    assert.match(html, /__FLIGHT_DATA/, 'the payload the client hydrates from still has to be written');
+    assert.equal(countOf(html, '</body></html>'), 1, 'and the document still has to be closed');
+    assert.ok(released, 'onDone must fire, however the response ended');
   });
 
   // The client-disconnect path. @hono/node-server cancels the response reader when the socket's
@@ -694,6 +719,18 @@ describe('createPageCache', () => {
     cache.set('b', pageOf(100));
     assert.ok(cache.get('a') && cache.get('b'), '300 bytes held, not 500');
   });
+
+  test('re-setting a key moves it to the back, so the write is never what its own eviction drops', () => {
+    // `Map.set` on an existing key keeps that key's original position. Without a delete first, growing the
+    // oldest entry would overflow the budget and then evict that same entry — the cache dropping the page it
+    // was just asked to store while keeping newer, smaller ones.
+    const cache = createPageCache(100);
+    cache.set('old', pageOf(10));
+    cache.set('new', pageOf(80));
+    cache.set('old', pageOf(90));
+    assert.ok(cache.get('old'), 'the page just stored must survive its own eviction pass');
+    assert.equal(cache.get('new'), undefined, 'the genuinely older entry is what goes');
+  });
 });
 
 describe('checkReactVersions', () => {
@@ -759,9 +796,9 @@ describe('server bundle externals', () => {
   const [, serverConfig] = createConfigs({ rootDir: MINIMAL_APP_DIR, isDev: false, config: {}, preset: NODE_PRESET });
 
   /** The hook's verdict for one request: `undefined` means "bundle it", a string means "leave it external". */
-  const verdict = (request) => {
+  const verdict = (request, contextInfo) => {
     let result;
-    serverConfig.externals[0]({ request }, (error, value) => {
+    serverConfig.externals[0]({ request, contextInfo }, (error, value) => {
       if (error) throw error;
       result = value;
     });
@@ -772,6 +809,29 @@ describe('server bundle externals', () => {
     assert.equal(verdict('some-npm-package'), 'module-import some-npm-package');
     assert.equal(verdict('@scope/pkg/sub'), 'module-import @scope/pkg/sub');
     assert.equal(verdict('node:fs'), 'module-import node:fs');
+  });
+
+  test('bundles a third-party package reached from the SSR layer, whatever the target', () => {
+    // The SSR layer is where `'use client'` components render on the server, and `env-shadow-loader` is what
+    // keeps a secret out of that HTML. A loader cannot run on a module the bundle merely names, so an
+    // externalized third-party client component was loaded raw at request time and read the real
+    // `process.env` — a secret in the SSR stream on the one target that externalizes anything, `node`.
+    //
+    // Nothing is given up by bundling it: the same module is in the browser bundle too, so it was always
+    // required to be bundleable.
+    const ssr = { issuerLayer: 'server-side-rendering' };
+    assert.equal(verdict('some-ui-library', ssr), undefined, 'a client component from node_modules must be compiled');
+    assert.equal(verdict('@scope/ui/button', ssr), undefined);
+    // The RSC layer is server-only code, and keeps the policy — that is what makes `node` builds fast and
+    // lets a server component use a native addon.
+    assert.equal(verdict('some-ui-library', { issuerLayer: 'react-server-components' }), 'module-import some-ui-library');
+
+    // A builtin reached from the SSR layer is *deferred* by this hook rather than externalized by it, and
+    // `target: 'node'` externalizes it through Rspack's `node` externals preset instead — the same division of
+    // labour the serverless presets rely on when they drop this function altogether. `node:` imports surviving
+    // into the emitted bundle is asserted end to end by the deploy-targets suite.
+    assert.equal(verdict('node:fs', ssr), undefined, 'deferred here, and the node preset is what keeps it external');
+    assert.equal(verdict('node:fs', { issuerLayer: 'react-server-components' }), 'module-import node:fs');
   });
 
   test('bundles the framework, React and Hono, which the server cannot resolve at runtime', () => {
@@ -800,6 +860,92 @@ describe('server bundle externals', () => {
     );
     assert.equal(verdict('D:/app/src/components/home.tsx'), undefined, 'forward-slash drive paths too');
     assert.equal(verdict('\\\\server\\share\\home.tsx'), undefined, 'and UNC paths');
+  });
+});
+
+describe('the env-shadow prelude', () => {
+  /** The prelude the builder actually generates, read off the rule that carries it. */
+  function generatedPrelude() {
+    const [, serverConfig] = createConfigs({ rootDir: MINIMAL_APP_DIR, isDev: false, config: {}, preset: NODE_PRESET });
+    const rule = serverConfig.module.rules.find((entry) => entry.use?.[0]?.loader?.includes('env-shadow-loader'));
+    assert.ok(rule, 'the SSR env-shadow rule has to be in the server config');
+    return rule.use[0].options.prelude;
+  }
+
+  test('shadows env while leaving the rest of process reachable', () => {
+    // The prelude replaces the whole `process` binding for the module it rewrites, and `react-dom/server` is in
+    // that same layer — so anything reading `process.nextTick`, `process.version` or `process.platform` has to
+    // still find it. That is why it is `Object.assign(Object.create(real process), { env })` and not a bare
+    // `{ env }`. Evaluated rather than pattern-matched, because the property under test is what the code *does*.
+    const read = new Function('globalThis', `${generatedPrelude()} return { env: process.env, platform: process.platform, hasNextTick: typeof process.nextTick };`);
+    const result = read(globalThis);
+
+    assert.equal(result.env.DATABASE_URL, undefined, 'a secret must not be readable through the shadowed env');
+    assert.equal(result.env.NODE_ENV, 'production');
+    assert.equal(result.platform, process.platform, 'every other member still resolves through the prototype chain');
+    assert.equal(result.hasNextTick, 'function');
+  });
+
+  test('does not fall over where there is no process to inherit from', () => {
+    // A deploy target need not have one — the same server config is what `workerd` compiles from.
+    const read = new Function('globalThis', `${generatedPrelude()} return process.env.NODE_ENV;`);
+    assert.equal(read({}), 'production');
+  });
+});
+
+describe('env-shadow-loader', () => {
+  const envShadowLoader = createRequire(import.meta.url)('../dist/builder/env-shadow-loader.cjs');
+  const PRELUDE = 'const process = { env: {} }; ';
+
+  /** The slice of Rspack's loader context this loader reads. `layer` is the layer the *module* is in. */
+  const run = (source, { layer = 'ssr' } = {}) =>
+    envShadowLoader.call({ getOptions: () => ({ prelude: PRELUDE, layer: 'ssr' }), _module: { layer } }, source);
+
+  test('shadows env only in the layer it was configured for', () => {
+    const source = 'export const x = process.env.SECRET;';
+    assert.equal(run(source, { layer: 'ssr' }), `${PRELUDE}${source}`, 'the SSR layer is the one that must be shadowed');
+    assert.equal(run(source, { layer: 'rsc' }), source, 'a server component reads the real env');
+    assert.equal(run(source, { layer: null }), source);
+  });
+
+  test('leaves a module that never mentions process.env untouched', () => {
+    // The fast path: every module in the bundle now reaches this loader, so the common case has to be one
+    // string scan and out.
+    const source = 'export const x = 1;';
+    assert.equal(run(source), source);
+  });
+
+  test('inserts the prelude after the whole directive prologue, not after the first directive', () => {
+    // Two directives is ordinary output from a published component library, and this loader now sees
+    // `node_modules`. Splitting the pair would leave the second one preceded by a statement — an ordinary
+    // expression rather than a directive — silently dropping either strict mode or `'use client'`.
+    for (const [first, second] of [
+      ["'use client';", "'use strict';"],
+      ['"use strict";', '"use client";'],
+    ]) {
+      const source = `${first}\n${second}\nexport const x = process.env.SECRET;`;
+      assert.equal(run(source), `${first}\n${second}\n${PRELUDE}export const x = process.env.SECRET;`, `${first} ${second} must stay adjacent`);
+    }
+  });
+
+  test('carries comments, blank lines, semicolon-less directives and a three-directive run', () => {
+    const prologue = "// banner\n/* block */\n'use strict'\n'use client'\n'use server'\n";
+    const body = 'export const x = process.env.SECRET;';
+    assert.equal(run(prologue + body), prologue + PRELUDE + body);
+  });
+
+  test('prepends to a module with no prologue at all', () => {
+    const source = 'export const x = process.env.SECRET;';
+    assert.equal(run(source), PRELUDE + source);
+  });
+
+  test('fails the build rather than shipping unshadowed when it cannot read the layer', () => {
+    // `_module` is a private Rspack field. A silent no-op if it were ever renamed would drop the guarantee
+    // that keeps server secrets out of SSR-rendered client components, with nothing to notice.
+    assert.throws(
+      () => envShadowLoader.call({ getOptions: () => ({ prelude: PRELUDE, layer: 'ssr' }) }, 'process.env.SECRET'),
+      /could not read the module's layer/,
+    );
   });
 });
 

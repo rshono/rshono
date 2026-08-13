@@ -14,7 +14,8 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "@rshono/core": "workspace:*",
-    "rshono-test-external-dep": "workspace:*"
+    "rshono-test-external-dep": "workspace:*",
+    "rshono-test-external-client-dep": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

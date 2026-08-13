@@ -44,6 +44,10 @@ export const routes = defineRoutes({
       component: () => import('./components/whoami'),
     },
     {
+      path: '/suspense-redirect',
+      component: () => import('./components/suspense-redirect'),
+    },
+    {
       path: '/boundary',
       component: () => import('./components/boundary-demo'),
     },

@@ -267,10 +267,17 @@ Every target streams, which is the bar a new one has to clear.
 - **Prerendered pages are never CDN-served**: one URL answers with a document or a flight payload depending on
   the `RSC` request header, and a path-keyed CDN cannot choose. `/_static` and `public/` do go straight to the
   CDN.
-- **The serverless targets bundle your dependencies**; `node` does not. A function is an uploaded directory
-  with no `node_modules` to resolve against, so `vercel`, `aws-lambda` and `cloudflare` compile them in. The
-  cost is that a native addon — or a package that reads its own files off disk — fails the build on those
-  targets rather than the deploy; reach for the `rspack` hook, or deploy to `node`.
+- **The serverless targets bundle your dependencies**; `node` bundles only the ones a `'use client'` component
+  pulls in. A function is an uploaded directory with no `node_modules` to resolve against, so `vercel`,
+  `aws-lambda` and `cloudflare` compile everything in. The cost is that a native addon — or a package that
+  reads its own files off disk — fails the build on those targets rather than the deploy; reach for the
+  `rspack` hook, or deploy to `node`.
+
+  On `node` a server component's dependencies stay external and resolve from `node_modules`, but anything
+  reachable from a `'use client'` component is compiled in on every target. It has to be: the `PUBLIC_`-only
+  `process.env` view is applied by a loader, and a loader cannot run on a module the bundle only imports by
+  name — an external third-party client component would be SSR'd against the real environment. Nothing is
+  given up, since the same module is in the browser bundle and so was always required to be bundleable.
 
 [Deployment docs](https://www.rshono.com/docs/deployment), including Cloudflare bindings and the AWS setup.
 
@@ -326,5 +333,6 @@ In dev the CLI watches both bundles, runs the server bundle in a worker thread (
 requests gated on readiness so nothing drops), and fronts everything on one port with static serving and an
 SSE channel: client edits hot-apply via react-refresh, server component edits re-fetch the payload in place,
 and browser state survives both. In production `dist/server/main.mjs` has React, Hono and the framework
-bundled in. On `node` your own dependencies still resolve from `node_modules` beside it; on the serverless
-targets they are bundled too, because nothing installs them there.
+bundled in. On `node` your server-side dependencies still resolve from `node_modules` beside it; on the
+serverless targets they are bundled too, because nothing installs them there. Whatever a `'use client'`
+component reaches is bundled on every target, which is what lets the env shadow cover it.

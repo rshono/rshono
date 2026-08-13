@@ -18,6 +18,16 @@ export const runtime: DeployRuntime = {
     // Served from `.vercel/output/static` before the function runs.
   },
 
+  mountPublicFallback(): void {
+    // As above: `public/` is in the static output and `{ handle: 'filesystem' }` is matched ahead of this
+    // function, so nothing here could ever answer for one of those paths. Stated as an override rather than
+    // left to fall out of `dist/public` not being uploaded, because that would make the behaviour incidental
+    // to a `cpSync` in `build.ts` instead of a decision.
+    //
+    // The one thing this hands to the platform: resolving a directory to its `index.html`. Vercel's static
+    // handler does that; `serveStatic`, which the filesystem targets use, is no longer in the path.
+  },
+
   serveApp(app: Hono): unknown {
     return handle(app);
   },

@@ -41,10 +41,14 @@ export async function finalizeVercelBuild(ctx: DeployBuildContext): Promise<void
   cpSync(ctx.staticDir, join(staticOut, '_static'), { recursive: true });
   if (ctx.publicDir) cpSync(ctx.publicDir, staticOut, { recursive: true });
 
-  // Shipped inside the function: the bundle, plus the two things it reads from disk at request time.
+  // Shipped inside the function: the bundle, and the one thing it reads from disk at request time.
+  //
+  // `public/` is deliberately *not* among them, though it is on the filesystem targets. It went into the
+  // static output above, and `{ handle: 'filesystem' }` sits ahead of the catch-all route, so the platform
+  // answers those paths before the function is invoked — a copy here is bytes uploaded and unpacked on every
+  // cold start that nothing can ever read. `vercel/runtime.ts` turns the matching mount off to say so.
   cpSync(join(ctx.distDir, 'server'), join(functionDir, 'dist', 'server'), { recursive: true });
   if (existsSync(ctx.ssgDir)) cpSync(ctx.ssgDir, join(functionDir, 'dist', 'ssg'), { recursive: true });
-  if (ctx.publicDir) cpSync(ctx.publicDir, join(functionDir, 'dist', 'public'), { recursive: true });
 
   writeFileSync(
     join(functionDir, '.vc-config.json'),

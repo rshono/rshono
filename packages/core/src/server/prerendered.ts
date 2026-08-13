@@ -69,8 +69,14 @@ export function createPageCache(maxBytes = DEFAULT_CACHE_BYTES): {
     set(key, page) {
       const size = page.body.byteLength;
       if (size > maxBytes) return;
+      // Deleted before it is set, so re-setting an existing key moves it to the *back*: `Map.set` on a key it
+      // already holds keeps that key's original position, which would leave the entry just stored sitting at
+      // the front as the next thing evicted — a store whose eviction could drop the write that caused it.
       const replaced = pages.get(key);
-      if (replaced) bytes -= replaced.body.byteLength;
+      if (replaced) {
+        bytes -= replaced.body.byteLength;
+        pages.delete(key);
+      }
       pages.set(key, page);
       bytes += size;
       // Insertion-ordered, so the first key is the oldest.

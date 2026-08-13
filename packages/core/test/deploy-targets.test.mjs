@@ -106,6 +106,24 @@ describe('vercel', () => {
     assert.equal(config.supportsResponseStreaming, true, 'buffering would undo streamed SSR');
   });
 
+  test('runs the function on the Node the build used, rather than a version pinned in the framework', () => {
+    // A hard-coded major is a build that starts failing on a date the framework does not control, with an
+    // error pointing at a file the user did not write. Asserted against `process.versions` rather than a
+    // literal so this cannot quietly become the hard-coded value again on whatever Node CI happens to run.
+    const config = JSON.parse(readFileSync(join(functionDir, '.vc-config.json'), 'utf8'));
+    assert.equal(config.runtime, `nodejs${process.versions.node.split('.')[0]}.x`);
+  });
+
+  test('uploads public/ to the CDN only, not a second time inside the function', () => {
+    // `{ handle: 'filesystem' }` precedes the catch-all route, so the platform answers these paths before the
+    // function is reached: a copy inside it is upload size and cold-start unpack time nothing can read.
+    assert.ok(existsSync(join(output, 'static', 'robots.txt')), 'the CDN copy is the one that serves');
+    assert.equal(existsSync(join(functionDir, 'dist', 'public')), false, 'and it must not be shipped twice');
+    // The two the function genuinely does read off its own disk.
+    assert.ok(existsSync(join(functionDir, 'dist', 'server')));
+    assert.ok(existsSync(join(functionDir, 'dist', 'ssg')));
+  });
+
   test('routes assets before the function, and everything else to it', () => {
     const { version, routes } = JSON.parse(readFileSync(join(output, 'config.json'), 'utf8'));
     assert.equal(version, 3);

@@ -244,7 +244,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     },
     externalsType: 'module-import',
     externals: [
-      ({ request }, callback) => {
+      ({ request, contextInfo }, callback) => {
         if (
           !request ||
           isPathRequest(request) ||
@@ -252,7 +252,19 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
           request.startsWith('@rshono/') ||
           request.startsWith('builtin:') ||
           request.includes('!') ||
-          BUNDLED_PACKAGES.test(request)
+          BUNDLED_PACKAGES.test(request) ||
+          // Anything reached from the SSR layer, which is where `'use client'` components are rendered on the
+          // server. It has to be *compiled* rather than imported by name, because the env-shadow loader is what
+          // keeps a secret out of SSR'd HTML and a loader cannot run on a module the bundle only names — an
+          // externalized third-party client component is loaded raw at request time and reads the real
+          // `process.env`. Widening the loader's rule to cover `node_modules` did not reach this: there was no
+          // module for it to run on.
+          //
+          // Free of the usual bundling trade-off, too. Every module in this layer is in the *browser* bundle as
+          // well, so it is already required to be bundleable — a native addon or a `__dirname` file read could
+          // not have been a client component in the first place. The RSC layer, where server-only dependencies
+          // live, keeps the externals policy.
+          contextInfo?.issuerLayer === Layers.ssr
         ) {
           return callback();
         }

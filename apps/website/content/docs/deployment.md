@@ -70,11 +70,16 @@ via react-refresh; server component edits re-fetch the payload in place. Browser
 In production `dist/server/main.mjs` always has React, Hono and the framework bundled in. What happens to
 **your** dependencies is a property of the target:
 
-- On **`node`** they stay external and resolve from the `node_modules` beside the build, which is where the
-  process runs.
+- On **`node`** a server component's dependencies stay external and resolve from the `node_modules` beside the
+  build, which is where the process runs.
 - On **`cloudflare`, `vercel` and `aws-lambda`** they are bundled in too. A function is an uploaded directory
   rather than an installed one, so there is no `node_modules` at request time and an external
   `import 'some-package'` would be a cold start that dies on `ERR_MODULE_NOT_FOUND`.
+- On **every target**, anything a `'use client'` component reaches is bundled. The `PUBLIC_`-only
+  `process.env` view those modules are server-rendered against is applied by a loader, and a loader cannot run
+  on a module the bundle only imports by name — left external, a third-party client component would be SSR'd
+  against the real environment, leaking whatever it reads and disagreeing with hydration. This costs nothing:
+  the same module ships in the browser bundle, so it was always required to be bundleable.
 
 The cost on those three: a dependency that cannot be bundled — a native addon, or one that reads its own
 files off disk relative to `__dirname` — fails the **build** rather than the deploy. Reach for the `rspack`

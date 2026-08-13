@@ -3,7 +3,8 @@
 // the client runtime is running lives in test/browser, and the hardened permutations — a CSP, a CSRF
 // allowlist, a small body cap, trustProxy — in prod-config.test.mjs.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { Agent, request } from 'node:http';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -135,6 +136,23 @@ test('redirect() in a server component: an HTTP 3xx on hard navigation, a digest
 
   const soft = await fetch(`${base}/dashboard`, { headers: { RSC: '1' } });
   assert.match(await soft.text(), /RSHONO_REDIRECT/, 'the client needs the digest to follow the redirect itself');
+});
+
+test('redirect() from inside a bare Suspense, after the shell has already resolved', async () => {
+  // `/dashboard` above redirects from the page component, so the signal arrives before there is a response to
+  // abandon. This is the other window: a bare `<Suspense>` has no `CatchBoundary` to re-throw the signal, so
+  // React SSR renders the fallback, the shell resolves, and the HTML response is live and being pumped by the
+  // time the RSC render records the redirect. The framework has to drop that half-built response and answer
+  // with the redirect — which it does by aborting the render, cancelling the stream it will not serve, and
+  // re-throwing. Nothing exercised this path before.
+  const hard = await fetch(`${base}/suspense-redirect`, { redirect: 'manual' });
+  assert.equal(hard.status, 303, 'a hard load must still get a real redirect, not a half-rendered document');
+  assert.match(hard.headers.get('location') ?? '', /\/login$/);
+  assert.doesNotMatch(await hard.text(), /Loading…/, 'and not the Suspense fallback the abandoned render had started');
+
+  const soft = await fetch(`${base}/suspense-redirect`, { headers: { RSC: '1' } });
+  assert.equal(soft.status, 200, 'a flight fetch never reaches the SSR half, so the signal rides the payload');
+  assert.match(await soft.text(), /RSHONO_REDIRECT/);
 });
 
 test('a client-initiated action that redirects answers with a flight payload the runtime navigates on', async () => {
@@ -528,6 +546,14 @@ test('secrets never reach the browser — not in the HTML, the flight payload, o
   assert.ok(!html.includes(APP_ENV.DATABASE_URL), 'DATABASE_URL value must not appear in SSR HTML');
   assert.ok(html.includes(APP_ENV.PUBLIC_API_ENDPOINT), 'the PUBLIC_ variable should be inlined');
 
+  // The same guarantee for a `'use client'` component that came out of `node_modules` rather than `src/`.
+  // Worth its own assertion because it used to fail here and nowhere else: on the `node` target a third-party
+  // dependency stays external, so the module was loaded raw at request time and read the *real* `process.env`
+  // while the browser bundle saw the `PUBLIC_`-only view — a secret in the HTML stream, and a hydration
+  // mismatch on anything else the host sets.
+  assert.match(html, /external secret: \(no secret\)/, 'a node_modules client component must be SSR-rendered against the shadowed env');
+  assert.match(html, /external public: public dummy url/, 'while PUBLIC_ values still reach it');
+
   const flight = await (await fetch(`${base}/`, { headers: { RSC: '1' } })).text();
   assert.ok(!flight.includes(APP_ENV.DATABASE_URL), 'DATABASE_URL value must not appear in the flight payload');
 
@@ -544,6 +570,90 @@ test('secrets never reach the browser — not in the HTML, the flight payload, o
     sources.some((source) => source.includes(APP_ENV.PUBLIC_API_ENDPOINT)),
     'PUBLIC_API_ENDPOINT was not inlined',
   );
+});
+
+test('no unguarded reference to process survives into the client bundle', () => {
+  // The env substitution replaces the exact expression `process.env` and nothing else, so any *other* member
+  // read off `process` compiles to a live reference — and in a browser there is no `process`, so the component
+  // throws `ReferenceError: process is not defined` the moment it renders.
+  //
+  // This is a hole the rest of the suite cannot see. Every other env assertion is made against SSR output,
+  // where `process` is real and the same code works fine; only a browser notices, and the Playwright suite is
+  // the one part of this project that cannot run everywhere. It is checked here instead, on the minified
+  // production chunks — minified because comments are gone by then, so a mention of `process.env` in prose
+  // cannot be mistaken for a read.
+  //
+  // React's `reportError` fallback is the one legitimate hit: it reaches `process.emit`, but only behind
+  // `typeof process === 'object'`, which is safe for an undeclared identifier. Anything new here is either a
+  // bug of this shape or a second guarded case — decide which, then add it.
+  const allowed = new Set(['emit']);
+  const found = new Map();
+  for (const source of clientChunks()) {
+    for (const [, member] of source.matchAll(/process\.([A-Za-z_$][\w$]*)/g)) {
+      if (!allowed.has(member)) found.set(member, (found.get(member) ?? 0) + 1);
+    }
+  }
+  assert.deepEqual(
+    [...found.keys()],
+    [],
+    `process.${[...found.keys()].join(', process.')} reaches the browser, where \`process\` does not exist — ` +
+      'only `process.env` is substituted',
+  );
+});
+
+test('the server bundle ships a source map and the client bundle does not', () => {
+  // The asymmetry is the whole decision. A server map never leaves the server and is what turns the
+  // `onServerError` funnel — the error-tracker integration — from minified frames into real ones. A client map
+  // is served from `/_static` like everything beside it, and would publish the original source of the app's
+  // own modules to anyone who asked.
+  const bundle = readFileSync(join(TESTBED_DIST, 'server', 'main.mjs'), 'utf8');
+  assert.match(bundle, /\/\/# sourceMappingURL=main\.mjs\.map\s*$/, 'the minified bundle has to point at its map');
+  assert.ok(readFileSync(join(TESTBED_DIST, 'server', 'main.mjs.map'), 'utf8').length > 0, 'and the map has to be emitted beside it');
+
+  const clientMaps = readdirSync(join(TESTBED_DIST, 'static', 'chunks')).filter((file) => file.endsWith('.map'));
+  assert.deepEqual(clientMaps, [], 'a client source map would publish the app’s own source');
+});
+
+test('a production stack trace maps to the original TypeScript with no Node flag passed', async () => {
+  // Started the way a serverless host starts it — `node dist/server/main.mjs`, no CLI and no
+  // `--enable-source-maps` — because that is the case the flag cannot cover: Vercel and Lambda spawn the
+  // process themselves and pass nothing of ours. What makes it work is the runtime calling
+  // `process.setSourceMapsEnabled(true)` as it loads. Without both halves this reports minified frames to
+  // whatever `onServerError` forwards them to, which is the reason anyone wires it up.
+  const child = spawn(process.execPath, [join(TESTBED_DIST, 'server', 'main.mjs')], {
+    env: { ...process.env, ...APP_ENV, PORT: '0' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => (output += chunk));
+  child.stderr.on('data', (chunk) => (output += chunk));
+
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`the bundle did not start:\n${output}`)), 30_000);
+      const check = () => {
+        const match = output.match(/serving on http:\/\/[^:]+:(\d+)/);
+        if (match) {
+          clearTimeout(timer);
+          resolve(Number(match[1]));
+        }
+      };
+      child.stdout.on('data', check);
+      child.stderr.on('data', check);
+      child.on('exit', (code) => reject(new Error(`the bundle exited early (${code}):\n${output}`)));
+    });
+
+    await (await fetch(`http://localhost:${port}/api/boom`, { headers: { Accept: 'text/html' } })).text();
+    // The child's stderr reaches us asynchronously.
+    for (let waited = 0; waited < 3000 && !/boom\.ts/.test(output); waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.match(output, /src[\\/]boom\.ts:\d+:\d+/, 'the frame must name the TypeScript source, not main.mjs');
+  } finally {
+    await stopServer(child);
+  }
 });
 
 // `csrf()` from hono, registered in the testbed's src/server.ts. The framework has no origin check

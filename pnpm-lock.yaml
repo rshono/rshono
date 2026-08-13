@@ -53,6 +53,9 @@ importers:
       react-dom:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
+      rshono-test-external-client-dep:
+        specifier: workspace:*
+        version: link:../../packages/core/test/fixtures/external-client-dep
       rshono-test-external-dep:
         specifier: workspace:*
         version: link:../../packages/core/test/fixtures/external-dep
@@ -172,6 +175,12 @@ importers:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
+
+  packages/core/test/fixtures/external-client-dep:
+    dependencies:
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
 
   packages/core/test/fixtures/external-dep: {}
 
