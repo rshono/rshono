@@ -1,26 +1,46 @@
 const HEADER_ACTION_ID = 'x-rsc-action';
-const RSC_CONTENT_TYPE = 'text/x-component';
+
+/**
+ * The header that asks a page URL for its flight payload rather than its HTML document, and the value it
+ * carries. One URL answers as either, so this is what the response `Vary`s on.
+ *
+ * A header of its own rather than `Accept: text/x-component`, which is what this used to be. Content
+ * negotiation was the more standards-shaped mechanism and it cost too much: a prerendered page is served
+ * `public, max-age=300`, and `Vary: Accept` on a publicly cacheable response is close to a cache-disabling
+ * header — real browsers send long `Accept` strings that differ by vendor and version, so a CDN keyed on it
+ * stores a copy per variant of the same bytes, and some shared caches decline to store a `Vary` they consider
+ * high-cardinality at all. This one has exactly two states.
+ */
+const HEADER_RSC = 'rsc';
+const HEADER_RSC_VALUE = '1';
 
 /**
  * The four shapes an incoming render request can take, as a discriminated union so that illegal
  * combinations — an action id on a GET — are unrepresentable.
  *
  * - `document` — a normal navigation; respond with a full SSR HTML document.
- * - `rsc` — a soft-navigation flight fetch (`Accept: text/x-component`).
+ * - `rsc` — a soft-navigation flight fetch (`RSC: 1`).
  * - `form-action` — a progressive-enhancement `<form>` POST (no JavaScript).
  * - `rsc-action` — a client-initiated server-action call carrying an action id.
  */
 export type RenderRequest = { kind: 'document' } | { kind: 'rsc' } | { kind: 'form-action' } | { kind: 'rsc-action'; actionId: string };
 
-/** Builds the `Request` the client sends to ask a page for its flight payload, optionally carrying a server action. */
-export function createRscRequest(urlString: string, action?: { id: string; body: BodyInit }): Request {
+/**
+ * Builds the `Request` the client sends to ask a page for its flight payload, optionally carrying a server
+ * action.
+ *
+ * `signal` is for a navigation, which a later one supersedes — an action is never abandoned that way, so its
+ * caller passes none.
+ */
+export function createRscRequest(urlString: string, action?: { id: string; body: BodyInit }, signal?: AbortSignal): Request {
   const url = new URL(urlString, location.origin);
-  const headers = new Headers({ Accept: RSC_CONTENT_TYPE });
+  const headers = new Headers({ [HEADER_RSC]: HEADER_RSC_VALUE });
   if (action) headers.set(HEADER_ACTION_ID, action.id);
   return new Request(url, {
     method: action ? 'POST' : 'GET',
     headers,
     body: action?.body,
+    signal,
   });
 }
 
@@ -33,13 +53,16 @@ export function parseRenderRequest(request: Request): RenderRequest {
     if (FORM_CONTENT_TYPES.test(request.headers.get('content-type') ?? '')) return { kind: 'form-action' };
     return { kind: 'document' };
   }
-  return { kind: acceptsRsc(request) ? 'rsc' : 'document' };
+  return { kind: asksForRsc(request) ? 'rsc' : 'document' };
 }
 
 /** Whether the client asked for a flight payload. For GET paths that only need the boolean, without parsing. */
-export function acceptsRsc(request: Request): boolean {
-  return request.headers.get('accept')?.includes(RSC_CONTENT_TYPE) ?? false;
+export function asksForRsc(request: Request): boolean {
+  return request.headers.get(HEADER_RSC) === HEADER_RSC_VALUE;
 }
+
+/** The header a response has to `Vary` on, since one page URL answers as either representation. */
+export const RSC_VARY_HEADER = 'RSC';
 
 /** True when the response should be a flight payload rather than an HTML document. */
 export function wantsRsc(renderRequest: RenderRequest): boolean {

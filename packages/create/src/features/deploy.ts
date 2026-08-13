@@ -86,8 +86,9 @@ function deployFeatures(pm: PackageManager): Record<DeployTargetName, Feature> {
       notes: ['Use a Function URL in RESPONSE_STREAM mode — a buffered invoke mode drops the streaming.'],
       platformSetup: [
         `There is no settings page here; the upload is yours to script. A job needs \`${pm.name} install && ${build}\`,`,
-        'then the function package: `dist/`, plus `node_modules` for any dependency of your own, which the server',
-        'bundle leaves external.',
+        'then the function package: `dist/` and nothing else, with the handler at `dist/server/main.mjs`. Your',
+        'dependencies are compiled into the bundle for this target, so no `node_modules` is uploaded — which also',
+        'means a native addon fails the build here rather than the deploy.',
       ].join('\n'),
     },
   };

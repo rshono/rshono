@@ -1,0 +1,69 @@
+name: Bug report
+description: Something the framework does that it should not
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't report security issues here — see [SECURITY.md](https://github.com/rshono/rshono/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead. Paste the error and its stack if there was one.
+    validations:
+      required: true
+
+  - type: input
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >
+        A link to the smallest app that shows it — `npx @rshono/create@latest` plus your change. Nothing helps
+        more; an issue without one may sit until someone can guess their way to it.
+      placeholder: https://github.com/you/rshono-bug
+
+  - type: dropdown
+    id: command
+    attributes:
+      label: Where it happens
+      multiple: true
+      options:
+        - rshono dev
+        - rshono build
+        - rshono start
+        - a deployed app
+        - npx @rshono/create
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: Deploy target
+      description: The `deploy` in `rshono.config.ts`. Several boundaries are implemented per platform, so this often decides the answer.
+      options:
+        - node (the default)
+        - cloudflare
+        - vercel
+        - aws-lambda
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `npx rshono --version`, plus `node --version` and your OS.
+      placeholder: rshono 1.0.0-rc.13, node v22.18.0, macOS 15
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I am on the latest `@rshono/core`
+        - label: '`react` and `react-dom` are installed at the same version (the build says so if not)'

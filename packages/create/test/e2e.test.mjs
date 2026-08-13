@@ -6,7 +6,7 @@
 // Opt-in: it packs the framework, then installs from the registry twice. Set CREATE_RSHONO_E2E=1.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -30,15 +30,25 @@ function run(command, args, cwd, label) {
   return result.stdout ?? '';
 }
 
+let packed;
+
 /**
  * The framework as a tarball, so the scaffolded app installs the code in this checkout rather than
  * whatever is on npm — which for an unreleased version is nothing at all.
+ *
+ * Packed on first use and reused, rather than produced by the first test for the rest to find on disk. That
+ * arrangement made every test after the first silently depend on it having run: with
+ * `--test-name-pattern`, they resolved the tarball to the empty string, installed a `@rshono/core` that was
+ * not the framework, and failed with a type error in the scaffolded app that had nothing to do with the case
+ * under test. Any one of these can now be run on its own.
  */
-function packFramework() {
+function frameworkTarball() {
+  if (packed) return packed;
   run('pnpm', ['--filter', '@rshono/core', 'pack', '--pack-destination', workspace], REPO_ROOT, 'pnpm pack');
   const tarball = readdirSync(workspace).find((entry) => entry.endsWith('.tgz'));
   assert.ok(tarball, 'pnpm pack produced no tarball');
-  return join(workspace, tarball);
+  packed = join(workspace, tarball);
+  return packed;
 }
 
 function scaffold(name, flags, tarball) {
@@ -60,7 +70,7 @@ function scaffold(name, flags, tarball) {
 }
 
 test('a scaffolded app installs, typechecks and builds', { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' }, () => {
-  const tarball = packFramework();
+  const tarball = frameworkTarball();
   const dir = scaffold('plain-app', [], tarball);
 
   run('npm', ['run', 'typecheck'], dir, 'typecheck');
@@ -83,7 +93,7 @@ test(
   "and installs and builds on pnpm, whose layout hides the framework's own dependencies",
   { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' },
   () => {
-    const tarball = join(workspace, readdirSync(workspace).find((entry) => entry.endsWith('.tgz')) ?? '');
+    const tarball = frameworkTarball();
     const name = 'pnpm-app';
     run(process.execPath, [CLI, name, '-y', '--pm', 'pnpm', '--no-install', '--no-git'], workspace, `scaffold ${name}`);
     const dir = join(workspace, name);
@@ -116,7 +126,7 @@ test(
   'the ESLint preset installs on the TypeScript it pins, and the scaffold passes its own rules',
   { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' },
   () => {
-    const tarball = join(workspace, readdirSync(workspace).find((entry) => entry.endsWith('.tgz')) ?? '');
+    const tarball = frameworkTarball();
     const dir = scaffold('eslint-app', ['--quality', 'prettier-eslint'], tarball);
 
     const installed = JSON.parse(readFileSync(join(dir, 'node_modules', 'typescript', 'package.json'), 'utf8')).version;
@@ -158,7 +168,7 @@ test('every quality preset produces configs its own tools accept', { skip: enabl
 });
 
 test('Tailwind compiles through its own PostCSS pass, on a real install', { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' }, () => {
-  const tarball = join(workspace, readdirSync(workspace).find((entry) => entry.endsWith('.tgz')) ?? '');
+  const tarball = frameworkTarball();
   const dir = scaffold('tw-app', ['--tailwind', '--quality', 'biome', '--deploy', 'cloudflare'], tarball);
 
   run('npm', ['run', 'typecheck'], dir, 'typecheck');
@@ -175,4 +185,48 @@ test('Tailwind compiles through its own PostCSS pass, on a real install', { skip
   // Biome has to accept its own generated config, and the Tailwind stylesheet it cannot parse must be
   // outside what it checks.
   run('npm', ['run', 'check'], dir, 'biome check');
+});
+
+/**
+ * Every deploy target, scaffolded and built the way a user would.
+ *
+ * The tests above only ever built the default (`node`, implicitly) and `cloudflare`, so a target whose
+ * scaffold did not build was invisible here — and "it builds for the platform I picked" is the whole promise of
+ * choosing one in the prompt. What a target contributes is small (scripts, a CLI, gitignore lines, a note), but
+ * each one also selects a different server-compiler configuration inside the framework: a different externals
+ * policy, different resolve conditions, a different syntax target, and a `finalize` hook that has to assemble a
+ * layout on disk. That is the part worth building for real.
+ *
+ * `--no-install` plus one shared install per target keeps this to a build each. `cloudflare` is skipped: the
+ * Tailwind test above already builds it, and it is the one target that installs a CLI with platform binaries.
+ */
+test('every deploy target scaffolds an app that installs, typechecks and builds', { skip: enabled ? false : 'set CREATE_RSHONO_E2E=1' }, () => {
+  const tarball = frameworkTarball();
+
+  /** What each target has to leave on disk for its platform to be deployable, beyond `dist/server`. */
+  const outputs = {
+    node: ['dist/static'],
+    // The Build Output API layout the platform uploads verbatim.
+    vercel: ['.vercel/output/config.json', '.vercel/output/functions/index.func/.vc-config.json', '.vercel/output/static'],
+    // No finalize hook — the deployment package is `dist/` itself, handler included.
+    'aws-lambda': ['dist/server/main.mjs', 'dist/static'],
+  };
+
+  for (const [target, expected] of Object.entries(outputs)) {
+    const dir = scaffold(`deploy-${target}`, ['--deploy', target], tarball);
+
+    run('npm', ['run', 'typecheck'], dir, `typecheck (${target})`);
+    const output = run('npm', ['run', 'build'], dir, `build (${target})`);
+    assert.match(output, /build complete/, `${target}: the build has to finish`);
+
+    for (const path of expected) {
+      assert.ok(existsSync(join(dir, ...path.split('/'))), `${target}: the build did not produce ${path}`);
+    }
+
+    // The scripts the target's own README tells the user to run have to exist under those exact names — the
+    // README is generated from this same table, so a missing one is a document describing a different app.
+    const scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts;
+    assert.ok(scripts.build && scripts.dev && scripts.typecheck, `${target}: the base scripts must survive`);
+    assert.ok(scripts.start ?? scripts.preview ?? scripts.deploy, `${target}: a target has to offer at least one way to run or ship what it built`);
+  }
 });

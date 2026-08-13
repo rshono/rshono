@@ -78,5 +78,10 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   });
 
   console.log(`  ✓ build complete — ${preset.deployHint}`);
+
+  // Rspack's worker pool can keep the loop alive after `close()`, so the exit is explicit — but a piped
+  // stdout is asynchronous, and exiting drops whatever has not drained. In CI that is exactly the lines
+  // saying what was built and where it went. A zero-length write's callback fires behind the real ones.
+  await new Promise<void>((resolve) => process.stdout.write('', () => resolve()));
   process.exit(0);
 }

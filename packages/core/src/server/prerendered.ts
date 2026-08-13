@@ -15,9 +15,11 @@
 export type PrerenderVariant = 'html' | 'flight';
 
 export const VARIANTS = {
-  html: { file: 'index.html', accept: 'text/html', contentType: 'text/html' },
-  flight: { file: 'index.rsc', accept: 'text/x-component', contentType: 'text/x-component' },
-} as const satisfies Record<PrerenderVariant, { file: string; accept: string; contentType: string }>;
+  // `headers` is what the build asks each representation for, so it stays the same request the browser makes:
+  // a document is the default and a flight payload is the `RSC` header. See `runtime/request.ts`.
+  html: { file: 'index.html', headers: {}, contentType: 'text/html' },
+  flight: { file: 'index.rsc', headers: { RSC: '1' }, contentType: 'text/x-component' },
+} as const satisfies Record<PrerenderVariant, { file: string; headers: Record<string, string>; contentType: string }>;
 
 /**
  * Where a route's prerendered output lives, relative to the output root — or `null` for a path that cannot be
@@ -42,19 +44,47 @@ export function prerenderedRelPath(requestPath: string, variant: PrerenderVarian
   return ssgFilePath(requestPath, variant);
 }
 
+/** The default cache budget: enough for a large documentation site's working set, small enough to be ignorable. */
+const DEFAULT_CACHE_BYTES = 32 * 1024 * 1024;
+
 /**
  * A bounded, insertion-ordered cache of prerendered pages, so a site with thousands of them keeps a working set
  * rather than the whole build in memory. Only *hits* are stored — caching misses would let anyone mint entries
  * by requesting paths that don't exist — and the files never change while the server is up.
+ *
+ * Bounded by **bytes**, not by entry count: a count says nothing about how much memory it stands for, and a
+ * page can be any size. At 128 entries — the previous limit — a documentation site with half-megabyte pages
+ * retained ~64 MB across the two variants, with nothing about the number to suggest it.
+ *
+ * A page larger than the whole budget is served and not stored, rather than evicting everything to hold one.
  */
-export function createPageCache(max = 128): { get(key: string): PrerenderedPage | undefined; set(key: string, page: PrerenderedPage): void } {
+export function createPageCache(maxBytes = DEFAULT_CACHE_BYTES): {
+  get(key: string): PrerenderedPage | undefined;
+  set(key: string, page: PrerenderedPage): void;
+} {
   const pages = new Map<string, PrerenderedPage>();
+  let bytes = 0;
   return {
     get: (key) => pages.get(key),
     set(key, page) {
+      const size = page.body.byteLength;
+      if (size > maxBytes) return;
+      // Deleted before it is set, so re-setting an existing key moves it to the *back*: `Map.set` on a key it
+      // already holds keeps that key's original position, which would leave the entry just stored sitting at
+      // the front as the next thing evicted — a store whose eviction could drop the write that caused it.
+      const replaced = pages.get(key);
+      if (replaced) {
+        bytes -= replaced.body.byteLength;
+        pages.delete(key);
+      }
       pages.set(key, page);
+      bytes += size;
       // Insertion-ordered, so the first key is the oldest.
-      if (pages.size > max) pages.delete(pages.keys().next().value!);
+      while (bytes > maxBytes) {
+        const oldest = pages.keys().next().value!;
+        bytes -= pages.get(oldest)!.body.byteLength;
+        pages.delete(oldest);
+      }
     },
   };
 }

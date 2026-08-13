@@ -178,15 +178,41 @@ export function injectFlightPayload(
       });
     },
     async flush(controller) {
+      // Both of these have to happen *before* the await, and in this order.
+      try {
+        // Anything still batched belongs ahead of the payload scripts, which sit at the end of `<body>`.
+        if (boundary) {
+          unschedule(boundary);
+          boundary = null;
+          emitBatch(controller);
+        }
+        // A writable side that closed without ever reaching `transform` — an HTML stream with no chunks at
+        // all — leaves nothing to have started the payload, and `flightDone` is only ever called from that
+        // chain or from `cancel`. Without this the await below parks on a promise nothing will settle and the
+        // response never ends. `cancelled` short-circuits it: there is nowhere to write the payload to.
+        if (!startedFlight) {
+          startedFlight = true;
+          if (cancelled) flightDone();
+          else
+            void writeFlight(controller)
+              .catch((error) => controller.error(error))
+              .then(flightDone);
+        }
+      } catch {
+        // The consumer went away while the batch was being emitted, so there is nothing left to write to and
+        // nothing to wait for. Settled explicitly rather than left dangling, so the payload chain is released.
+        cancelled = true;
+        flightReader?.cancel().catch(() => {});
+        flightDone();
+        onDone?.();
+        return;
+      }
+
       await flightWritten;
       // That await spans the whole payload, and the consumer can go away inside it — with `cancel` skipped
       // (see `cancelled`), a throwing enqueue is the only signal. Unguarded it rejects `flush`, which
       // nothing owns and which surfaces as an unhandled rejection.
       try {
-        if (boundary) {
-          unschedule(boundary);
-          emitBatch(controller);
-        }
         if (!cancelled) controller.enqueue(encoder.encode(TRAILER));
       } catch {
         // Nowhere left to put the trailer. A response the client abandoned is not a fault.

@@ -19,7 +19,7 @@ test('dev serves both representations of a page through the worker proxy', async
   assert.match(html, /__FLIGHT_DATA/);
   assert.match(html, /\/_static\/chunks\/main\.js/, 'dev assets are unhashed, so a reload picks up a rebuild');
 
-  const flight = await fetch(`${base}/users`, { headers: { Accept: 'text/x-component' } });
+  const flight = await fetch(`${base}/users`, { headers: { RSC: '1' } });
   assert.equal(flight.status, 200);
   assert.match(flight.headers.get('content-type'), /text\/x-component/);
 });
@@ -28,7 +28,7 @@ test('dev resolves the browser-facing URL through the proxy, not the worker addr
   // `trustProxy` is off by default but forced on in dev, because the dev front-end proxies to a
   // worker on a random localhost port and X-Forwarded-Host is the only thing that knows the real
   // one. Without it every page would see the internal 127.0.0.1:<worker> address.
-  const flight = await (await fetch(`${base}/whoami`, { headers: { Accept: 'text/x-component' } })).text();
+  const flight = await (await fetch(`${base}/whoami`, { headers: { RSC: '1' } })).text();
   assert.match(flight, new RegExp(`http://localhost:${port}/whoami`), 'the page URL should be the address the browser used');
   assert.doesNotMatch(flight, /127\.0\.0\.1/, 'the internal worker address must not leak into the page URL');
 });
@@ -38,7 +38,7 @@ test('dev does not serialize the ctx page prop into the flight payload', async (
   // the wire (that is what the `"props":` row below is), walking own *enumerable* properties. `ctx`
   // is defined non-enumerable precisely so it is skipped — an enumerable one would ship the whole
   // Hono Context, `c.env` bindings and all, to the browser and add >10 kB to every page.
-  const flight = await (await fetch(`${base}/`, { headers: { Accept: 'text/x-component', cookie: 'visitor=Ada' } })).text();
+  const flight = await (await fetch(`${base}/`, { headers: { RSC: '1', cookie: 'visitor=Ada' } })).text();
   assert.match(flight, /"props":\{[^{}]*"url"/, 'dev really does serialize page props — this test is only meaningful while it does');
   // As a JSON key — the home page renders the literal word "ctx" as prose, which is not a leak.
   assert.doesNotMatch(flight, /"ctx":/, 'the ctx prop must stay out of the dev debug payload');

@@ -1,5 +1,24 @@
 'use strict';
-const DIRECTIVE_PROLOGUE = /^(?:\s|\/\/[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(?:(['"])use [a-z -]+\1\s*;?)?/;
+
+/** Whitespace and comments — what may sit before or between directives without ending the prologue. */
+const TRIVIA = '(?:\\s|//[^\\n]*(?:\\n|$)|/\\*[\\s\\S]*?\\*/)*';
+/** One directive: `'use strict'`, `"use client"`, `'use server'`. The backreference keeps the quotes matched. */
+const DIRECTIVE = '([\'"])use [a-z -]+\\1\\s*;?';
+
+/**
+ * The whole directive prologue, so the prelude below is inserted *after* every directive rather than after the
+ * first one.
+ *
+ * The repetition is load-bearing. A module with two directives — `"use strict"` beside `'use client'`, which is
+ * ordinary output from a published component library, in either order — would otherwise take the prelude
+ * *between* them, and a directive preceded by a statement is just an expression: whichever came second would
+ * silently stop being a directive. That was survivable while this loader only saw the app's own hand-written
+ * source, where `'use client'` comes first and alone; it stopped being survivable when the rule widened to
+ * cover `node_modules` (see the SSR-layer rule in `rspack-config.ts`).
+ *
+ * Each repetition has to consume a whole directive, so the nested quantifiers cannot loop on an empty match.
+ */
+const DIRECTIVE_PROLOGUE = new RegExp(`^${TRIVIA}(?:${DIRECTIVE}${TRIVIA})*`);
 
 /**
  * Shadows `process.env` with the PUBLIC_-only view inside SSR-layer modules, so a secret read from a

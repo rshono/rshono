@@ -35,7 +35,7 @@ import { renderHTML } from './entry.ssr.js';
 // Type-only, so it is erased — the RSC layer does not take its own instance of the SSR layer's module.
 import type { CancellableTransformer } from './flight-inject.js';
 import { RouterProvider } from './navigation.js';
-import { acceptsRsc, isActionRequest, parseRenderRequest, requestWantsRsc, wantsRsc } from './request.js';
+import { asksForRsc, isActionRequest, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
 
 const serverApp = ((serverAppModule as { default?: unknown }).default ?? null) as Hono | null;
 
@@ -75,6 +75,40 @@ function cspNonce(c: Context): string | undefined {
   return c.get('secureHeadersNonce');
 }
 
+/**
+ * Whether a `<form action={serverAction}>` post came from another site, and so must not be allowed to run one.
+ *
+ * This is not CSRF policy — that is `csrf()` from Hono, registered in `src/server.ts`, which runs ahead of
+ * every page route and covers far more than this. It is the framework declining to run *its own* action
+ * mechanism for a request that mechanism cannot legitimately produce, in the one place the two action shapes
+ * are not equally exposed:
+ *
+ * - A client-initiated action carries `x-rsc-action`, which is not a CORS-simple header. A cross-origin caller
+ *   needs a preflight it will not be given, so that shape cannot be forged from a browser at all.
+ * - A form post is `multipart/form-data` or `application/x-www-form-urlencoded` with no header of its own —
+ *   the content types that need no preflight. It is forgeable, and an app with no `src/server.ts` has nothing
+ *   standing in front of it.
+ *
+ * Both halves are required, because either alone refuses something real:
+ *
+ * - `Sec-Fetch-Site: cross-site` is the browser's own statement of provenance, and every browser that can post
+ *   a form to a server action sends it. An absent header means a non-browser client, which cannot be a CSRF
+ *   victim; `same-site` is left alone too, since a subdomain policy is `csrf()`'s to express.
+ * - An `Origin` that is the app's own contradicts that label — a browser calls a post from the app's own pages
+ *   `same-origin` — so the pair is a shape no browser produces, and refusing it would only catch a proxy or a
+ *   test client setting the label by hand while posting from the app itself.
+ *
+ * `publicUrl(c)` rather than `c.req.url`, so it honours `trustProxy` and compares against the origin the
+ * browser actually used — which behind a proxy, `rshono dev`'s included, is not the one the server was reached
+ * on. The cost is that an app deliberately accepting cross-site *form* posts to an action cannot; that is what
+ * an `{ type: 'endpoint' }` route is for.
+ */
+function refusesCrossSiteForm(c: Context): boolean {
+  if (c.req.header('sec-fetch-site') !== 'cross-site') return false;
+  const origin = c.req.header('origin');
+  return origin !== undefined && origin !== publicUrl(c).origin;
+}
+
 async function loadPageModule(load: () => Promise<{ default: PageComponent }>, label: string): Promise<ServerEntry<PageComponent>> {
   const mod = await load();
   const Page = mod.default as ServerEntry<PageComponent> | undefined;
@@ -99,10 +133,10 @@ function acceptsHtml(c: Context): boolean {
 
 /**
  * The 404 for an app with no `notFound` page, and for a client that wanted neither HTML nor a flight
- * payload. It carries the `Vary` too: this is one of the answers a page URL gives depending on `Accept`.
+ * payload. It carries the `Vary` too: this is one of the answers a page URL gives depending on the `RSC` request header.
  */
 function plainNotFound(c: Context): Response {
-  return c.text('Not Found', 404, { vary: 'Accept' });
+  return c.text('Not Found', 404, { vary: RSC_VARY_HEADER });
 }
 
 /** A lazy once-cell: runs `load` at most once, but clears a rejection so a later call can retry. */
@@ -241,6 +275,18 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
     throw error;
   }
   if (controlSignal) {
+    // The shell resolved, so this response is live: React is being pumped into the payload-injecting
+    // transform, and a `redirect()` that surfaced from a boundary settling just before the shell was ready
+    // lands here. Nothing will read that stream now — the signal becomes a redirect instead — so it is stopped
+    // rather than left to render to completion for a response that was replaced.
+    //
+    // Both calls, because they stop different halves. `abort` reaches the two renders through the signal they
+    // were handed; cancelling the response readable propagates back through the transform to release the teed
+    // flight branch it holds a reader on, which `abort` alone does not.
+    renderAbort.abort();
+    void ssrResult.stream.cancel().catch(() => {
+      // Already errored or locked — there is nothing left to release either way.
+    });
     release();
     throw controlSignal;
   }
@@ -280,10 +326,28 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
         actionStatus = 500;
       }
     } else {
+      // A `<form action={serverAction}>` post, which is the path that runs before hydration and with
+      // JavaScript off. Unlike the client-initiated one it carries no custom header, so it is also the only
+      // action shape a browser can be made to send from another site: see `refusesCrossSiteForm`.
+      if (refusesCrossSiteForm(c)) {
+        return c.text('Forbidden: cross-site form post to a server action', 403, { vary: RSC_VARY_HEADER });
+      }
       const formData = await request.formData();
       const decodedAction = await decodeAction(formData, __rspack_rsc_manifest__.serverManifest);
       if (decodedAction) {
-        const result = await decodedAction();
+        let result: unknown;
+        try {
+          result = await decodedAction();
+        } catch (error) {
+          if (isControlSignal(error)) throw error;
+          // Reported here so a no-JS form post is attributed to the action that threw, exactly as the
+          // client-initiated path is — the top-level handler would call it a `request`. Then re-thrown,
+          // because this path has no client boundary and no `useActionState` to hand the error to, so the
+          // app's `error` page is the honest answer. `reportServerError` de-duplicates, so the re-throw
+          // reaching `onError` does not report it a second time.
+          reportServerError(error, { source: 'action', request, message: '[rshono] server action error:' });
+          throw error;
+        }
         formState = (await decodeFormState(result, formData, __rspack_rsc_manifest__.serverManifest)) ?? undefined;
       }
     }
@@ -324,7 +388,7 @@ function buildApp(): Hono {
 
     // Page responses only from here down.
     if (!PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) return;
-    appendVary(headers, 'Accept');
+    appendVary(headers, RSC_VARY_HEADER);
     // Without a default a shared cache is free to store a logged-in user's page and hand it to someone
     // else. `private, no-cache` forbids that without blocking bfcache, which `no-store` would.
     if (!headers.has('cache-control')) headers.set('cache-control', 'private, no-cache');
@@ -368,7 +432,7 @@ function buildApp(): Hono {
       const handler: Handler = async (c) => {
         try {
           if (servesPrerendered && c.req.method === 'GET') {
-            const isRsc = acceptsRsc(c.req.raw);
+            const isRsc = asksForRsc(c.req.raw);
             // One fixed set of bytes cannot carry a per-request nonce, so a document has to be rendered
             // where the app's CSP has one. Decided per request, so an app whose policy carries no `NONCE`
             // keeps its prerendered documents. A flight payload never carries a nonce either way.
@@ -382,7 +446,7 @@ function buildApp(): Hono {
                 const headers = {
                   'cache-control': SSG_CACHE_CONTROL,
                   etag: page.etag,
-                  vary: 'Accept',
+                  vary: RSC_VARY_HEADER,
                   'content-type': isRsc ? 'text/x-component;charset=utf-8' : 'text/html;charset=utf-8',
                 };
                 if (etagMatches(c.req.header('if-none-match'), page.etag)) return c.body(null, 304, headers);
@@ -449,7 +513,7 @@ function buildApp(): Hono {
       }
     }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';
-    return c.text(`Internal Server Error${detail}`, 500, { vary: 'Accept' });
+    return c.text(`Internal Server Error${detail}`, 500, { vary: RSC_VARY_HEADER });
   });
 
   return app;

@@ -87,15 +87,36 @@ const CLOUDFLARE_PRESET: DeployPreset = {
 };
 
 /**
+ * Bundles the app's dependencies into the server output instead of importing them from `node_modules`.
+ *
+ * The generated config externalizes them, which is right where the bundle runs *inside* the project — but a
+ * serverless function is uploaded as a directory rather than installed into one, so nothing resolves
+ * `node_modules` at request time and an externalized `import 'some-package'` is a cold start that dies on
+ * `ERR_MODULE_NOT_FOUND`. Node's own builtins stay external either way, through the `node` externals preset
+ * that `target: 'node'` already enables.
+ *
+ * The cost is a dependency that cannot be bundled — a native addon, or one that reads its own files off disk
+ * relative to `__dirname`. Those now fail the build rather than the deploy, which is the same constraint
+ * `cloudflare` has always had; the `rspack` hook in `rshono.config.ts` is the way out.
+ */
+function bundleDependencies(config: RspackOptions): void {
+  config.externals = [];
+}
+
+/**
  * Vercel: one Node function behind the platform's CDN, which serves the assets and reaches the function only
  * for a page. `finalize` assembles the Build Output API layout the platform uploads — including the
  * `supportsResponseStreaming` flag, without which Vercel buffers the whole response and silently undoes
  * streamed SSR.
+ *
+ * Only `dist/server` is uploaded with the function, which is why dependencies are bundled: see
+ * {@link bundleDependencies}.
  */
 const VERCEL_PRESET: DeployPreset = {
   name: 'vercel',
   runtimeModule: 'deploy/vercel/runtime.js',
   deployHint: 'deploy with `vercel deploy --prebuilt`',
+  configureServer: bundleDependencies,
   finalize: finalizeVercelBuild,
 };
 
@@ -103,11 +124,15 @@ const VERCEL_PRESET: DeployPreset = {
  * AWS Lambda behind a Function URL in `RESPONSE_STREAM` mode — the AWS shape that keeps streaming. The
  * runtime wraps the app in `awslambda.streamifyResponse`; the buffered alternative would deploy fine and then
  * hold every page until its last byte rendered.
+ *
+ * The deployment package is `dist/` and nothing else, which is why dependencies are bundled: see
+ * {@link bundleDependencies}.
  */
 const AWS_LAMBDA_PRESET: DeployPreset = {
   name: 'aws-lambda',
   runtimeModule: 'deploy/aws-lambda/runtime.js',
   deployHint: 'zip dist/ with the handler at dist/server/main.mjs',
+  configureServer: bundleDependencies,
 };
 
 const PRESETS: Record<DeployTarget, DeployPreset> = {

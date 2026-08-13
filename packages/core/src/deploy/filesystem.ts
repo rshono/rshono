@@ -8,6 +8,15 @@ import type { DeployRuntime } from './contract.js';
 
 const { isDev, outDir } = __RSHONO_CONFIG__;
 
+// The server bundle is minified and ships a source map, so this is what makes a production stack trace point
+// at the original TypeScript. Done here rather than left to `--enable-source-maps` because a serverless host
+// starts the process itself and passes no flags of ours: Vercel and Lambda would otherwise report minified
+// frames to whatever `onServerError` forwards them to. Guarded because the same `DeployRuntime` shape is
+// implemented for runtimes with no `process`.
+if (typeof process !== 'undefined' && typeof process.setSourceMapsEnabled === 'function') {
+  process.setSourceMapsEnabled(true);
+}
+
 /**
  * The project root, derived from where the bundle ended up: this module is compiled into
  * `<root>/<outDir>/server/main.mjs`, which is why every output directory sits one level under the root.

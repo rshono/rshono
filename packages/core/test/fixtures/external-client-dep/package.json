@@ -1,0 +1,16 @@
+{
+  "name": "rshono-test-external-client-dep",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A third-party `'use client'` component that reads process.env, so the SSR env shadow can be proved to reach node_modules and not just the app's own src/. Used by apps/testbed; see packages/core/test/prod.test.mjs.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "peerDependencies": {
+    "react": ">=19.1.0"
+  }
+}

@@ -108,7 +108,7 @@ export interface PrerenderResult {
 type RenderedVariant = { ok: true; body: string } | { ok: false; reason: string };
 
 async function renderVariant(fetch: PrerenderOptions['fetch'], url: string, variant: PrerenderVariant): Promise<RenderedVariant> {
-  const response = await fetch(new Request(url, { headers: { Accept: VARIANTS[variant].accept } }));
+  const response = await fetch(new Request(url, { headers: VARIANTS[variant].headers }));
   if (response.status !== 200) return { ok: false, reason: `${response.status}` };
   if (!(response.headers.get('Content-Type') ?? '').includes(VARIANTS[variant].contentType)) {
     return { ok: false, reason: `a non-${VARIANTS[variant].contentType} response` };

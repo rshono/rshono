@@ -1,4 +1,10 @@
 import { onServerError, publicUrl } from '@rshono/core/server';
+// A dependency outside the set the framework bundles unconditionally — so the serverless targets, which
+// upload a directory rather than install one, have something real to prove they bundled. See the endpoint
+// at the bottom of this file and `assertSelfContained` in packages/core/test/deploy-targets.test.mjs.
+// Unscoped on purpose: the externals policy bundles anything under `@rshono/` unconditionally, so a
+// scoped name here would be bundled whatever the preset decided and prove nothing.
+import { EXTERNAL_DEP_MARKER } from 'rshono-test-external-dep';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { csrf } from 'hono/csrf';
@@ -107,6 +113,9 @@ server.use('*', async (c, next) => {
   const end = performance.now();
   c.res.headers.set('X-Response-Time', `${(end - start).toFixed(2)} ms`);
 });
+
+/** Reads a value out of a real `node_modules` dependency — see the import at the top of this file. */
+server.get('/api/external-dep', (c) => c.text(EXTERNAL_DEP_MARKER));
 
 server.get('/api/health', (c) => {
   return c.json({ status: 'ok', uptime: (Date.now() - startedAt) / 1000, timestamp: Date.now() });

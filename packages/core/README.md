@@ -15,10 +15,12 @@ One required file (`src/routes.ts`), one optional file (`src/server.ts`), and yo
 streaming SSR with RSC hydration, server actions with progressive enhancement, soft navigation, build-time
 prerendering, and hard env/secret safety.
 
-> **Alpha.** The framework has an end-to-end suite of its own (see [Testing](#testing)), but it is built on
-> Rspack's experimental RSC support (`rspack.experiments.rsc`) and `react-server-dom-rspack`, which is still
-> `0.0.x`. Those two move underneath us, so `@rspack/core` and `react-server-dom-rspack` are pinned to exact
-> versions and a release of rshono is what moves them.
+> **Release candidate.** The framework itself is covered end to end (see [Testing](#testing)) and its API is
+> settled. What is not settled underneath it: Rspack's RSC support is an experimental API
+> (`rspack.experiments.rsc`) and `react-server-dom-rspack` is still `0.0.x`. Both are pinned to exact
+> versions — in the manifests and in workspace overrides — and a release of rshono is what moves them, so an
+> upstream change reaches you as a tested release rather than as a broken install. That is the whole of the
+> caveat, and it is the reason to read the [changelog](../../CHANGELOG.md) before upgrading.
 
 **Full documentation: [rshono.com/docs](https://www.rshono.com/docs).**
 
@@ -221,7 +223,7 @@ that runs this, the environment is what sets them. [Configuration docs](https://
 
 The defaults, in short: untrusted proxy headers, `nosniff` / `Referrer-Policy` / `X-Frame-Options` on
 every response (a floor your own `secureHeaders()` overrides),
-`private, no-cache` plus `Vary: Accept` on dynamic pages, `public, max-age=300` and a weak `ETag` on
+`private, no-cache` plus `Vary: RSC` on dynamic pages, `public, max-age=300` and a weak `ETag` on
 prerendered ones, and errors redacted in production — with one `onServerError()` funnel for reporting them
 and three fallbacks (a fatal client overlay, a visible 500 document, a reported bootstrap failure) so a
 failure is never a blank screen.
@@ -263,7 +265,19 @@ Every target streams, which is the bar a new one has to clear.
   on Vercel, `streamifyResponse` plus a `RESPONSE_STREAM` Function URL on Lambda. Getting those right is what
   the presets are for.
 - **Prerendered pages are never CDN-served**: one URL answers with a document or a flight payload depending on
-  `Accept`, and a path-keyed CDN cannot choose. `/_static` and `public/` do go straight to the CDN.
+  the `RSC` request header, and a path-keyed CDN cannot choose. `/_static` and `public/` do go straight to the
+  CDN.
+- **The serverless targets bundle your dependencies**; `node` bundles only the ones a `'use client'` component
+  pulls in. A function is an uploaded directory with no `node_modules` to resolve against, so `vercel`,
+  `aws-lambda` and `cloudflare` compile everything in. The cost is that a native addon — or a package that
+  reads its own files off disk — fails the build on those targets rather than the deploy; reach for the
+  `rspack` hook, or deploy to `node`.
+
+  On `node` a server component's dependencies stay external and resolve from `node_modules`, but anything
+  reachable from a `'use client'` component is compiled in on every target. It has to be: the `PUBLIC_`-only
+  `process.env` view is applied by a loader, and a loader cannot run on a module the bundle only imports by
+  name — an external third-party client component would be SSR'd against the real environment. Nothing is
+  given up, since the same module is in the browser bundle and so was always required to be bundleable.
 
 [Deployment docs](https://www.rshono.com/docs/deployment), including Cloudflare bindings and the AWS setup.
 
@@ -274,6 +288,11 @@ Every target streams, which is the bar a new one has to clear.
   `react-server-dom-rspack` requires).
 - No response compression, no base path (`siteUrl` is a bare origin), and wildcard, optional and regex
   params cannot be prerendered.
+- **No link prefetching**, by choice: a link is one fetch at click time and nothing before it. Speculative
+  fetching on hover spends every visitor's bandwidth to help some of them — so a navigation here costs a
+  round trip that Next.js and TanStack Start have usually already paid.
+- No incremental static regeneration: `render: 'static'` is decided at build time, and a static page changes
+  when you rebuild.
 - Scroll restoration is the browser's (`history.scrollRestoration = 'auto'`).
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
@@ -313,5 +332,7 @@ Two coordinated Rspack compilers, using native RSC support (`rspack.experiments.
 In dev the CLI watches both bundles, runs the server bundle in a worker thread (restarted per rebuild,
 requests gated on readiness so nothing drops), and fronts everything on one port with static serving and an
 SSE channel: client edits hot-apply via react-refresh, server component edits re-fetch the payload in place,
-and browser state survives both. In production `dist/server/main.mjs` is self-contained — React, Hono and the
-framework are bundled in; your other dependencies resolve from `node_modules`.
+and browser state survives both. In production `dist/server/main.mjs` has React, Hono and the framework
+bundled in. On `node` your server-side dependencies still resolve from `node_modules` beside it; on the
+serverless targets they are bundled too, because nothing installs them there. Whatever a `'use client'`
+component reaches is bundled on every target, which is what lets the env shadow cover it.

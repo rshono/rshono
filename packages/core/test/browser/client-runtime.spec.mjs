@@ -82,7 +82,7 @@ test.describe('navigation fetching', () => {
 
     const flightRequests = [];
     page.on('request', (request) => {
-      if (request.headers()['accept']?.includes('text/x-component')) flightRequests.push(request.url());
+      if (request.headers()['rsc'] === '1') flightRequests.push(request.url());
     });
 
     const users = page.getByRole('link', { name: 'Users', exact: true });
@@ -94,6 +94,40 @@ test.describe('navigation fetching', () => {
     await expect(page.getByText('Ada Lovelace')).toBeVisible();
     expect(flightRequests).toHaveLength(1);
     expect(flightRequests[0]).toContain('/users');
+  });
+
+  // React runs async transitions concurrently, so two overlapping navigations are two live fetches with no
+  // ordering between them. Nothing about the slow one makes it stale on arrival except the newer one having
+  // started — so without a sequence check it repaints the page the user already left, under the URL of the
+  // page they asked for. A slow connection and an impatient user is the whole reproduction.
+  test('a superseded navigation does not repaint after the one that replaced it', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByText('(hydrated ✓)')).toBeVisible();
+
+    // Holds the first navigation's payload until the second has been asked for and answered.
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    await page.route('**/users', async (route) => {
+      if (route.request().headers()['rsc'] !== '1') return route.fallback();
+      await held;
+      // The client is expected to have hung up on this by now, which is what makes `continue` throw.
+      await route.continue().catch(() => {});
+    });
+
+    await page.getByRole('link', { name: 'Users', exact: true }).click();
+    await expect(page).toHaveURL('/users');
+
+    // The old tree stays interactive through a pending transition, so the nav is still clickable.
+    await page.getByRole('link', { name: 'Sign Up', exact: true }).click();
+    await expect(page).toHaveURL('/signup');
+    await expect(page.getByRole('heading', { name: 'Sign Up' })).toBeVisible();
+
+    release();
+    await page.waitForTimeout(400); // long enough for a stale payload to have been applied
+
+    await expect(page).toHaveURL('/signup');
+    await expect(page.getByRole('heading', { name: 'Sign Up' })).toBeVisible();
+    await expect(page.getByText('Ada Lovelace')).toBeHidden();
   });
 });
 
@@ -197,7 +231,7 @@ test.describe('fragment links', () => {
 
     const payloadRequests = [];
     page.on('request', (request) => {
-      if (request.headers()['accept']?.includes('text/x-component')) payloadRequests.push(request.url());
+      if (request.headers()['rsc'] === '1') payloadRequests.push(request.url());
     });
 
     await page.getByRole('navigation', { name: 'On this page' }).getByRole('link', { name: 'Dev server' }).click();
@@ -249,7 +283,7 @@ test.describe('fragment links', () => {
 
     const payloadRequests = [];
     page.on('request', (request) => {
-      if (request.headers()['accept']?.includes('text/x-component')) payloadRequests.push(request.url());
+      if (request.headers()['rsc'] === '1') payloadRequests.push(request.url());
     });
 
     await page.goBack();

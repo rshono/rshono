@@ -10,12 +10,45 @@
 //
 // One build per target, so this is a slow file. Nothing else depends on it.
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { before, describe, test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { buildApp, importServerBundle, TESTBED_DIR, TESTBED_DIST } from './helpers.mjs';
 
 const ORIGIN = 'https://rshono.example';
+
+/**
+ * Proves the emitted server output can run where nothing installed it — which is what a serverless
+ * deployment is: an uploaded directory, with no `node_modules` for an externalized `import 'some-package'`
+ * to resolve against. This is what `bundleDependencies` in the presets exists to satisfy, and it is the one
+ * failure no assertion on the output *layout* can see: with the default externals policy in place, the
+ * import below throws `ERR_MODULE_NOT_FOUND` exactly as a cold start would.
+ *
+ * Copied somewhere with no `node_modules` above it rather than parsed, because the question is whether Node
+ * can resolve the graph — and a page is rendered through it because route chunks load lazily, so a broken
+ * specifier inside one would survive module evaluation.
+ */
+async function assertSelfContained() {
+  const sandbox = mkdtempSync(join(tmpdir(), 'rshono-self-contained-'));
+  try {
+    // The runtime derives the project root from where the bundle sits, so the two levels are load-bearing.
+    cpSync(join(TESTBED_DIST, 'server'), join(sandbox, 'dist', 'server'), { recursive: true });
+    const bundle = await import(pathToFileURL(join(sandbox, 'dist', 'server', 'main.mjs')).href);
+
+    // The testbed reads this out of an ordinary `node_modules` dependency, which is the case the default
+    // externals policy gets wrong: the package the framework bundles unconditionally would resolve here
+    // whether it was bundled or not, so proving the fix takes a package that would not.
+    const dependency = await bundle.app.fetch(new Request(`${ORIGIN}/api/external-dep`));
+    assert.equal(await dependency.text(), 'resolved-without-node-modules');
+
+    const page = await bundle.app.fetch(new Request(`${ORIGIN}/`));
+    assert.equal(page.status, 200, 'a page renders, so its route chunk resolved too');
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+}
 
 /** Builds the testbed for one target and returns its bundle, freshly evaluated. */
 async function buildFor(target) {
@@ -56,9 +89,13 @@ describe('vercel', () => {
     assert.ok(existsSync(join(output, 'static', '_static', 'chunks')), 'hashed bundle is CDN-served');
     assert.ok(existsSync(join(output, 'static', 'robots.txt')), 'public/ is CDN-served at the web root');
     // Not in static output on purpose: one URL answers with a document or a flight payload depending on
-    // `Accept`, which a path-keyed CDN cannot choose between.
+    // the `RSC` request header, which a path-keyed CDN cannot choose between.
     assert.equal(existsSync(join(output, 'static', 'docs')), false, 'prerendered pages are not CDN-served');
     assert.ok(existsSync(join(functionDir, 'dist', 'ssg', 'docs')), 'they ship inside the function instead');
+  });
+
+  test('ships a bundle the function can resolve, since only dist/server is uploaded', async () => {
+    await assertSelfContained();
   });
 
   test('keeps the bundle at the path its runtime derives the project root from', () => {
@@ -67,6 +104,24 @@ describe('vercel', () => {
     assert.equal(config.handler, 'dist/server/main.mjs');
     assert.equal(config.launcherType, 'Nodejs');
     assert.equal(config.supportsResponseStreaming, true, 'buffering would undo streamed SSR');
+  });
+
+  test('runs the function on the Node the build used, rather than a version pinned in the framework', () => {
+    // A hard-coded major is a build that starts failing on a date the framework does not control, with an
+    // error pointing at a file the user did not write. Asserted against `process.versions` rather than a
+    // literal so this cannot quietly become the hard-coded value again on whatever Node CI happens to run.
+    const config = JSON.parse(readFileSync(join(functionDir, '.vc-config.json'), 'utf8'));
+    assert.equal(config.runtime, `nodejs${process.versions.node.split('.')[0]}.x`);
+  });
+
+  test('uploads public/ to the CDN only, not a second time inside the function', () => {
+    // `{ handle: 'filesystem' }` precedes the catch-all route, so the platform answers these paths before the
+    // function is reached: a copy inside it is upload size and cold-start unpack time nothing can read.
+    assert.ok(existsSync(join(output, 'static', 'robots.txt')), 'the CDN copy is the one that serves');
+    assert.equal(existsSync(join(functionDir, 'dist', 'public')), false, 'and it must not be shipped twice');
+    // The two the function genuinely does read off its own disk.
+    assert.ok(existsSync(join(functionDir, 'dist', 'server')));
+    assert.ok(existsSync(join(functionDir, 'dist', 'ssg')));
   });
 
   test('routes assets before the function, and everything else to it', () => {
@@ -92,5 +147,9 @@ describe('aws-lambda', () => {
   test('exports a streaming handler when the runtime globals are present', () => {
     assert.equal(buildMarker().deploy, 'aws-lambda');
     assert.equal(typeof bundle.default, 'function', 'streamifyResponse-wrapped, so SSR still streams');
+  });
+
+  test('ships a bundle the function can resolve, since the package is dist/ and nothing else', async () => {
+    await assertSelfContained();
   });
 });

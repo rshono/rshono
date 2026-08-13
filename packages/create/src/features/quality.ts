@@ -47,6 +47,10 @@ const ESLINT: Feature = {
     typescript: ESLINT_TYPESCRIPT,
   },
   scripts: { lint: 'eslint .', 'lint:fix': 'eslint . --fix' },
+  // The pin is invisible from the command line, and its consequence is not: the rules reason about the
+  // program through an older compiler than the one that builds it, so a fix can produce code `tsc` rejects.
+  // The generated eslint.config.mjs explains why; the README's table is where someone reads what to type.
+  scriptHelp: { 'lint:fix': 'apply what it can — then run typecheck, see eslint.config.mjs' },
 };
 
 const BIOME: Feature = {

@@ -565,6 +565,15 @@ export type ServerErrorHandler = (error: unknown, context: ServerErrorContext) =
 let errorHandler: ServerErrorHandler | undefined;
 
 /**
+ * Errors already forwarded, so one fault is reported once however many stages it crosses.
+ *
+ * A thrown server action is reported where it is known to be an action and then re-thrown, which lands it in
+ * the top-level handler as well — and a funnel that counts the same error twice, under two different
+ * `source`s, is worse than one that only ever names the outer stage.
+ */
+const alreadyReported = new WeakSet<object>();
+
+/**
  * Registers a handler for every error the framework catches, so they can reach an error tracker
  * (Sentry, Datadog, a log pipeline) instead of only `stderr`.
  *
@@ -596,6 +605,12 @@ export function onServerError(handler: ServerErrorHandler): void {
  * @internal
  */
 export function reportServerError(error: unknown, info: ServerErrorContext & { message: string }): void {
+  // The first stage to recognise it wins, since that is the one that knows what it was. A primitive throw
+  // cannot be tracked and is reported wherever it is caught.
+  if (typeof error === 'object' && error !== null) {
+    if (alreadyReported.has(error)) return;
+    alreadyReported.add(error);
+  }
   console.error(info.message, error);
   if (!errorHandler) return;
   try {
