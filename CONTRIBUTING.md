@@ -96,7 +96,7 @@ notes stay yours — it prints both commands when it finishes:
 
 ```bash
 git push --follow-tags
-gh release create v1.0.0 --verify-tag --title v1.0.0 --notes-file CHANGELOG.md --draft
+gh release create v1.0.0 --title v1.0.0 --notes-file CHANGELOG.md --draft
 ```
 
 Nothing published this way carries an npm provenance attestation. That signature is minted from a CI runner's

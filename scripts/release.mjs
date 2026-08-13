@@ -226,7 +226,7 @@ console.log(`
   These are not done for you, because they are the parts that are hard to take back:
 
     git push --follow-tags
-    gh release create ${tag} --verify-tag --title ${tag} --notes-file CHANGELOG.md --draft
+    gh release create ${tag} --title ${tag} --notes-file CHANGELOG.md --draft
 
   Both tarballs went up without a provenance attestation, since that needs the OIDC token only a CI runner
   has.
