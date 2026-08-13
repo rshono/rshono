@@ -117,6 +117,14 @@ server.use('*', async (c, next) => {
 /** Reads a value out of a real `node_modules` dependency — see the import at the top of this file. */
 server.get('/api/external-dep', (c) => c.text(EXTERNAL_DEP_MARKER));
 
+/**
+ * The URL the request arrived as, which is a property of the *handoff* rather than of any route: a target
+ * whose platform hands the app something other than a web `Request` has to build one, and this is what it
+ * built. Deliberately `c.req.url` and not `publicUrl(c)`, so the assertion is about the request itself
+ * rather than about the proxy correction layered on top of it.
+ */
+server.get('/api/request-url', (c) => c.text(c.req.url));
+
 server.get('/api/health', (c) => {
   return c.json({ status: 'ok', uptime: (Date.now() - startedAt) / 1000, timestamp: Date.now() });
 });

@@ -149,6 +149,10 @@ It governs the browser-facing URL the framework builds — a page's `url` prop a
 `getRequestContext().url`. Middleware is handed Hono's `c` and reads `c.req.url` on its own, so where a
 middleware needs the public origin, give it `publicUrl(c)` from `@rshono/core/server`.
 
+Leave it off on [`vercel`](/docs/deployment#vercels-request-handoff), where the request already arrives with the scheme
+and host the browser used — that platform's edge sets them, and the function cannot be reached around
+it. The setting is for a proxy you put in front yourself, which the framework cannot vouch for.
+
 ## Response headers and caching
 
 A floor, on every response — including `/_static` assets, which your middleware never sees because they

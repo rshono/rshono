@@ -11,6 +11,7 @@
 // One build per target, so this is a slow file. Nothing else depends on it.
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { before, describe, test } from 'node:test';
@@ -62,10 +63,24 @@ function buildMarker() {
   return JSON.parse(readFileSync(join(TESTBED_DIST, 'rshono-build.json'), 'utf8'));
 }
 
-/** Drives a web-standard handler — the shape Vercel and any `fetch`-based host invoke. */
-async function requestVia(handler, path) {
-  const res = await handler(new Request(`${ORIGIN}${path}`));
-  return { res, body: await res.text() };
+/**
+ * Drives a Node request listener the way Vercel's `Nodejs` launcher drives one — through a real HTTP server,
+ * so the handler is handed an actual `IncomingMessage`/`ServerResponse` pair.
+ *
+ * A synthetic `new Request(...)` is what this used to pass, and it is precisely the shape the platform never
+ * sends: it made a handler that only ever forwarded a web `Request` look correct, while every real request
+ * hit `e.headers.get is not a function`. Going through `createServer` means the test cannot assert its own
+ * assumption back to itself.
+ */
+async function requestViaNodeListener(listener, path, headers = {}) {
+  const server = createServer(listener);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { headers });
+    return { res, body: await res.text() };
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 describe('vercel', () => {
@@ -77,12 +92,33 @@ describe('vercel', () => {
     bundle = await buildFor('vercel');
   });
 
-  test('exports a web handler and renders through it', async () => {
+  test('exports a Node request listener and renders through it', async () => {
     assert.equal(buildMarker().deploy, 'vercel');
     assert.equal(typeof bundle.default, 'function');
-    const { res, body } = await requestVia(bundle.default, '/');
+    const { res, body } = await requestViaNodeListener(bundle.default, '/');
     assert.equal(res.status, 200);
     assert.ok(body.startsWith('<!DOCTYPE html>'));
+  });
+
+  test('gives the app the scheme the browser used, not the one the socket saw', async () => {
+    // The platform terminates TLS at the edge and reaches the function over plain HTTP, so the socket says
+    // `http` for every request — including the ones a browser made to `https`. Left uncorrected, `c.req.url`
+    // is an origin the app then redirects to and compares against.
+    //
+    // Only the scheme is asserted, not a whole expected URL: `Host` is a forbidden header name for `fetch`,
+    // so the host here is always the loopback address the test server happens to be on.
+    const forwarded = await requestViaNodeListener(bundle.default, '/api/request-url', { 'x-forwarded-proto': 'https' });
+    assert.equal(new URL(forwarded.body).protocol, 'https:');
+    assert.equal(new URL(forwarded.body).pathname, '/api/request-url');
+
+    // No header at all still means `https`: it is the only scheme a deployment is reachable on, and the
+    // alternative — falling back to what the socket says — is the bug above on every request.
+    const bare = await requestViaNodeListener(bundle.default, '/api/request-url');
+    assert.equal(new URL(bare.body).protocol, 'https:');
+
+    // Honoured in the other direction too, rather than pinned to `https` outright.
+    const plain = await requestViaNodeListener(bundle.default, '/api/request-url', { 'x-forwarded-proto': 'http' });
+    assert.equal(new URL(plain.body).protocol, 'http:');
   });
 
   test('splits the build the way the platform routes it', () => {

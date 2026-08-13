@@ -9,6 +9,22 @@ from a maintainer's machine with `pnpm release` — see CONTRIBUTING.md.
 Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
 those.
 
+## [Unreleased]
+
+### Fixed
+
+- **Every request to a `vercel` deployment failed with `e.headers.get is not a function`.** The target handed
+  the app off with `hono/vercel`'s `handle`, a pass-through that forwards its argument straight to `app.fetch`
+  — but the Build Output API's `Nodejs` launcher invokes a function with `(IncomingMessage, ServerResponse)`
+  rather than a web `Request`, so the app was given a Node request object and every page 500'd, an
+  `onServerError` hook reading `new URL(request.url)` then failing on the bare `'/'` path. The
+  `Request`/`Response` handler shape Vercel documents elsewhere belongs to its `@vercel/node` builder, which a
+  `--prebuilt` upload never runs, so the handoff now converts the request itself. It reads `X-Forwarded-Proto`
+  while doing so: TLS terminates at the edge, so the socket reports `http` for a request the browser made to
+  `https`, and `ctx.url` would otherwise carry a scheme the app redirects to and compares origins against.
+  This needs no `trustProxy` — on this target the header is set by an edge the function cannot be reached
+  around.
+
 ## [1.0.0-rc.14] - 2026-08-13
 
 ### Fixed

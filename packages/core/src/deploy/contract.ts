@@ -34,7 +34,12 @@ export interface DeployRuntime {
   /**
    * Hands the app to the platform and returns whatever the entry module should `export default` there:
    * nothing where rshono owns the process (this binds the port), otherwise the export the platform looks
-   * for — `{ fetch }` on Workers, a handler function on Vercel and Lambda.
+   * for — `{ fetch }` on Workers, a streaming handler on Lambda, and on Vercel a Node
+   * `(IncomingMessage, ServerResponse)` listener, which is what its `Nodejs` launcher calls.
+   *
+   * Note that a web `Request` is not the common currency here: two of the three targets are handed one by
+   * their platform, and Vercel is not, so converting is part of the handoff rather than something the
+   * request-handling code below can assume has already happened.
    */
   serveApp(app: Hono): unknown;
   /** Mounts the hashed client bundle at `/_static`, ahead of the app's routes. A no-op where a CDN serves it. */
