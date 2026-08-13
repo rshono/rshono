@@ -56,8 +56,9 @@ definition, not at runtime.
 Write `component` inline as `() => import('…')`. The framework detects that exact form and injects
 Rspack's `'use server-entry'` directive for you, which is what attaches each page's client JS and CSS to
 its component — per-route code splitting with no asset manifest. Wire a component up some other way
-(variable indirection, barrel re-exports, computed specifiers) and the build throws a descriptive error
-telling you to write the directive at the top of the page module yourself.
+(variable indirection, barrel re-exports, computed specifiers) and the directive is yours to write, at the
+top of the page module. See [the `'use server-entry'` directive](/docs/pages#the-use-server-entry-directive),
+which also covers what a missing one looks like.
 
 ## Static rendering
 

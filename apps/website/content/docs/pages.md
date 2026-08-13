@@ -117,6 +117,58 @@ are soft navigations, so client state outside the changed subtree survives. Hist
 half alone. Both are `'use client'` modules a server component can render directly. A `redirect()` is
 never absorbed by either — it is navigation, not failure.
 
+## The `'use server-entry'` directive
+
+`'use server-entry'` marks a module as the entry point for its route. The build follows the imports out of
+it, collects the client JS and CSS they reach, and hangs that list on the component itself — which is what
+the renderer hands React as `bootstrapScripts`. That is how each page ships its own bundle and no other
+page's, with no asset manifest in between.
+
+You almost never write it. The build injects it for every page reached through an **inline** thunk in
+`routes.ts`:
+
+```ts
+{ path: '/profile/:id', component: () => import('./components/profile') }
+```
+
+_Inline_ is literal: the arrow function and the `import()` both spelled out at the `component` key, with a
+string literal for the specifier. `async () => import('…')` counts, and the specifier may be relative or
+`@/`-prefixed. Anything that cannot be read straight out of the source does not — a thunk held in a
+variable, a barrel re-export, a specifier assembled at runtime:
+
+```ts
+const profilePage = () => import('./components/profile');
+
+export const routes = defineRoutes([{ path: '/profile/:id', component: profilePage }]);
+```
+
+Wire a page up that way and the directive is yours to write, on the module's first line:
+
+```tsx
+'use server-entry';
+import type { PageProps } from '@rshono/core';
+
+export default function Profile({ params }: PageProps<'/profile/:id'>) {
+  return <Layout>{params.id}</Layout>;
+}
+```
+
+### A missing one fails at request time, not at build time
+
+Nothing looks for the directive while building. The module compiles, the build passes, and the first
+request to the route throws:
+
+```
+[rshono] The page component for "/profile/:id" is missing its client-asset info ('use server-entry').
+```
+
+A `render: 'static'` route is no exception. Its prerender fails, the build warns and falls back to
+[rendering the route per request](/docs/routing#static-rendering), and that request throws the same way.
+
+The injection also leaves alone any module that already opens with a directive, so a page module starting
+with `'use client'` is skipped and lands on the same error. A page is a server component: keep the
+interactive part in its own `'use client'` module and have the page render it.
+
 ## Server actions
 
 A `'use server'` module exports functions a client component can call directly, with typed arguments and
