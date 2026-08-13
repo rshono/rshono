@@ -66,20 +66,44 @@ needs a live client runtime. Reach for the cheapest one that can actually see th
 
 ## Releasing
 
-The two published packages share a version and ship together. A `v*` tag is what publishes them — nothing
-is published from a laptop, so the npm tarball always carries a provenance attestation pointing back at the
-commit and workflow that built it.
+The two published packages share a version and ship together. Cutting a release is the same work whichever
+way it is published — bump, changelog, commit, tag:
 
 ```bash
 pnpm version:set 1.0.0            # bumps both manifests, no tag
 # update CHANGELOG.md: move Unreleased under the new heading
 git commit -am "Release v1.0.0"
-git tag v1.0.0
+git tag -a v1.0.0 -m v1.0.0       # -a matters, see below
 git push --follow-tags
 ```
 
+The `-a` is not decoration: `--follow-tags` pushes annotated tags only, so a lightweight `git tag v1.0.0`
+leaves the tag on your machine while the branch pushes without it, and nothing happens.
+
+What differs between the two paths is what uploads the tarballs.
+
+**From CI, when the repo has npm credentials.** Pushing the tag is the entire release.
 `.github/workflows/release.yml` re-runs lint, typecheck and the whole suite against the tagged tree, refuses
 to publish if the tag and the manifests disagree, publishes with `--provenance`, and opens a draft release.
+Prefer this one. The provenance attestation is a signed statement of which repo, workflow and commit built
+each tarball; it is minted from the runner's OIDC token, and no laptop can mint one. It needs either an
+`NPM_TOKEN` secret on the `npm` environment or a trusted publisher registered on npm for both packages — with
+neither, the publish step is skipped and annotated rather than failed, so the tag still buys the re-run.
+
+**From a laptop, when it does not.**
+
+```bash
+pnpm release                      # --tag rc keeps a prerelease off the latest dist-tag
+pnpm release:dry                  # every check, both packages packed, nothing uploaded
+pnpm release --help               # --otp, --skip-tests, --any-branch
+```
+
+`scripts/release.mjs` re-applies what the workflow would have checked, because nothing else is standing
+between a mistake and the registry: on main, no uncommitted changes to tracked files, both manifests on the
+same version, an annotated `v<version>` tag at HEAD, that version not already published, and the whole suite
+green. Then it hands the terminal to `pnpm -r publish` so npm's two-factor prompt reaches you. Pushing the tag
+and drafting the release notes stay yours — it prints both commands when it finishes. Anything released this
+way carries no provenance, which is the reason to fix CI's credentials rather than live here.
 
 ## Pull requests
 
