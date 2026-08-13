@@ -11,6 +11,8 @@ those.
 
 ## [Unreleased]
 
+## [1.0.0-rc.15] - 2026-08-13
+
 ### Fixed
 
 - **Every request to a `vercel` deployment failed with `e.headers.get is not a function`.** The target handed
