@@ -3,8 +3,8 @@
 All notable changes to `@rshono/core` and `@rshono/create`, which are released together and share a version.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
-[semantic versioning](https://semver.org/spec/v2.0.0.html). Each release is tagged `v<version>`, and the tag
-is what publishes it.
+[semantic versioning](https://semver.org/spec/v2.0.0.html). Each release is tagged `v<version>` and published
+from a maintainer's machine with `pnpm release` — see CONTRIBUTING.md.
 
 Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
 those.

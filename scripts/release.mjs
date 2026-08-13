@@ -1,15 +1,13 @@
-// Publishes @rshono/core and @rshono/create from this machine.
+// Publishes @rshono/core and @rshono/create from this machine, which is the only way this repo releases.
 //
-// The `v*` tag path in .github/workflows/release.yml is still the better one: it publishes with
-// `--provenance`, a signed statement of which repo, workflow and commit built each tarball, minted from the
-// runner's OIDC token. A laptop cannot mint that token, so nothing published from here carries provenance and
-// npm shows the package without its verified-build link. That is the entire cost of this script, and the
-// reason the workflow is left in place for whenever it has credentials again.
+// The cost of publishing from a laptop is provenance: npm's attestation is a signed statement of which repo,
+// workflow and commit built each tarball, and it is minted from a CI runner's OIDC token, which no laptop can
+// produce. Packages released this way show on npm without their verified-build link.
 //
-// Because CI is no longer standing between a mistake and the registry, every gate that workflow applies is
-// re-applied here before anything is uploaded — clean tree, the two manifests agreeing, an annotated tag at
-// HEAD, the version not already published, and the whole suite green. npm's two-factor prompt is handled by
-// letting pnpm own the terminal: it asks for the one-time code itself when the registry demands one.
+// Because no CI job stands between a mistake and the registry, every gate is applied here before anything is
+// uploaded — clean tree, the two manifests agreeing, an annotated tag at HEAD, the version not already
+// published, and the whole suite green. npm's two-factor prompt is handled by letting pnpm own the terminal:
+// it asks for the one-time code itself when the registry demands one.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -57,7 +55,7 @@ const USAGE = `pnpm release [options]
   --dry-run       run every check and pack both packages, upload nothing
   --tag <name>    npm dist-tag to publish under (default: latest)
   --otp <code>    two-factor code; omit this and pnpm will ask when npm demands one
-  --skip-tests    skip the gates the release workflow runs (they ran in CI already)
+  --skip-tests    skip the build, lint, typecheck and test gates (they ran in CI already)
   --any-branch    allow a release from a branch other than main
   --help          this text`;
 
@@ -193,9 +191,9 @@ if (dryRun) {
 }
 
 if (options['skip-tests']) {
-  warn('--skip-tests: publishing without running the gates the release workflow would have run');
+  warn('--skip-tests: publishing without building, linting, typechecking or testing the tree');
 } else {
-  step('Running the gates the release workflow runs');
+  step('Running the gates');
   forward(pnpm, ['--filter', '@rshono/core', 'build'], 'the framework build failed');
   forward(pnpm, ['lint'], 'lint failed');
   forward(pnpm, ['--filter', '@rshono/core', 'typecheck'], '@rshono/core typecheck failed');
@@ -208,8 +206,8 @@ if (options['skip-tests']) {
 step(dryRun ? `Packing ${version} (dry run — nothing is uploaded)` : `Publishing ${version} to ${distTag}`);
 
 // `--no-git-checks` turns off pnpm's own branch/clean/up-to-date checks, which the tree and tag checks above
-// already cover with messages that say what to do about them. No `--provenance`: without a CI OIDC token the
-// attestation cannot be minted, and asking for one only fails the publish.
+// already cover with messages that say what to do about them. No `--provenance`: the attestation is minted
+// from a CI OIDC token this machine has no way to get, and asking for one only fails the publish.
 const publishArgs = ['-r', 'publish', '--access', 'public', '--no-git-checks', '--tag', distTag];
 if (dryRun) publishArgs.push('--dry-run');
 // Passing a code covers both packages only if npm still accepts it for the second PUT; a single-use code is
@@ -231,5 +229,5 @@ console.log(`
     gh release create ${tag} --verify-tag --title ${tag} --notes-file CHANGELOG.md --draft
 
   Both tarballs went up without a provenance attestation, since that needs the OIDC token only a CI runner
-  has. To get it back, give .github/workflows/release.yml npm credentials and let a tag publish the next one.
+  has.
 `);
