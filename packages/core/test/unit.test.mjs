@@ -51,10 +51,7 @@ describe('injectFlightPayload', () => {
 
   /** Fails loudly instead of hanging the suite: a transformer that never settles is exactly the bug below. */
   function withTimeout(promise, ms, message) {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms).unref()),
-    ]);
+    return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms).unref())]);
   }
 
   function inject(htmlChunks, { nonce } = {}) {
@@ -877,7 +874,10 @@ describe('the env-shadow prelude', () => {
     // that same layer — so anything reading `process.nextTick`, `process.version` or `process.platform` has to
     // still find it. That is why it is `Object.assign(Object.create(real process), { env })` and not a bare
     // `{ env }`. Evaluated rather than pattern-matched, because the property under test is what the code *does*.
-    const read = new Function('globalThis', `${generatedPrelude()} return { env: process.env, platform: process.platform, hasNextTick: typeof process.nextTick };`);
+    const read = new Function(
+      'globalThis',
+      `${generatedPrelude()} return { env: process.env, platform: process.platform, hasNextTick: typeof process.nextTick };`,
+    );
     const result = read(globalThis);
 
     assert.equal(result.env.DATABASE_URL, undefined, 'a secret must not be readable through the shadowed env');

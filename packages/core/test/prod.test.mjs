@@ -596,8 +596,7 @@ test('no unguarded reference to process survives into the client bundle', () => 
   assert.deepEqual(
     [...found.keys()],
     [],
-    `process.${[...found.keys()].join(', process.')} reaches the browser, where \`process\` does not exist — ` +
-      'only `process.env` is substituted',
+    `process.${[...found.keys()].join(', process.')} reaches the browser, where \`process\` does not exist — ` + 'only `process.env` is substituted',
   );
 });
 

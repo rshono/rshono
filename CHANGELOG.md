@@ -9,7 +9,7 @@ is what publishes it.
 Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
 those.
 
-## [Unreleased]
+## [1.0.0-rc.14] - 2026-08-13
 
 ### Fixed
 
@@ -27,9 +27,17 @@ those.
   map, so everything reaching the `onServerError` funnel was minified frames. It now ships one, and the
   runtime enables Node's mapping itself so Vercel and Lambda need no flag. Client source maps stay off in a
   build.
-- **A `'use client'` component from `node_modules` was SSR'd against the real `process.env`** while the
-  browser bundle saw the `PUBLIC_`-only view — a hydration mismatch on anything the host sets, and a leak for
-  anything secret. The env shadow now covers every module in the SSR layer, not just the app's own source.
+- **A `'use client'` component from `node_modules` was SSR'd against the real `process.env`** while the browser
+  bundle saw the `PUBLIC_`-only view — a hydration mismatch on anything the host sets, and a leak of anything
+  secret straight into the HTML stream. Two separate things were wrong: the substitution was scoped to the app's
+  own `src/`, and on the `node` target such a module was left external, so it was never compiled and no loader
+  could reach it whatever the scope. The substitution now covers every module in the SSR layer, and those modules
+  are compiled into the server bundle on every target — see **Changed** for what that means for a `node` build.
+- **A thrown `redirect()` or `notFound()` from inside a bare `<Suspense>` left its abandoned render running.**
+  The response was already being streamed when the signal arrived, and the correct redirect was sent, but the
+  superseded render was neither aborted nor cancelled and ran to completion for a response nobody received.
+- **The generated `aws-lambda` README told you to upload `node_modules`.** That target now compiles your
+  dependencies into the bundle, so the deployment package is `dist/` and nothing else.
 - **A thrown no-JS form action was reported as a `request` rather than an `action`**, so the progressive
   enhancement path attributed its errors to the wrong stage. It is now reported as an action, and
   `onServerError` de-duplicates, so one fault is reported once however many stages it crosses.
@@ -49,11 +57,23 @@ those.
   not a CSRF policy; `csrf()` in `src/server.ts` remains that, and covers everything else.
 - **A build warning when `src/server.ts` is absent**, naming the CSRF check and the body cap the app has
   therefore opted out of.
-- `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, this changelog, issue templates, Dependabot, and a
-  tag-triggered release workflow that publishes with npm provenance.
+- `SECURITY.md`, `CONTRIBUTING.md`, this changelog, issue templates, Dependabot, and a tag-triggered release
+  workflow that publishes with npm provenance.
 
 ### Changed
 
+- **The licence is MIT**, with the text shipped at the repo root and inside both published packages. The
+  manifests declared ISC up to and including `rc.13` and carried no licence text anywhere, so no release has
+  ever actually stated ISC terms. MIT is what the frameworks this one is compared against use, and the one a
+  corporate review recognises on sight.
+- **On the `node` target, anything reachable from a `'use client'` component is now compiled into the server
+  bundle** rather than left external. It has to be for the env substitution above to apply at all — a loader
+  cannot rewrite a module the bundle only imports by name. A server component's dependencies still resolve from
+  `node_modules`, so a native addon on the server is unaffected. Nothing is given up on the client side: those
+  same modules are in the browser bundle already, so they were always required to be bundleable.
+- **`public/` is no longer copied inside the Vercel function.** It goes to the static output, which the
+  platform's filesystem handler answers before the function is invoked, so the second copy was upload size and
+  cold-start unpack time that nothing could ever read.
 - **The flight-payload discriminator is now an `RSC: 1` request header, and page responses `Vary: RSC`.** It
   was `Accept: text/x-component` with `Vary: Accept` — correct content negotiation, and close to a
   cache-disabling header on the prerendered pages served `public, max-age=300`, because browsers send long

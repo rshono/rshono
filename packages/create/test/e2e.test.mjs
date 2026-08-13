@@ -227,9 +227,6 @@ test('every deploy target scaffolds an app that installs, typechecks and builds'
     // README is generated from this same table, so a missing one is a document describing a different app.
     const scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts;
     assert.ok(scripts.build && scripts.dev && scripts.typecheck, `${target}: the base scripts must survive`);
-    assert.ok(
-      scripts.start ?? scripts.preview ?? scripts.deploy,
-      `${target}: a target has to offer at least one way to run or ship what it built`,
-    );
+    assert.ok(scripts.start ?? scripts.preview ?? scripts.deploy, `${target}: a target has to offer at least one way to run or ship what it built`);
   }
 });

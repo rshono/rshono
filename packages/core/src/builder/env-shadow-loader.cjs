@@ -3,7 +3,7 @@
 /** Whitespace and comments — what may sit before or between directives without ending the prologue. */
 const TRIVIA = '(?:\\s|//[^\\n]*(?:\\n|$)|/\\*[\\s\\S]*?\\*/)*';
 /** One directive: `'use strict'`, `"use client"`, `'use server'`. The backreference keeps the quotes matched. */
-const DIRECTIVE = "(['\"])use [a-z -]+\\1\\s*;?";
+const DIRECTIVE = '([\'"])use [a-z -]+\\1\\s*;?';
 
 /**
  * The whole directive prologue, so the prelude below is inserted *after* every directive rather than after the
