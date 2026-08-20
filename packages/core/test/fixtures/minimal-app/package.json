@@ -9,7 +9,7 @@
     "start": "rshono start"
   },
   "dependencies": {
-    "hono": "^4.12.31",
+    "hono": "^4.13.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "@rshono/core": "workspace:*"

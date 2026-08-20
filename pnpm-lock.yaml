@@ -45,8 +45,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.1
+        version: 4.13.1
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -76,8 +76,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       '@shikijs/langs':
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.4.3
+        version: 4.4.3
       '@shikijs/themes':
         specifier: ^4.3.1
         version: 4.3.1
@@ -85,8 +85,8 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.1
+        version: 4.13.1
       markdown-it:
         specifier: ^14.3.0
         version: 14.3.0
@@ -137,7 +137,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.11
-        version: 2.0.11(hono@4.12.31)
+        version: 2.0.11(hono@4.13.1)
       '@rspack/core':
         specifier: 2.1.7
         version: 2.1.7
@@ -164,8 +164,8 @@ importers:
         specifier: ^19.2.4
         version: 19.2.4(@types/react@19.2.18)
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.1
+        version: 4.13.1
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -190,8 +190,8 @@ importers:
         specifier: workspace:*
         version: link:../../..
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.1
+        version: 4.13.1
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -205,8 +205,8 @@ importers:
         specifier: workspace:*
         version: link:../../..
       hono:
-        specifier: ^4.12.31
-        version: 4.12.31
+        specifier: ^4.13.1
+        version: 4.13.1
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -912,6 +912,10 @@ packages:
     resolution: {integrity: sha512-m0l9nsDqgBHvbZbk7A0/kXz/impK3uB/c6rAn6Gpg/uPtdZRQ+alsN/17MU5thb68XTj/4DxkZAotrM0GGSpDQ==}
     engines: {node: '>=20'}
 
+  '@shikijs/langs@4.4.3':
+    resolution: {integrity: sha512-ePic0yfAJGOF83D5wBHK/00EjK65oahBYxFk5epgq33WRv7X9UuxLEV8PtR0szC0z8dl7INIpIodB99JRFlR+A==}
+    engines: {node: '>=20'}
+
   '@shikijs/primitive@4.3.1':
     resolution: {integrity: sha512-CXQRQOYy1leqQ8ceTeJdmXv/bsUY++6QyLpXJ94LZAAYj5X2SKRdc5ipguv4NPyGVKItB2PPwUpRNe0Sjh5S1A==}
     engines: {node: '>=20'}
@@ -922,6 +926,10 @@ packages:
 
   '@shikijs/types@4.3.1':
     resolution: {integrity: sha512-CHFxE0jztBIZRHH6gxXE7DXUCFXjReEGxZ/j0rfSLGKZuwp2xBYycEP14875DSa9KLL/6700oxIq6oO6ef9K2g==}
+    engines: {node: '>=20'}
+
+  '@shikijs/types@4.4.3':
+    resolution: {integrity: sha512-UEJxmRR++MAGR6hugn0vgVS2W/6lWAts84FFSrnlH9sP0LNol7E5+NQ792pH8liWUhyMyjhTgSUH3k7iD7tc5g==}
     engines: {node: '>=20'}
 
   '@shikijs/vscode-textmate@10.0.2':
@@ -1528,8 +1536,8 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
-  hono@4.12.31:
-    resolution: {integrity: sha512-zJIHFrl6bq3RDd2YusFNCDlM8qUprxKswyi/OPzPyzKDdyBXDqWx8bZlZ7R+saTdSTatUmb3O7K4SspGPaEOQg==}
+  hono@4.13.1:
+    resolution: {integrity: sha512-kdJoFVv2xmayw6cY09H7AbMJMt8Jn5jdlEdXsP7AGBdF2DIptVlKlOLKXP41yPip4/a3yQPv9gVcJYI8YY04dw==}
     engines: {node: '>=16.9.0'}
 
   html-void-elements@3.0.0:
@@ -2378,9 +2386,9 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@hono/node-server@2.0.11(hono@4.12.31)':
+  '@hono/node-server@2.0.11(hono@4.13.1)':
     dependencies:
-      hono: 4.12.31
+      hono: 4.13.1
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -2639,6 +2647,10 @@ snapshots:
     dependencies:
       '@shikijs/types': 4.3.1
 
+  '@shikijs/langs@4.4.3':
+    dependencies:
+      '@shikijs/types': 4.4.3
+
   '@shikijs/primitive@4.3.1':
     dependencies:
       '@shikijs/types': 4.3.1
@@ -2650,6 +2662,11 @@ snapshots:
       '@shikijs/types': 4.3.1
 
   '@shikijs/types@4.3.1':
+    dependencies:
+      '@shikijs/vscode-textmate': 10.0.2
+      '@types/hast': 3.0.5
+
+  '@shikijs/types@4.4.3':
     dependencies:
       '@shikijs/vscode-textmate': 10.0.2
       '@types/hast': 3.0.5
@@ -3233,7 +3250,7 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono@4.12.31: {}
+  hono@4.13.1: {}
 
   html-void-elements@3.0.0: {}
 
