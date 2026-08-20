@@ -25,6 +25,18 @@ export function NavInfo() {
           refresh()
         </button>
       </p>
+      {/* The push is same-page on purpose: a traversal off it lands back on these controls. */}
+      <p>
+        <button className="btn btn-outline" onClick={() => nav.router.push('?tab=activity')}>
+          push('?tab=activity')
+        </button>{' '}
+        <button className="btn btn-outline" onClick={() => nav.router.back()}>
+          back()
+        </button>{' '}
+        <button className="btn btn-outline" onClick={() => nav.router.forward()}>
+          forward()
+        </button>
+      </p>
     </div>
   );
 }

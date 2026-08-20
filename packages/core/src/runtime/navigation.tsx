@@ -5,15 +5,17 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 /**
  * Imperative navigation actions, reached as `useNavigation().router`.
  *
- * `push` / `replace` / `refresh` are **soft** navigations: the new page's flight payload is fetched and
- * applied in place, so client component state outside the changed subtree survives. Off-site hrefs fall
- * back to a full load.
+ * Every action is a **soft** navigation: the page's flight payload is fetched and applied in place, so
+ * client component state outside the changed subtree survives. Off-site hrefs — and a traversal that leaves
+ * the app — fall back to a full load.
  *
  * @example
  * ```tsx
  * const { router } = useNavigation();
  * router.push('/dashboard');    // navigate, new history entry
  * router.replace('/login');     // navigate, no new entry
+ * router.back();                // one entry back, as the browser's button does
+ * router.forward();             // one entry forward
  * router.refresh();             // re-run this route's server components
  * ```
  */
@@ -22,14 +24,15 @@ export interface NavigationRouter {
   push(href: string): void;
   /** Navigates to `href`, replacing the current history entry instead of adding one. */
   replace(href: string): void;
+  /** Steps one entry back in the browser's session history. Nothing to go back to is a no-op. */
+  back(): void;
+  /** Steps one entry forward in the browser's session history. A no-op on the newest entry. */
+  forward(): void;
   /** Re-fetches the current route from the server, re-running its server components. */
   refresh(): void;
   /** `true` while a soft navigation is in flight — use it to disable controls or show a spinner. */
   pending: boolean;
 }
-
-// No `back()` / `forward()`: `history.back()` needs no framework, and the runtime's `popstate` listener
-// picks the traversal up either way.
 
 /** The current location plus the {@link NavigationRouter}, as returned by {@link useNavigation}. */
 export interface NavigationState {
@@ -46,7 +49,7 @@ export interface NavigationState {
 
 const noop = () => {};
 
-const defaultRouter: NavigationRouter = { push: noop, replace: noop, refresh: noop, pending: false };
+const defaultRouter: NavigationRouter = { push: noop, replace: noop, back: noop, forward: noop, refresh: noop, pending: false };
 
 /**
  * Carries the live {@link NavigationRouter} from the hydration runtime down to {@link RouterProvider}.
@@ -97,7 +100,7 @@ export function RouterProvider({ href, params, children }: { href: string; param
  * ```
  *
  * @returns The current {@link NavigationState}: `url` and `params`, plus `router`
- * ({@link NavigationRouter}) with `push` / `replace` / `refresh` / `pending`.
+ * ({@link NavigationRouter}) with `push` / `replace` / `back` / `forward` / `refresh` / `pending`.
  * @throws If called outside a page's React tree, where there is no navigation
  *   context to read.
  *
