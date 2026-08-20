@@ -199,3 +199,20 @@ framework catches.
 
 Actions compile to server references and run only on the server, so they read the real `process.env`.
 See [Environment & secrets](/docs/configuration#environment-and-secrets).
+
+## The `'use server-entry'` directive
+
+A technical note, not a step: none of the pages above write this directive, and neither does an app. It
+shows up in Rspack's output and in one error message, which is the only reason it is documented here.
+
+Compiled pages carry Rspack's `'use server-entry'`, which hangs the page's own client JS and CSS off its
+default export. The framework reads them back as the document's bootstrap scripts and stylesheet links —
+per-page code splitting with no asset manifest. The build finds the pages to mark by reading `routes.ts` for
+inline `component: () => import('…')` thunks and prepending the directive to exactly the modules they name.
+It re-scans on every rebuild, so a route added while the dev server is running needs no restart.
+
+Write the thunk inline and there is nothing to do. A `component` reached some other way — through a variable,
+a barrel re-export, a computed specifier — is invisible to that scan, and a module that already opens with a
+directive of its own is left untouched; in either case put `'use server-entry'` on the page module's first
+line yourself. A page that ends up without it renders into a descriptive error naming the route and both
+ways of fixing it.
