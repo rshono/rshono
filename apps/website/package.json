@@ -18,7 +18,7 @@
   "dependencies": {
     "@rshono/core": "workspace:*",
     "@shikijs/langs": "^4.4.3",
-    "@shikijs/themes": "^4.3.1",
+    "@shikijs/themes": "^4.4.3",
     "gray-matter": "^4.0.3",
     "hono": "^4.13.1",
     "markdown-it": "^14.3.0",
