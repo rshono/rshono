@@ -160,6 +160,12 @@ async function main() {
     window.history.replaceState(null, '', target.href);
   }
 
+  // A traversal is the browser's to perform: it moves the entry itself and fires `popstate`, which is where
+  // `listenNavigation` picks the new document up — so these need no more than to ask, and inherit the same
+  // fetch, scroll restoration and `pending` flag a back-button press already got.
+  const back = () => window.history.back();
+  const forward = () => window.history.forward();
+
   // A refresh keeps the URL, so it can't ride the history patch like push/replace and drives the re-fetch itself.
   const refresh = () =>
     startNav(async () => {
@@ -274,7 +280,7 @@ async function main() {
       };
     }, []);
 
-    const router = React.useMemo<NavigationRouter>(() => ({ push, replace, refresh, pending }), [pending]);
+    const router = React.useMemo<NavigationRouter>(() => ({ push, replace, back, forward, refresh, pending }), [pending]);
 
     return <RouterContext.Provider value={router}>{payload.root}</RouterContext.Provider>;
   }

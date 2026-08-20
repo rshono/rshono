@@ -109,9 +109,8 @@ export function NextPage() {
 ```
 
 `url` and `params` are the same names and types a page gets as props, so moving a read across the
-server/client line is a copy-paste. `router` holds `push`, `replace`, `refresh` and `pending`; all three
-are soft navigations, so client state outside the changed subtree survives. History traversal is
-`history.back()` / `history.forward()`.
+server/client line is a copy-paste. `router` holds `push`, `replace`, `back`, `forward`, `refresh` and
+`pending`; every one is a soft navigation, so client state outside the changed subtree survives.
 
 `<AsyncBoundary>` pairs a Suspense fallback with an error fallback, and `<CatchBoundary>` is the error
 half alone. Both are `'use client'` modules a server component can render directly. A `redirect()` is

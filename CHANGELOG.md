@@ -11,6 +11,14 @@ those.
 
 ## [Unreleased]
 
+### Added
+
+- **`router.back()` and `router.forward()` on `useNavigation()`.** History traversal was left to
+  `history.back()` / `history.forward()` on the grounds that the router added nothing to them; having the
+  whole client-side routing API in one object is worth more than that. They are soft navigations like the
+  rest — the runtime already picked a back-button press up through `popstate` — so `router.pending` covers
+  them too.
+
 ## [1.0.0-rc.15] - 2026-08-13
 
 ### Fixed

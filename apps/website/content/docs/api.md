@@ -199,10 +199,10 @@ export function NextPage() {
 }
 ```
 
-`router` holds `push(href)`, `replace(href)`, `refresh()` and the `pending` flag. All three are **soft**
-navigations: the new page's flight payload is fetched and applied in place, so client state outside the
-changed subtree survives. Off-site hrefs fall back to a full load. History traversal is `history.back()`
-and `history.forward()` — the router wrapped them once and added nothing, so it no longer does.
+`router` holds `push(href)`, `replace(href)`, `back()`, `forward()`, `refresh()` and the `pending` flag.
+Every one is a **soft** navigation: the page's flight payload is fetched and applied in place, so client
+state outside the changed subtree survives. Off-site hrefs, and a traversal that leaves the app, fall back
+to a full load.
 
 ### Components
 

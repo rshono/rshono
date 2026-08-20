@@ -154,6 +154,30 @@ test.describe('useNavigation', () => {
     await expect(page.locator('[data-nav="pathname"]')).toHaveText('/profile/1');
     expect(await documentId(page)).toBe(before);
   });
+
+  // A traversal is the browser's own operation, so `back()` / `forward()` only ask for it and the runtime
+  // picks the entry up through `popstate`. Two things have to come out of that. The readout is rendered from
+  // the payload's `href`, not from `location`, so it only changes if a new payload was fetched and applied —
+  // and the document id only survives if that happened in place, without a browser load.
+  test('router.back and router.forward traverse history as soft navigations', async ({ page }) => {
+    await page.goto('/profile/1');
+    await expect(page.locator('[data-nav="query-tab"]')).toHaveText('(none)');
+    const before = await markDocument(page);
+
+    await page.getByRole('button', { name: "push('?tab=activity')" }).click();
+    await expect(page).toHaveURL('/profile/1?tab=activity');
+    await expect(page.locator('[data-nav="query-tab"]')).toHaveText('activity');
+
+    await page.getByRole('button', { name: 'back()' }).click();
+    await expect(page).toHaveURL('/profile/1');
+    await expect(page.locator('[data-nav="query-tab"]')).toHaveText('(none)');
+
+    await page.getByRole('button', { name: 'forward()' }).click();
+    await expect(page).toHaveURL('/profile/1?tab=activity');
+    await expect(page.locator('[data-nav="query-tab"]')).toHaveText('activity');
+
+    expect(await documentId(page), 'neither traversal may reload the document').toBe(before);
+  });
 });
 
 test.describe('server actions', () => {
