@@ -11,6 +11,8 @@ those.
 
 ## [Unreleased]
 
+## [1.0.0-rc.16] - 2026-08-20
+
 ### Added
 
 - **`router.back()` and `router.forward()` on `useNavigation()`.** History traversal was left to
@@ -18,6 +20,15 @@ those.
   whole client-side routing API in one object is worth more than that. They are soft navigations like the
   rest — the runtime already picked a back-button press up through `popstate` — so `router.pending` covers
   them too.
+
+### Changed
+
+- **`@hono/node-server` is now `^2.1.1`**, which the dev server, the `node` target and the `vercel` runtime
+  all sit on — it is the one dependency bump in this release that reaches an already-installed app.
+- **A newly scaffolded app pins `hono@^4.13.1`**, with `@types/node@^26.2.0` and `@types/react@^19.2.18`
+  alongside it. These are the versions rshono is tested against, copied out of its own manifest by the
+  scaffolder's codegen; an existing app is unaffected, since its manifest is its own from the moment it is
+  generated.
 
 ## [1.0.0-rc.15] - 2026-08-13
 
