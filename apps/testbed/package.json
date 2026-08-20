@@ -18,8 +18,8 @@
     "rshono-test-external-client-dep": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "@types/react": "^19.2.17",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
     "typescript": "^7.0.2"
   }
 }
