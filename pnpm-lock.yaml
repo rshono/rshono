@@ -79,8 +79,8 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
       '@shikijs/themes':
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.4.3
+        version: 4.4.3
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -922,6 +922,10 @@ packages:
 
   '@shikijs/themes@4.3.1':
     resolution: {integrity: sha512-dgpoJ4WqNi2yTmizQHBJ5zcX6j2lE6icN/0yt4l1kkf16jrY/pwPLoTb1ETsWMz0OBLf9ZNvwmxft+cH+N9qSA==}
+    engines: {node: '>=20'}
+
+  '@shikijs/themes@4.4.3':
+    resolution: {integrity: sha512-w8UHjeUnIR965KMWJHUPXOc2mNJUnK3vpVLYLvw5IYU2mnTTJ89E24OrJDBNiJDQ0qzb0tc4l7mrIXx5cFeIyw==}
     engines: {node: '>=20'}
 
   '@shikijs/types@4.3.1':
@@ -2661,6 +2665,10 @@ snapshots:
   '@shikijs/themes@4.3.1':
     dependencies:
       '@shikijs/types': 4.3.1
+
+  '@shikijs/themes@4.4.3':
+    dependencies:
+      '@shikijs/types': 4.4.3
 
   '@shikijs/types@4.3.1':
     dependencies:
