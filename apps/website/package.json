@@ -20,7 +20,7 @@
     "@shikijs/langs": "^4.3.1",
     "@shikijs/themes": "^4.3.1",
     "gray-matter": "^4.0.3",
-    "hono": "^4.12.31",
+    "hono": "^4.13.1",
     "markdown-it": "^14.3.0",
     "markdown-it-anchor": "^9.2.1",
     "react": "19.2.8",
