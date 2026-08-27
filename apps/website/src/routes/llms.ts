@@ -4,6 +4,9 @@
  * are a file each and this is what they have in common.
  */
 
+import { publicUrl } from '@rshono/core/server';
+import type { Context } from 'hono';
+
 export const SUMMARY =
   'rshono is a minimalist web framework built on Hono, Rspack and React Server Components. ' +
   'One required file (src/routes.ts), one optional file (src/server.ts), and you get a dev server with HMR, ' +
@@ -16,9 +19,15 @@ export const SUMMARY =
  * Read off the request rather than from `siteUrl`, because these are dynamic endpoints and there is a
  * real request to read — which also means the file is correct under `rshono dev`, where a baked-in
  * `siteUrl` would send a reader to production.
+ *
+ * `publicUrl(c)` rather than `c.req.url`, which is the address this server was *reached* on. Under
+ * `rshono dev` that is the app worker's random `127.0.0.1` port — the front-end proxies to it, and
+ * `fetch` sets `Host` from the address it dials, so every link came out pointing at a port only the
+ * dev server knows about. `publicUrl` reads `X-Forwarded-Host` / `-Proto` instead, which that proxy
+ * sets and `trustProxy` — forced on under `dev` — makes trustworthy.
  */
-export function origin(requestUrl: string): string {
-  return new URL(requestUrl).origin;
+export function origin(c: Context): string {
+  return publicUrl(c).origin;
 }
 
 /**

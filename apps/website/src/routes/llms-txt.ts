@@ -7,7 +7,7 @@ import { MARKDOWN_HEADERS, origin, SUMMARY, UPSTREAM_SECTION } from './llms';
  * and a list of every page, each pointing at its markdown source rather than its HTML.
  */
 export const handler: Handler = (c) => {
-  const base = origin(c.req.url);
+  const base = origin(c);
 
   const sections = DOC_SECTIONS.map((section) => {
     const links = section.docs.map((doc) => `- [${doc.title}](${base}${doc.markdownHref}): ${doc.description}`).join('\n');

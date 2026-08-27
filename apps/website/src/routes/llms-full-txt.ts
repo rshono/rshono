@@ -8,7 +8,7 @@ import { MARKDOWN_HEADERS, origin, SUMMARY, UPSTREAM_SECTION } from './llms';
  * The companion to the index: one request instead of ten, for a reader that wants the whole thing.
  */
 export const handler: Handler = (c) => {
-  const base = origin(c.req.url);
+  const base = origin(c);
   const pages = DOCS.map((doc) => `<!-- source: ${base}${doc.markdownHref} -->\n\n${doc.source.trim()}`).join('\n\n---\n\n');
 
   // The upstream links go above the corpus rather than after it: a reader that stops early still gets them.
