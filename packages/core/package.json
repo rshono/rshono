@@ -61,10 +61,10 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
-    "@rspack/core": "2.1.7",
+    "@rspack/core": "2.2.0",
     "@rspack/plugin-react-refresh": "2.0.2",
     "react-refresh": "0.18.0",
-    "react-server-dom-rspack": "0.0.3"
+    "react-server-dom-rspack": "0.1.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
