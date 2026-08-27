@@ -20,7 +20,10 @@ import langTypeScript from '@shikijs/langs/typescript';
 import themeDark from '@shikijs/themes/github-dark';
 import themeLight from '@shikijs/themes/github-light';
 import matter from 'gray-matter';
-import MarkdownIt from 'markdown-it';
+// markdown-it 15 ships its own types, and they split what v14's single export was: the default export is
+// the class (still callable without `new`, for compatibility), while the type an instance has is a named
+// export that happens to share its name — hence the alias.
+import MarkdownIt, { type Env, type MarkdownIt as MarkdownItInstance, type Token } from 'markdown-it';
 import anchor from 'markdown-it-anchor';
 import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
@@ -192,8 +195,11 @@ function readFenceTitle(info: string): string | undefined {
 const [shellGrammar] = langBash;
 const SHELL_LANGS = new Set([shellGrammar.name, ...(shellGrammar.aliases ?? [])]);
 
-/** Per-document counter, so the radio groups on one page get names that cannot collide. */
-interface RenderEnv {
+/**
+ * The `env` object markdown-it threads through one document's parse and render, carrying the single field
+ * this file puts on it: a per-document counter, so the radio groups on one page get names that cannot collide.
+ */
+interface RenderEnv extends Env {
   commandTabs?: number;
 }
 
@@ -237,9 +243,9 @@ function stripInlineMarkdown(text: string): string {
     .trim();
 }
 
-let mdPromise: Promise<MarkdownIt> | undefined;
+let mdPromise: Promise<MarkdownItInstance> | undefined;
 
-async function getMarkdownIt(): Promise<MarkdownIt> {
+async function getMarkdownIt(): Promise<MarkdownItInstance> {
   mdPromise ??= (async () => {
     const highlighter = await getHighlighter();
     const highlight = (code: string, lang: string, title?: string) => highlightWith(highlighter, code, lang, title);
@@ -280,7 +286,10 @@ async function getMarkdownIt(): Promise<MarkdownIt> {
     md.renderer.rules.table_open = (tokens, index, options, env, self) => `<div class="table-scroll">${self.renderToken(tokens, index, options)}`;
     md.renderer.rules.table_close = (tokens, index, options, env, self) => `${self.renderToken(tokens, index, options)}</div>`;
 
-    md.renderer.rules.fence = (tokens, index, options, env: RenderEnv) => {
+    md.renderer.rules.fence = (tokens, index, options, rawEnv) => {
+      // A renderer rule is handed `Env | undefined`, since rendering a token stream without one is allowed.
+      // Every render here goes through `renderDoc`, which always passes the env it parsed with.
+      const env = rawEnv as RenderEnv;
       const token = tokens[index];
       const info = token.info.trim();
       const lang = info.split(/\s+/)[0] ?? '';
@@ -301,12 +310,14 @@ async function getMarkdownIt(): Promise<MarkdownIt> {
 }
 
 /** Collect the `h2`/`h3` headings out of an already-parsed token stream. */
-function tableOfContents(tokens: ReturnType<MarkdownIt['parse']>): TocEntry[] {
+function tableOfContents(tokens: Token[]): TocEntry[] {
   const toc: TocEntry[] = [];
 
   for (const [index, token] of tokens.entries()) {
     if (token.type !== 'heading_open' || (token.tag !== 'h2' && token.tag !== 'h3')) continue;
-    const id = token.attrGet('id');
+    // `attrGet` is typed `string | number | null` in markdown-it 15, since an attribute may hold a number.
+    // The ids here come from `markdown-it-anchor`, so they are always the slug it wrote.
+    const id = token.attrGet('id')?.toString();
     const inline = tokens[index + 1];
     if (!id || !inline) continue;
     toc.push({ id, text: stripInlineMarkdown(inline.content), depth: token.tag === 'h2' ? 2 : 3 });
