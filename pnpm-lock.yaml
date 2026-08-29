@@ -45,8 +45,13 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       hono:
+<<<<<<< HEAD
         specifier: ^4.13.5
         version: 4.13.5
+=======
+        specifier: ^4.13.4
+        version: 4.13.4
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -85,8 +90,13 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
       hono:
+<<<<<<< HEAD
         specifier: ^4.13.5
         version: 4.13.5
+=======
+        specifier: ^4.13.4
+        version: 4.13.4
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
       markdown-it:
         specifier: ^15.0.0
         version: 15.0.0
@@ -137,7 +147,11 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.1.1
+<<<<<<< HEAD
         version: 2.1.1(hono@4.13.5)
+=======
+        version: 2.1.1(hono@4.13.4)
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
       '@rspack/core':
         specifier: 2.1.7
         version: 2.1.7
@@ -164,8 +178,13 @@ importers:
         specifier: ^19.2.4
         version: 19.2.4(@types/react@19.2.18)
       hono:
+<<<<<<< HEAD
         specifier: ^4.13.5
         version: 4.13.5
+=======
+        specifier: ^4.13.4
+        version: 4.13.4
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -190,8 +209,13 @@ importers:
         specifier: workspace:*
         version: link:../../..
       hono:
+<<<<<<< HEAD
         specifier: ^4.13.5
         version: 4.13.5
+=======
+        specifier: ^4.13.4
+        version: 4.13.4
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -205,8 +229,13 @@ importers:
         specifier: workspace:*
         version: link:../../..
       hono:
+<<<<<<< HEAD
         specifier: ^4.13.5
         version: 4.13.5
+=======
+        specifier: ^4.13.4
+        version: 4.13.4
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -1531,8 +1560,13 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
+<<<<<<< HEAD
   hono@4.13.5:
     resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
+=======
+  hono@4.13.4:
+    resolution: {integrity: sha512-AGEwKIyRMHRv1t8Wjwa3LHxQ61X5CqrdFT+4BRNTpqS5aJNnpl5WLjADb7vFlJzI/8uK7T5QLVApCMQKNa3LgQ==}
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
     engines: {node: '>=16.9.0'}
 
   html-void-elements@3.0.0:
@@ -2381,9 +2415,15 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
+<<<<<<< HEAD
   '@hono/node-server@2.1.1(hono@4.13.5)':
     dependencies:
       hono: 4.13.5
+=======
+  '@hono/node-server@2.1.1(hono@4.13.4)':
+    dependencies:
+      hono: 4.13.4
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -3238,7 +3278,11 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
+<<<<<<< HEAD
   hono@4.13.5: {}
+=======
+  hono@4.13.4: {}
+>>>>>>> 33f6a90dd410091b9a0f0cbfa6fd1aefa539ede4
 
   html-void-elements@3.0.0: {}
 
