@@ -9,6 +9,10 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
  * client component state outside the changed subtree survives. Off-site hrefs — and a traversal that leaves
  * the app — fall back to a full load.
  *
+ * Soft navigation is the browser's
+ * {@link https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API | Navigation API}; where that is
+ * missing, every action below is still correct and simply performs a real browser load.
+ *
  * @example
  * ```tsx
  * const { router } = useNavigation();

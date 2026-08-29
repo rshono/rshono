@@ -293,7 +293,11 @@ Every target streams, which is the bar a new one has to clear.
   round trip that Next.js and TanStack Start have usually already paid.
 - No incremental static regeneration: `render: 'static'` is decided at build time, and a static page changes
   when you rebuild.
-- Scroll restoration is the browser's (`history.scrollRestoration = 'auto'`).
+- **Soft navigation needs the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API)**
+  — Chrome/Edge 135, Firefox 147, Safari 26.2, [Baseline](https://web.dev/blog/baseline-navigation-api) since
+  January 2026. Where it is missing there is no interception at all and every link is a real browser load,
+  which a server-rendered app answers correctly; only the soft part is gone. Scroll restoration, the fragment
+  jump and the post-navigation focus reset are all the browser's.
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
   production ships no client source maps).

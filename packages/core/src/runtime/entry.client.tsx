@@ -118,8 +118,181 @@ function showFatal(error: unknown, componentStack?: string | null): void {
  * Asks a URL for its flight payload. Deliberately uncached — a payload can never be staler than the click
  * that wanted it, and the browser's own HTTP cache is what makes a repeat visit cheap.
  */
-function requestPayload(href: string, signal: AbortSignal): Promise<RscPayload> {
+function requestPayload(href: string, signal?: AbortSignal): Promise<RscPayload> {
   return createFromFetch<RscPayload>(fetch(createRscRequest(new URL(href, location.href).href, undefined, signal)));
+}
+
+/**
+ * Whether the browser hands us its navigations. Gated on `sourceElement` rather than on `navigation` itself:
+ * Chrome shipped the event in 102 and that property only in 135, and without it a `data-native` link cannot
+ * be told from any other — so the older window would soft-navigate the very links that asked not to be.
+ *
+ * Where this is false there is no interception at all and every navigation is a real browser load, which a
+ * server-rendered app answers correctly on its own. Only the soft part is missing.
+ *
+ * Both globals are tested, and neither is touched before: this runs at module scope, where a ReferenceError
+ * would take the whole client runtime down with it rather than degrading anything.
+ */
+const canSoftNavigate = typeof navigation !== 'undefined' && typeof NavigateEvent !== 'undefined' && 'sourceElement' in NavigateEvent.prototype;
+
+/**
+ * Drops a navigation's result promises. Both reject when a navigation is superseded or cancelled — routine
+ * here, since a second click is meant to abandon the first — and unhandled they would be reported as faults.
+ */
+function settle(result: NavigationResult): void {
+  const ignore = () => {};
+  void result.committed?.catch(ignore);
+  void result.finished?.catch(ignore);
+}
+
+// The imperative actions behind `useNavigation().router`. Each one only *asks*: the browser turns it into a
+// `navigate` event, which is where `listenNavigation` answers it — so a `router.push` and a link click reach
+// the same code by the same route, and inherit the same fetch, scroll and `pending` flag.
+function push(href: string): void {
+  if (canSoftNavigate) settle(navigation.navigate(href, { history: 'push' }));
+  else window.location.assign(href);
+}
+
+function replace(href: string): void {
+  if (canSoftNavigate) settle(navigation.navigate(href, { history: 'replace' }));
+  else window.location.replace(href);
+}
+
+// A traversal is the browser's to perform either way — `navigation` only hands it back as an interceptable
+// event first. Nothing to go back to is a rejection there and a no-op here; both amount to the same thing.
+function back(): void {
+  if (canSoftNavigate) settle(navigation.back());
+  else window.history.back();
+}
+
+function forward(): void {
+  if (canSoftNavigate) settle(navigation.forward());
+  else window.history.forward();
+}
+
+// A refresh keeps the URL, and is still a navigation: it arrives as `navigationType: 'reload'`, which is what
+// tells the listener to leave scroll and focus where the user left them.
+function refresh(): void {
+  if (canSoftNavigate) settle(navigation.reload());
+  else window.location.reload();
+}
+
+/**
+ * Turns a control-signal digest — how `redirect()` / `notFound()` reach the browser — into a real
+ * navigation. Returns false for anything else, so callers fall through to their own handling.
+ *
+ * `hard` forces a full document load, for signals that surfaced *through React*: it unmounts the root on
+ * an uncaught error, leaving no live tree to soft-navigate with.
+ */
+function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean } = {}): boolean {
+  const digest = (error as { digest?: unknown } | null)?.digest;
+  if (!isControlDigest(digest)) return false;
+  const redirect = parseRedirectDigest(digest);
+  if (!redirect) {
+    window.location.reload();
+  } else if (hard) {
+    window.location.assign(new URL(redirect.location, window.location.href).href);
+  } else {
+    push(redirect.location);
+  }
+  return true;
+}
+
+/**
+ * Puts a payload on screen, resolving once React has committed it. Replaced by `BrowserRoot`'s own on mount;
+ * the default covers the window before hydration, where `setServerCallback` is already registered but there
+ * is no root to update — a reload is the honest answer, and nothing after it needs to run.
+ */
+let setPayload: (payload: RscPayload) => Promise<void> = () => {
+  window.location.reload();
+  return new Promise<void>(() => {});
+};
+
+/** Runs work inside the nav transition so `useNavigation().pending` stays true across the round-trip. */
+let startNav: (run: () => void | Promise<void>) => void = (run) => {
+  void run();
+};
+
+/**
+ * Fetches the payload for `url` and puts it on screen.
+ *
+ * Resolves once React has **committed** it rather than when the fetch lands: an intercepted navigation
+ * scrolls and moves focus when this promise settles, and a `#hash` target does not exist until the new tree
+ * does. Rejects only on a genuine failure — being superseded is not one, and resolves quietly, because the
+ * navigation that replaced this one owns the screen from then on.
+ */
+function loadPayload(url: string, signal?: AbortSignal): Promise<void> {
+  const run = async () => {
+    const payload = await requestPayload(url, signal);
+    // The browser aborts a navigation the moment a newer one starts. Checked again after the await because
+    // the fetch may already have resolved by then, and applying it would repaint a page the user has left.
+    if (signal?.aborted) return;
+    if (payload.redirect) {
+      push(payload.redirect);
+      return;
+    }
+    await setPayload(payload);
+  };
+
+  // `startTransition` runs the work but hands nothing back, so the promise the navigation waits on is caught
+  // here instead. Assigned synchronously: React invokes the callback before `startNav` returns.
+  let work!: Promise<void>;
+  startNav(() => (work = run()));
+
+  return work.catch((error: unknown) => {
+    // Checked before the error is read: an abort is this navigation being replaced, and the one that
+    // replaced it owns the outcome.
+    if (signal?.aborted || handleControlDigest(error)) return;
+    throw error;
+  });
+}
+
+/**
+ * Navigations the browser can hand over but shouldn't:
+ *
+ * - a fragment jump, which is same-document already and needs no payload — the browser's own jump is the one
+ *   that honours `scroll-padding-top`, and re-rendering would pull the target out from under it;
+ * - a download, which is not a navigation of this page at all;
+ * - a `POST` form, which is a submission and the server's to answer (a `GET` form carries its fields in the
+ *   URL, has no `formData`, and soft-navigates like any other link);
+ * - a link marked `data-native`, the documented opt-out.
+ */
+function leaveToBrowser(event: NavigateEvent): boolean {
+  return event.hashChange || event.downloadRequest !== null || event.formData !== null || event.sourceElement?.hasAttribute('data-native') === true;
+}
+
+/**
+ * The whole router, in one listener.
+ *
+ * Every navigation the page can make arrives as a `navigate` event — a link click, a `GET` form, a
+ * `history.pushState`, the back button, `navigation.reload()` — already filtered by the browser: it does not
+ * fire for a middle-click, a modified click or a new tab, and reports `canIntercept: false` for anything
+ * cross-origin, or for a traversal that leaves the app. Those need no handling here; they are left alone, and
+ * the browser performs them as it always would.
+ */
+function listenNavigation(): () => void {
+  if (!canSoftNavigate) return () => {};
+
+  const onNavigate = (event: NavigateEvent) => {
+    if (!event.canIntercept || leaveToBrowser(event)) return;
+
+    // A push or a traversal lands on a new page, so the browser resets the scroll offset — or restores the
+    // one it remembers — and moves focus, which is what makes a soft navigation announce itself to a screen
+    // reader. A replace or a refresh stays where it is, so neither should move. Both wait on the handler,
+    // which is the point of resolving it at commit rather than at fetch.
+    const inPlace = event.navigationType === 'replace' || event.navigationType === 'reload';
+
+    event.intercept({
+      scroll: inPlace ? 'manual' : 'after-transition',
+      focusReset: inPlace ? 'manual' : 'after-transition',
+      // The URL commits before the handler runs, so a failure leaves the address bar describing a page the
+      // document is not showing. A real load is the only way back to agreement.
+      handler: () => loadPayload(event.destination.url, event.signal).catch(() => window.location.reload()),
+    });
+  };
+
+  navigation.addEventListener('navigate', onNavigate);
+  return () => navigation.removeEventListener('navigate', onNavigate);
 }
 
 async function main() {
@@ -130,155 +303,37 @@ async function main() {
   const cspMeta = document.querySelector('meta[property="csp-nonce"]') as HTMLMetaElement | null;
   if (cspMeta?.nonce) __webpack_nonce__ = cspMeta.nonce;
 
-  // Both are replaced by BrowserRoot's own on mount. The defaults cover the window before hydration, where
-  // `setServerCallback` is already registered but there is no root to update — a reload is the honest answer.
-  let setPayload: (v: RscPayload) => void = () => {
-    window.location.reload();
-  };
-  // Runs work inside the nav transition so useNavigation().pending stays true across the round-trip.
-  let startNav: (run: () => void | Promise<void>) => void = (run) => {
-    void run();
-  };
-
   const initialPayload = await createFromReadableStream<RscPayload>(flightStream);
-
-  function push(href: string) {
-    const target = new URL(href, window.location.href);
-    if (target.origin !== window.location.origin) {
-      window.location.assign(target.href);
-      return;
-    }
-    window.history.pushState(null, '', target.href);
-  }
-
-  function replace(href: string) {
-    const target = new URL(href, window.location.href);
-    if (target.origin !== window.location.origin) {
-      window.location.replace(target.href);
-      return;
-    }
-    window.history.replaceState(null, '', target.href);
-  }
-
-  // A traversal is the browser's to perform: it moves the entry itself and fires `popstate`, which is where
-  // `listenNavigation` picks the new document up — so these need no more than to ask, and inherit the same
-  // fetch, scroll restoration and `pending` flag a back-button press already got.
-  const back = () => window.history.back();
-  const forward = () => window.history.forward();
-
-  // A refresh keeps the URL, so it can't ride the history patch like push/replace and drives the re-fetch itself.
-  const refresh = () =>
-    startNav(async () => {
-      try {
-        await fetchRscPayload();
-      } catch {
-        window.location.reload();
-      }
-    });
-
-  /**
-   * Turns a control-signal digest — how `redirect()` / `notFound()` reach the browser — into a real
-   * navigation. Returns false for anything else, so callers fall through to their own handling.
-   *
-   * `hard` forces a full document load, for signals that surfaced *through React*: it unmounts the root on
-   * an uncaught error, leaving no live tree to soft-navigate with.
-   */
-  function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean } = {}): boolean {
-    const digest = (error as { digest?: unknown } | null)?.digest;
-    if (!isControlDigest(digest)) return false;
-    const redirect = parseRedirectDigest(digest);
-    if (!redirect) {
-      window.location.reload();
-    } else if (hard) {
-      window.location.assign(new URL(redirect.location, window.location.href).href);
-    } else {
-      push(redirect.location);
-    }
-    return true;
-  }
-
-  /**
-   * The navigation whose payload the screen is allowed to show. React runs async transitions concurrently, so
-   * two overlapping navigations are two live fetches with no ordering between them — without this, a slow
-   * first response landing after a fast second one renders the page the user already left while the address
-   * bar shows the one they asked for.
-   */
-  let currentNavigation = 0;
-  /** The in-flight navigation's fetch, so a newer one can stop paying for it. */
-  let navigationFetch: AbortController | null = null;
-
-  /**
-   * Fetches the payload for the current URL and applies it, unless a newer navigation started meanwhile.
-   *
-   * @returns `true` when this navigation is the one that settled the screen, `false` when it was superseded.
-   *   The distinction is what keeps a stale response from scrolling a page it is no longer rendering — and
-   *   why being superseded resolves rather than throws: both callers answer a rejection with a full reload,
-   *   so surfacing the abort would turn every fast second click into one.
-   */
-  async function fetchRscPayload(): Promise<boolean> {
-    const navigation = ++currentNavigation;
-    navigationFetch?.abort();
-    const controller = (navigationFetch = new AbortController());
-    const superseded = () => navigation !== currentNavigation;
-
-    let payload: RscPayload;
-    try {
-      payload = await requestPayload(window.location.href, controller.signal);
-    } catch (error) {
-      // Checked before the error is read: an abort is this navigation being replaced, and the one that
-      // replaced it owns the outcome.
-      if (superseded()) return false;
-      if (handleControlDigest(error)) return true;
-      throw error;
-    }
-    if (superseded()) return false;
-    if (payload.redirect) {
-      push(payload.redirect);
-      return true;
-    }
-    setPayload(payload);
-    return true;
-  }
 
   function BrowserRoot() {
     const [payload, setPayloadState] = React.useState(initialPayload);
     const [pending, startTransition] = React.useTransition();
-    // The scroll a fetched navigation still owes, held until its payload is on screen.
-    const pendingScroll = React.useRef<(() => void) | null>(null);
+    // The resolver the payload on screen still owes — see {@link loadPayload}.
+    const pendingCommit = React.useRef<(() => void) | null>(null);
 
     React.useEffect(() => {
-      setPayload = (v) => setPayloadState(v);
+      setPayload = (next) =>
+        new Promise<void>((resolve) => {
+          // A payload replaced before it ever painted still has a navigation waiting on it. React commits
+          // only the newest, so the effect below never runs for the one it skipped: release it here.
+          pendingCommit.current?.();
+          pendingCommit.current = resolve;
+          setPayloadState(next);
+        });
       startNav = (run) => startTransition(run);
     }, [startTransition]);
 
     /**
-     * Scrolls where the navigation asked, once React has put its payload in the DOM — a `#hash` target does
-     * not exist until the new tree does. A layout effect, so the pre-scroll position is never painted.
+     * Releases the navigation waiting on this payload, which is what lets the browser scroll and move focus
+     * now that their target exists. A layout effect, so the pre-scroll position is never painted.
      */
     React.useLayoutEffect(() => {
-      const scroll = pendingScroll.current;
-      pendingScroll.current = null;
-      scroll?.();
+      const commit = pendingCommit.current;
+      pendingCommit.current = null;
+      commit?.();
     }, [payload]);
 
-    React.useEffect(() => {
-      const stopNavigating = listenNavigation((afterRender) =>
-        startNav(async () => {
-          try {
-            // Only the navigation that settled the screen owes a scroll — a superseded one would move the
-            // page the navigation that replaced it is about to render.
-            if (await fetchRscPayload()) pendingScroll.current = afterRender;
-          } catch {
-            window.location.reload();
-          }
-        }),
-      );
-      const stopUpgradingLinks = listenLinks();
-      return () => {
-        stopUpgradingLinks();
-        stopNavigating();
-      };
-    }, []);
+    React.useEffect(() => listenNavigation(), []);
 
     const router = React.useMemo<NavigationRouter>(() => ({ push, replace, back, forward, refresh, pending }), [pending]);
 
@@ -307,7 +362,7 @@ async function main() {
       push(payload.redirect);
       return undefined;
     }
-    if (documentUrl() === calledFrom) React.startTransition(() => setPayload(payload));
+    if (documentUrl() === calledFrom) React.startTransition(() => void setPayload(payload));
     if (payload.notFound) return undefined;
     const result = payload.returnValue!;
     if (!result.ok) throw result.error;
@@ -335,156 +390,8 @@ async function main() {
   });
 
   if (import.meta.webpackHot) {
-    initDevRefresh(fetchRscPayload);
+    initDevRefresh();
   }
-}
-
-type NavigationType = 'push' | 'replace' | 'pop';
-
-/** Runs teardown in reverse and empties the list, so a second call is a no-op. */
-function disposeAll(undo: Array<() => void>): void {
-  for (const dispose of undo.splice(0).reverse()) dispose();
-}
-
-// An `<a>` we intercept for soft navigation: same-origin, same tab, not a download,
-// and not explicitly opted out with `data-native` (which forces a full browser navigation).
-function isRouterLink(link: HTMLAnchorElement): boolean {
-  return (
-    !!link.href &&
-    (!link.target || link.target === '_self') &&
-    link.origin === location.origin &&
-    !link.hasAttribute('download') &&
-    !link.hasAttribute('data-native')
-  );
-}
-
-/**
- * Upgrades the app's anchors: a plain left-click becomes a soft navigation. It shares no state with
- * `listenNavigation` — a click only calls `history.pushState`, which is where that picks the navigation up.
- */
-function listenLinks(): () => void {
-  const undo: Array<() => void> = [];
-
-  function onClick(e: MouseEvent) {
-    const link = (e.target as Element).closest('a');
-    if (
-      link &&
-      link instanceof HTMLAnchorElement &&
-      isRouterLink(link) &&
-      e.button === 0 &&
-      !e.metaKey &&
-      !e.ctrlKey &&
-      !e.altKey &&
-      !e.shiftKey &&
-      !e.defaultPrevented
-    ) {
-      if (link.hash && link.pathname === location.pathname && link.search === location.search) return;
-      e.preventDefault();
-      history.pushState(null, '', link.href);
-    }
-  }
-  document.addEventListener('click', onClick);
-  undo.push(() => document.removeEventListener('click', onClick));
-
-  return () => disposeAll(undo);
-}
-
-/**
- * The element the current `#fragment` names, if it is on the page. A fragment is percent-encoded and an `id`
- * is not, so it is decoded first — and taken literally when a hand-written `%` makes that throw.
- */
-function fragmentTarget(): HTMLElement | null {
-  const fragment = location.hash.slice(1);
-  if (!fragment) return null;
-  let id = fragment;
-  try {
-    id = decodeURIComponent(fragment);
-  } catch {
-    // Malformed escape — the literal fragment is the better guess at the id than nothing.
-  }
-  return document.getElementById(id);
-}
-
-function listenNavigation(onNavigation: (afterRender: () => void) => void): () => void {
-  const undo: Array<() => void> = [];
-
-  // Set explicitly as a statement of intent: the browser remembers a traversal's offset, and nothing here
-  // tracks one.
-  const prevRestoration = window.history.scrollRestoration;
-  try {
-    window.history.scrollRestoration = 'auto';
-  } catch {
-    // Not settable in every browser, and only a preference — the navigation still works without it.
-  }
-  undo.push(() => {
-    try {
-      window.history.scrollRestoration = prevRestoration;
-    } catch {
-      // As above: if it could not be set, it cannot be put back either.
-    }
-  });
-
-  /**
-   * A push is not a real navigation to the browser, so nothing resets the scroll offset. A `#hash` names
-   * where to land instead; `replace` keeps its position, and a traversal is the browser's to restore.
-   *
-   * `scrollIntoView` is the algorithm a browser's own fragment jump uses, so `scroll-padding-top` still
-   * applies. Neither call passes a `behavior`, leaving `scroll-behavior: smooth` the app's to ask for.
-   */
-  const afterRenderFor = (type: NavigationType) => () => {
-    if (type !== 'push') return;
-    const target = fragmentTarget();
-    if (target) target.scrollIntoView();
-    else window.scrollTo(0, 0);
-  };
-
-  // What the payload on screen was rendered for. See {@link documentUrl}.
-  let renderedUrl = documentUrl();
-
-  /**
-   * A navigation that moves only the fragment leaves the document unchanged, so the payload on screen is
-   * already the right one — fetching another would re-render the page out from under the jump.
-   * `router.refresh()` is unaffected, and remains the way to ask for fresh data at an unchanged URL.
-   */
-  const notify = (type: NavigationType) => {
-    const afterRender = afterRenderFor(type);
-    if (documentUrl() === renderedUrl) {
-      afterRender();
-      return;
-    }
-    renderedUrl = documentUrl();
-    onNavigation(afterRender);
-  };
-
-  const onPopState = () => notify('pop');
-  window.addEventListener('popstate', onPopState);
-  undo.push(() => window.removeEventListener('popstate', onPopState));
-
-  // Saved unbound on purpose, and called back with `.call(this, …)` below — patching `history` is the only
-  // way to see a navigation the app makes itself, and the receiver is restored at every call site.
-  // eslint-disable-next-line @typescript-eslint/unbound-method
-  const oldPushState = window.history.pushState;
-  window.history.pushState = function (state, unused, url) {
-    const res = oldPushState.call(this, state, unused, url as string);
-    notify('push');
-    return res;
-  };
-  undo.push(() => {
-    window.history.pushState = oldPushState;
-  });
-
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- as with `pushState` above.
-  const oldReplaceState = window.history.replaceState;
-  window.history.replaceState = function (state, unused, url) {
-    const res = oldReplaceState.call(this, state, unused, url as string);
-    notify('replace');
-    return res;
-  };
-  undo.push(() => {
-    window.history.replaceState = oldReplaceState;
-  });
-
-  return () => disposeAll(undo);
 }
 
 /**
@@ -494,9 +401,7 @@ function listenNavigation(onNavigation: (afterRender: () => void) => void): () =
  *   rsc-update    → server component code changed: re-fetch the flight payload, state preserved.
  *   hello         → sent on (re)connect with the latest build hash; a mismatch means a missed event.
  */
-// `Promise<unknown>`: the payload fetch reports whether its navigation was superseded, which matters to a
-// click and not to a rebuild — here only settling or rejecting does.
-function initDevRefresh(fetchRscPayload: () => Promise<unknown>) {
+function initDevRefresh() {
   const hot = import.meta.webpackHot!;
   let connectedOnce = false;
   /** The newest build the dev server has announced — what {@link applyClientUpdate} walks towards. */
@@ -522,7 +427,7 @@ function initDevRefresh(fetchRscPayload: () => Promise<unknown>) {
         targetHash = message.hash ?? targetHash;
         if (connectedOnce) {
           await applyClientUpdate();
-          await fetchRscPayload().catch(() => window.location.reload());
+          await loadPayload(window.location.href).catch(() => window.location.reload());
         }
         connectedOnce = true;
         break;
@@ -532,7 +437,7 @@ function initDevRefresh(fetchRscPayload: () => Promise<unknown>) {
         break;
       case 'rsc-update':
         console.log('[rshono] server components updated');
-        await fetchRscPayload().catch(() => window.location.reload());
+        await loadPayload(window.location.href).catch(() => window.location.reload());
         break;
     }
   }
