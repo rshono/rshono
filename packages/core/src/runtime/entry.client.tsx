@@ -222,6 +222,12 @@ let startNav: (run: () => void | Promise<void>) => void = (run) => {
  * navigation that replaced this one owns the screen from then on.
  */
 function loadPayload(url: string, signal?: AbortSignal): Promise<void> {
+  // Deliberately not awaited inside the transition: the scope ends once the payload is handed to React, and
+  // React holds `pending` until the update it scheduled commits. Awaiting the commit *inside* the scope would
+  // work too, but only because React happens not to gate a commit on its async scope settling — an internal
+  // this has no reason to depend on across the whole `^19.1.0` peer range.
+  let committed: Promise<void> | undefined;
+
   const run = async () => {
     const payload = await requestPayload(url, signal);
     // The browser aborts a navigation the moment a newer one starts. Checked again after the await because
@@ -231,20 +237,24 @@ function loadPayload(url: string, signal?: AbortSignal): Promise<void> {
       push(payload.redirect);
       return;
     }
-    await setPayload(payload);
+    committed = setPayload(payload);
   };
 
-  // `startTransition` runs the work but hands nothing back, so the promise the navigation waits on is caught
-  // here instead. Assigned synchronously: React invokes the callback before `startNav` returns.
+  // `startTransition` runs the work but hands nothing back, so the promise carrying a failure is caught here
+  // instead. Assigned synchronously: React invokes the callback before `startNav` returns.
   let work!: Promise<void>;
   startNav(() => (work = run()));
 
-  return work.catch((error: unknown) => {
-    // Checked before the error is read: an abort is this navigation being replaced, and the one that
-    // replaced it owns the outcome.
-    if (signal?.aborted || handleControlDigest(error)) return;
-    throw error;
-  });
+  return work.then(
+    // Undefined whenever nothing was applied — an abort, or a redirect — and there is then nothing to wait for.
+    () => committed,
+    (error: unknown) => {
+      // Checked before the error is read: an abort is this navigation being replaced, and the one that
+      // replaced it owns the outcome.
+      if (signal?.aborted || handleControlDigest(error)) return;
+      throw error;
+    },
+  );
 }
 
 /**
