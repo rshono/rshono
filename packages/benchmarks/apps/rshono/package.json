@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@rshono/core": "file:../../.pack/rshono-core.tgz",
-    "hono": "^4.12.31",
+    "hono": "^4.13.5",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },

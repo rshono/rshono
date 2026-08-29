@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "hono": "^4.13.2",
+    "hono": "^4.13.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "@rshono/core": "workspace:*",
