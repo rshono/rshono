@@ -37,6 +37,12 @@ export function NavInfo() {
           forward()
         </button>
       </p>
+      {/* Same-page too, and deliberately not a push: a replace must leave the scroll offset where it is. */}
+      <p>
+        <button className="btn btn-outline" onClick={() => nav.router.replace('?tab=activity')}>
+          replace('?tab=activity')
+        </button>
+      </p>
     </div>
   );
 }

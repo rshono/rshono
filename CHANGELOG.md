@@ -11,6 +11,35 @@ those.
 
 ## [Unreleased]
 
+### Changed
+
+- **Client-side routing is the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API)
+  now, and only that.** The runtime used to reconstruct a navigation from the outside: a delegated `click`
+  listener that re-derived what the browser already knew about a link (origin, `target`, `download`, the
+  modifier keys), `history.pushState` and `replaceState` patched in place to see the app's own navigations,
+  a `popstate` listener for traversals, a sequence counter to order overlapping fetches, and hand-rolled
+  scroll handling. All of it is one `navigate` listener now — about 165 lines deleted for 45 — and every
+  navigation, from a link click to `router.refresh()`, reaches the same code by the same route.
+
+  Two things get better rather than merely smaller. **Focus now resets after a navigation**
+  (`focusReset: 'after-transition'`), so a soft navigation announces itself to a screen reader; the old
+  runtime left focus on the link that was clicked and had no equivalent. And **scroll restoration on a
+  traversal actually works**: it was previously left to `history.scrollRestoration = 'auto'`, which restores
+  at `popstate` — before the payload for that entry has been asked for, against the page being left.
+  The browser now waits for React to commit before it scrolls or moves focus.
+
+  A `GET` form submission soft-navigates too, which it did not before. `POST` forms, downloads, fragment
+  jumps, cross-origin links and `data-native` are all still left to the browser.
+
+### Removed
+
+- **Soft navigation on browsers without the Navigation API.** The floor is Chrome/Edge 135, Firefox 147 and
+  Safari 26.2 — [Baseline](https://web.dev/blog/baseline-navigation-api) since January 2026. Below it the
+  runtime intercepts nothing and every navigation is a real browser load, which a server-rendered app answers
+  correctly on its own; `router.push` / `replace` / `back` / `forward` / `refresh` all keep working, as
+  full page loads. The feature test is `sourceElement`, not `navigation`: Chrome shipped the event in 102 and
+  that property only in 135, and without it a `data-native` link cannot be told from any other.
+
 ## [1.0.0-rc.16] - 2026-08-20
 
 ### Added
