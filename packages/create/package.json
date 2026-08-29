@@ -1,6 +1,6 @@
 {
   "name": "@rshono/create",
-  "version": "1.0.0-rc.16",
+  "version": "1.0.0-rc.17",
   "description": "Scaffold a new rshono app — Hono + Rspack + React Server Components",
   "author": "Lasse <lasse@lassetange.com> (https://www.lassetange.com)",
   "license": "MIT",

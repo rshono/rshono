@@ -11,6 +11,8 @@ those.
 
 ## [Unreleased]
 
+## [1.0.0-rc.17] - 2026-08-29
+
 ### Changed
 
 - **Client-side routing is the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API)
@@ -39,6 +41,21 @@ those.
   correctly on its own; `router.push` / `replace` / `back` / `forward` / `refresh` all keep working, as
   full page loads. The feature test is `sourceElement`, not `navigation`: Chrome shipped the event in 102 and
   that property only in 135, and without it a `data-native` link cannot be told from any other.
+
+### Security
+
+- **The tested and scaffolded `hono` is now `^4.13.5`**, which carries three fixes: a query parser that did
+  not stop at the URL fragment, so a `?` after a `#` became a query string the app read and a proxy, WAF or
+  cache in front of it did not (GHSA-crvj-82cr-hjcx); an incomplete fix for CVE-2026-39408, where `toSSG()`
+  could still write outside its output directory (GHSA-gqvv-2mrq-wpjv); and unbounded dot-notation nesting in
+  `parseBody()` (GHSA-g6gw-c38x-mqfc). rshono itself calls none of the three — it does not use
+  `parseBody()`, `toSSG()` or the cache middleware — so this reaches an app through its own `hono`, not
+  through the framework.
+
+  **Updating rshono does not update hono for an existing app.** `hono` is a peer dependency the app owns and
+  resolves; only a newly scaffolded app picks `^4.13.5` up from the pin. An app on `4.13.4` or below wants
+  its own `pnpm up hono` — particularly if it sits behind a proxy or WAF that inspects query strings, or
+  calls `parseBody({ dot: true })`.
 
 ## [1.0.0-rc.16] - 2026-08-20
 
