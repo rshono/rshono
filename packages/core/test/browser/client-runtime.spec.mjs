@@ -156,7 +156,7 @@ test.describe('useNavigation', () => {
   });
 
   // A traversal is the browser's own operation, so `back()` / `forward()` only ask for it and the runtime
-  // picks the entry up through `popstate`. Two things have to come out of that. The readout is rendered from
+  // picks the entry up as a `navigate` event. Two things have to come out of that. The readout is rendered from
   // the payload's `href`, not from `location`, so it only changes if a new payload was fetched and applied —
   // and the document id only survives if that happened in place, without a browser load.
   test('router.back and router.forward traverse history as soft navigations', async ({ page }) => {
@@ -222,10 +222,10 @@ test.describe('boundaries', () => {
   });
 });
 
-test.describe('scroll on navigation', () => {
-  // The framework's own scroll memory is gone: `history.scrollRestoration` is `auto`, so a traversal is
-  // the browser's to restore and this asserts only the part that is still ours — a push starts at the
-  // top, because `pushState` is not a navigation and nothing else resets the offset.
+test.describe('scroll and focus on navigation', () => {
+  // Scroll is the browser's, through `intercept({ scroll: 'after-transition' })` — but only because the
+  // intercept handler resolves at React's commit rather than when the fetch lands. Resolve it early and the
+  // browser scrolls a document that has not been replaced yet, which is what these two pin down.
   test('a new navigation starts at the top', async ({ page }) => {
     await page.setViewportSize({ width: 500, height: 400 });
     await page.goto('/users');
@@ -238,9 +238,58 @@ test.describe('scroll on navigation', () => {
     await expect.poll(() => page.evaluate(() => window.scrollY), { message: 'a pushed page must not inherit the last one’s offset' }).toBe(0);
   });
 
-  test('scroll restoration is left to the browser', async ({ page }) => {
+  // The other half, and the one the framework used to get wrong: going back has to land where you left.
+  // Under the old runtime the offset was restored on `popstate`, before the payload for the entry had even
+  // been asked for — against the outgoing page, and then overwritten by the incoming one.
+  test('going back restores the offset the page was left at', async ({ page }) => {
+    await page.setViewportSize({ width: 500, height: 400 });
     await page.goto('/users');
-    expect(await page.evaluate(() => history.scrollRestoration)).toBe('auto');
+
+    await page.evaluate(() => window.scrollTo(0, 300));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
+
+    await page.getByRole('link', { name: 'Docs' }).click();
+    await expect(page).toHaveURL('/docs/getting-started');
+    await page.goBack();
+
+    await expect(page).toHaveURL('/users');
+    await expect.poll(() => page.evaluate(() => window.scrollY), { message: 'a traversal must come back to where it left' }).toBeGreaterThan(100);
+  });
+
+  // `focusReset: 'after-transition'`, which the hand-rolled router had no equivalent of: without it focus
+  // stays on the link that was clicked, the next Tab resumes from the page the user has left, and a screen
+  // reader is never told anything happened. The browser only does it once the handler resolves.
+  test('a navigation moves focus to the new document', async ({ page }) => {
+    await page.goto('/');
+
+    const users = page.getByRole('link', { name: 'Users', exact: true });
+    await users.focus();
+    await users.click();
+
+    await expect(page).toHaveURL('/users');
+    await expect(page.getByText('Ada Lovelace')).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.tagName ?? null), { message: 'focus must not stay on the link that was clicked' })
+      .toBe('BODY');
+  });
+
+  // A replace is a change of address for the page you are on, not a move to a new one, so both resets are
+  // switched off for it — a filter or a tab that rewrites the URL must not throw the reader back to the top.
+  test('a replace leaves the scroll offset alone', async ({ page }) => {
+    await page.setViewportSize({ width: 500, height: 400 });
+    await page.goto('/profile/1');
+
+    // Scrolled by Playwright rather than by hand: it brings the button into view before clicking either
+    // way, so the offset to compare against is the one that leaves behind.
+    const button = page.getByRole('button', { name: "replace('?tab=activity')" });
+    await button.scrollIntoViewIfNeeded();
+    const before = await page.evaluate(() => window.scrollY);
+    expect(before, 'the fixture page must be tall enough to scroll').toBeGreaterThan(0);
+
+    await button.click();
+    await expect(page).toHaveURL('/profile/1?tab=activity');
+    await expect(page.locator('[data-nav="query-tab"]')).toHaveText('activity');
+    expect(await page.evaluate(() => window.scrollY), 'a replace must not scroll').toBe(before);
   });
 });
 
