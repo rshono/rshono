@@ -42,7 +42,11 @@ export interface DeployRuntime {
    * request-handling code below can assume has already happened.
    */
   serveApp(app: Hono): unknown;
-  /** Mounts the hashed client bundle at `/_static`, ahead of the app's routes. A no-op where a CDN serves it. */
+  /**
+   * Mounts the hashed client bundle at `/_static` — after src/server.ts, so the app's own middleware covers an
+   * asset response too, and ahead of the page routes, which cannot claim that prefix. A no-op where a CDN
+   * serves it.
+   */
   mountStaticAssets(app: Hono): void;
   /** Mounts `public/` at the web root, after every route, so it only answers paths no route claimed. */
   mountPublicFallback(app: Hono): void;

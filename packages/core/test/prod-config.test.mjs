@@ -64,6 +64,25 @@ describe('a hardened server.ts', () => {
     assert.match(header, /script-src [^;]*'nonce-/);
   });
 
+  test("the app's own middleware reaches /_static, so an asset carries HSTS and the app's policy", async () => {
+    // The hashed bundle used to be mounted *ahead* of src/server.ts, and it is a terminal handler — so
+    // `/_static/*` was answered by something none of the app's middleware ever saw. HSTS is the one that
+    // materially matters: it is per-response, and a `/_static` request over http is exactly where a
+    // downgrade lands. CSP and COOP are moot for a .js file, but their absence is not what an operator
+    // reading their own `secureHeaders()` call expects.
+    const html = await (await fetch(`${app.base}/`)).text();
+    const asset = html.match(/src="(\/_static\/chunks\/main\.[0-9a-f]+\.js)"/)[1];
+    const res = await fetch(app.base + asset);
+    await res.text();
+    assert.equal(res.status, 200);
+    assert.ok(res.headers.get('strict-transport-security'), 'an asset response is missing HSTS');
+    assert.ok(res.headers.get('content-security-policy'), "…and the app's policy");
+    assert.ok(res.headers.get('x-response-time'), "the app's own middleware did not run for the asset");
+    // And the asset's own cache policy still wins: this is the app's middleware wrapping the handler,
+    // not replacing it.
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+  });
+
   test('the prerendered flight payload is still served from disk — only the document needs a nonce', async () => {
     // A flight payload never carries a nonce (that only goes on the HTML bootstrap), so there is
     // nothing per-request about it and no reason for CSP to cost soft navigations their prerender.

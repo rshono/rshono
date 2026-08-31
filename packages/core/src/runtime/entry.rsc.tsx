@@ -371,8 +371,7 @@ function buildApp(): Hono {
 
   // A floor, not a policy: an app wanting the full set registers `secureHeaders()` in src/server.ts, and
   // because this is registered first it unwinds last, so the "only if unset" checks stand aside for it.
-  // Owned by the framework because it also has to cover `mountStaticAssets` — a terminal handler the
-  // app's own middleware never sees.
+  // Owned by the framework so that an app with no src/server.ts at all still gets it.
   app.use(async (c, next) => {
     await next();
     const headers = c.res.headers;
@@ -397,13 +396,18 @@ function buildApp(): Hono {
     if (!headers.has('cache-control')) headers.set('cache-control', 'private, no-cache');
   });
 
-  runtime.mountStaticAssets(app);
-
-  // Ahead of the page routes, so the app's own middleware (`csrf()`, `bodyLimit()`, auth, logging) wraps
-  // page requests too. The flip side: a *terminal* handler in src/server.ts shadows a page at the same path.
+  // First, so the app's own middleware (`csrf()`, `bodyLimit()`, auth, logging) wraps everything registered
+  // below: the page routes, and the asset handlers too. Assets used to be mounted ahead of this, which left
+  // `/_static/*` answered by a terminal handler nothing of the app's ever saw — no `secureHeaders()`, and so
+  // no HSTS on exactly the requests a downgrade attack lands on. The flip side is the same one it always had,
+  // one path wider: a *terminal* handler in src/server.ts shadows a page at the same path, and unscoped
+  // middleware now also runs for `/_static`, which is a reserved prefix an app should not be matching on
+  // purpose anyway.
   if (serverApp) {
     app.route('/', serverApp);
   }
+
+  runtime.mountStaticAssets(app);
 
   const memoizePage = (page: FallbackPage, label: string) => once(() => loadPageModule(page.component, label));
   const loadNotFoundPage = routeConfig.notFound ? memoizePage(routeConfig.notFound, 'the notFound page') : null;
