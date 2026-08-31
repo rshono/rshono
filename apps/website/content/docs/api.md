@@ -72,6 +72,13 @@ In a server component or an action, `getRequestContext().url` is the same value,
 `redirect` and `notFound` never return, so TypeScript narrows away the code after them and you don't
 need to `return` the call. Don't wrap either in a `try/catch` that swallows the signal.
 
+Both have to be reached **before the page shell is sent**. A page streams, so the status line goes out as
+soon as the shell is ready and HTTP has no take-backs after that: called from a `<Suspense>` boundary that
+resolves later, neither can still be a 3xx or a 404. The response is committed as `200 text/html`, a browser
+with JavaScript follows the signal through the payload, and a visitor without it stays on the fallback.
+Decide in middleware or in the page component body, above the boundary — `rshono dev` warns when a signal
+arrives too late.
+
 ```tsx
 import { getRequestContext, redirect } from '@rshono/core/server';
 

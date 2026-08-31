@@ -138,13 +138,16 @@ test('redirect() in a server component: an HTTP 3xx on hard navigation, a digest
   assert.match(await soft.text(), /RSHONO_REDIRECT/, 'the client needs the digest to follow the redirect itself');
 });
 
-test('redirect() from inside a bare Suspense, after the shell has already resolved', async () => {
-  // `/dashboard` above redirects from the page component, so the signal arrives before there is a response to
-  // abandon. This is the other window: a bare `<Suspense>` has no `CatchBoundary` to re-throw the signal, so
-  // React SSR renders the fallback, the shell resolves, and the HTML response is live and being pumped by the
-  // time the RSC render records the redirect. The framework has to drop that half-built response and answer
-  // with the redirect — which it does by aborting the render, cancelling the stream it will not serve, and
-  // re-throwing. Nothing exercised this path before.
+test('redirect() from a bare Suspense that settles just before the shell is ready is still a real 3xx', async () => {
+  // `/dashboard` above redirects from the page component, so the signal arrives before there is anything to
+  // abandon at all. This is the narrow window after that: a bare `<Suspense>` has no `CatchBoundary` to
+  // re-throw the signal, so React SSR renders the fallback and the shell resolves — but the section awaits
+  // only `Promise.resolve()`, so the signal is recorded before `renderHTML` hands its stream back and the
+  // response head is still the framework's to write. It drops the half-built response by aborting the render,
+  // cancelling the stream it will not serve, and re-throwing.
+  //
+  // The window *past* this one — a boundary that resolves later — cannot answer 3xx at all; that is
+  // `/late-signal` below.
   const hard = await fetch(`${base}/suspense-redirect`, { redirect: 'manual' });
   assert.equal(hard.status, 303, 'a hard load must still get a real redirect, not a half-rendered document');
   assert.match(hard.headers.get('location') ?? '', /\/login$/);
@@ -154,6 +157,39 @@ test('redirect() from inside a bare Suspense, after the shell has already resolv
   assert.equal(soft.status, 200, 'a flight fetch never reaches the SSR half, so the signal rides the payload');
   assert.match(await soft.text(), /RSHONO_REDIRECT/);
 });
+
+// The documented limitation, and the two things the framework still owes a request that hits it: the digest
+// has to survive, because it is the client's only way back, and the render nobody will read has to stop.
+// `/late-signal` waits 50ms before signalling — long past shell-ready — beside a second boundary that takes
+// 2s, which is what makes "the render was wound down" observable from outside.
+for (const { signal, digest, name } of [
+  { signal: null, digest: /RSHONO_REDIRECT;303;%2Flogin/, name: 'redirect()' },
+  { signal: 'notfound', digest: /RSHONO_NOT_FOUND/, name: 'notFound()' },
+]) {
+  test(`${name} from a boundary that resolves after the shell degrades to a 200 carrying the digest`, async () => {
+    const logsBefore = getOutput().length;
+    const started = Date.now();
+    const res = await fetch(`${base}/late-signal${signal ? `?signal=${signal}` : ''}`, { redirect: 'manual' });
+    const html = await res.text();
+    const elapsed = Date.now() - started;
+
+    assert.equal(res.status, 200, 'the head went out with the shell, and HTTP has no take-backs');
+    assert.match(res.headers.get('content-type'), /text\/html/);
+    assert.match(html, digest, 'the digest is the client’s only way back — aborting must not cut React off before it');
+    assert.match(html, /\$RX/, 'the pending boundaries are client-render instructions, not a truncated document');
+    assert.ok(html.trimEnd().endsWith('</body></html>'), 'and the document is closed properly');
+    assert.match(html, /data-section="loading"/, 'a visitor without JavaScript is left on the fallback — the limitation, documented in the README');
+
+    // The wind-down, from outside: the second boundary needs 2s, and neither its content nor that wait is here.
+    assert.doesNotMatch(html, /the slow section rendered anyway/, 'the render for a page nobody will read must stop');
+    assert.ok(elapsed < 1500, `the doomed render should be aborted, not waited out (took ${elapsed}ms)`);
+
+    // The warning that goes with this is for whoever is writing the page, and dev is where they are. It is
+    // asserted in dev.test.mjs; here the point is that production says nothing.
+    await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+    assert.doesNotMatch(getOutput().slice(logsBefore), /resolved after the page shell/);
+  });
+}
 
 test('a client-initiated action that redirects answers with a flight payload the runtime navigates on', async () => {
   // The other redirect shape, and the only one that reaches the RSC branch of `respondToControlSignal`.

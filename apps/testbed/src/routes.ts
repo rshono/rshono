@@ -52,6 +52,10 @@ export const routes = defineRoutes({
       component: () => import('./components/boundary-demo'),
     },
     {
+      path: '/late-signal',
+      component: () => import('./components/late-signal'),
+    },
+    {
       // Deliberately broken, and linked from nowhere: its module throws as it evaluates. See the component.
       path: '/unloadable',
       component: () => import('./components/unloadable'),

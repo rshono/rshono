@@ -9,8 +9,24 @@ import { runCli, startTestbed, stopServer, TESTBED_DEV_DIR, TESTBED_DIR } from '
 
 // Served under the testbed's hardened profile, so the dev-only half of the CSP contract is covered
 // here: the app writes one policy for both environments and the framework widens it for React Refresh.
-const { base, child, port } = await startTestbed('dev', { timeoutMs: 90_000, env: { TESTBED_CSP: '1' } });
+const { base, child, port, getOutput } = await startTestbed('dev', { timeoutMs: 90_000, env: { TESTBED_CSP: '1' } });
 after(() => stopServer(child));
+
+// A `redirect()` from a boundary that resolves after the shell cannot become a 3xx — the response is
+// already committed (see the README's "Requirements & limitations"). The fix is in app code, so the
+// framework says so where the app is being written. Production stays silent; prod.test.mjs asserts that.
+test('dev warns when a control signal arrives after the page shell has been sent', async () => {
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/late-signal`, { redirect: 'manual' });
+  await res.text();
+  assert.equal(res.status, 200, 'the degradation itself is the documented behaviour');
+
+  await new Promise((resolve) => setTimeout(resolve, 300)); // the child's stderr reaches us asynchronously
+  const logged = getOutput().slice(logsBefore);
+  assert.match(logged, /resolved after the page shell had already been sent/, 'the author has to be told');
+  assert.match(logged, /GET \/late-signal/, 'and which request it was');
+  assert.match(logged, /middleware/, 'and where the decision belongs instead');
+});
 
 test('dev serves both representations of a page through the worker proxy', async () => {
   const document = await fetch(`${base}/`);

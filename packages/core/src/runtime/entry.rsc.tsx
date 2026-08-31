@@ -194,6 +194,39 @@ function releaseWhenDone(stream: ReadableStream<Uint8Array>, done: () => void): 
   );
 }
 
+/**
+ * A macrotask boundary: `setImmediate` where there is one — the current turn's check phase rather than a
+ * timer — and `setTimeout` as the portable fallback, for a runtime without it. `flight-inject.ts` has the
+ * same two lines and the same reason; they are not shared because that module belongs to the SSR layer, and
+ * importing it here would give the RSC layer its own instance of it.
+ */
+const deferTask: (run: () => void) => void =
+  typeof setImmediate === 'function'
+    ? setImmediate
+    : (run) => {
+        setTimeout(run, 0);
+      };
+
+/**
+ * Dev-only: says that a control signal arrived too late to be one.
+ *
+ * The root fix is in app code, so authoring time is where this has to be said, and a docs paragraph is not
+ * where anyone reads it. `isDev` is the baked build flag, so a production server pays one boolean check on a
+ * path that has already gone wrong — and says nothing.
+ */
+function warnLateControlSignal(c: Context, signal: ControlSignal): void {
+  const isRedirect = signal instanceof RedirectSignal;
+  console.warn(
+    `[rshono] ${isRedirect ? `redirect(${JSON.stringify(signal.location)})` : 'notFound()'} was called from a boundary that ` +
+      `resolved after the page shell had already been sent (${c.req.method} ${c.req.path}), so it cannot become a real ` +
+      `${isRedirect ? '3xx' : '404'}: the response is committed as 200 text/html. A browser with JavaScript follows the ` +
+      `digest that rides the payload; one without stays on the Suspense fallback, and a crawler indexes the 200.${
+        isRedirect ? '' : ' A JavaScript client recovers by reloading, which renders this same page again.'
+      }` +
+      ' Decide before the render starts streaming — in Hono middleware, or in the page component body above the boundary.',
+  );
+}
+
 interface ComponentRenderOptions {
   status?: number;
   isRsc: boolean;
@@ -265,12 +298,31 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
   beginPageRender(c);
 
   let controlSignal: ControlSignal | undefined;
+  /** Set once `renderHTML` has returned, which is where the response head stops being changeable. */
+  let shellFlushed = false;
   const rscStream = renderToReadableStream(rscPayload, {
     temporaryReferences: opts.temporaryReferences,
     signal,
     onError(error) {
       if (isControlSignal(error)) {
         controlSignal = error;
+        if (shellFlushed) {
+          if (isDev) warnLateControlSignal(c, error);
+          // Past the shell the status line, the headers and the first bytes are on the wire, so the digest
+          // React writes into the payload is the only path left — and everything still rendering is for a
+          // page the browser is about to navigate away from. Winding it down stops those boundaries, runs
+          // `flight-inject`'s cancel/flush, and fires the `release()` above now rather than whenever the
+          // doomed render happens to finish.
+          //
+          // One macrotask later rather than from inside `onError`, where React is still handling the error
+          // that produced the digest — the row carrying it is the only recovery the client has, and an abort
+          // that re-entered React there could cut the render off before it is written. Measured to survive
+          // either way on react-server-dom-rspack 0.1.0; deferred anyway, because that ordering is an
+          // internal the `^19.1.0` peer range does not promise, and the cost is one macrotask on a render
+          // that is already doomed. The reason is the signal itself, so every boundary the abort errors
+          // carries the digest rather than a bare AbortError the client would paint as a fault.
+          if (!signal.aborted) deferTask(() => renderAbort.abort(error));
+        }
         return error.digest;
       }
       if (!signal.aborted) reportServerError(error, { source: 'render', request: c.req.raw, message: '[rshono] render error:' });
@@ -299,6 +351,10 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
     if (controlSignal) throw controlSignal;
     throw error;
   }
+  // `renderHTML` returns at *shell ready*, so from here the response is the one that ships. Set before the
+  // check below rather than after it, so nothing lands in the window between the two: a signal that arrives
+  // in it is handled there *and* schedules an abort, and aborting an aborted controller is a no-op.
+  shellFlushed = true;
   if (controlSignal) {
     // The shell resolved, so this response is live: React is being pumped into the payload-injecting
     // transform, and a `redirect()` that surfaced from a boundary settling just before the shell was ready
