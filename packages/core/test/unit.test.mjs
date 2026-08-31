@@ -90,6 +90,23 @@ describe('injectFlightPayload', () => {
   test('carries the CSP nonce on the injected script', async () => {
     const html = await inject(['<html><body></body></html>'], { nonce: 'abc123' });
     assert.match(html, /<script nonce="abc123">/);
+    // Base64url too — a generator may emit either alphabet, and `=` padding.
+    const urlSafe = await inject(['<html><body></body></html>'], { nonce: 'aB-_0z==' });
+    assert.match(urlSafe, /<script nonce="aB-_0z==">/);
+  });
+
+  test('drops a nonce that is not one rather than writing it into the tag', async () => {
+    // This tag is built by hand, so its attribute value is the one in a rendered document that nothing else
+    // escapes. The value is not attacker-controlled today — it comes from Hono's `secureHeaders()` — but the
+    // framework does not own where it comes from: `secureHeadersNonce` is an ordinary context variable any
+    // middleware can set. A `"` in it would close the attribute and open a script-injection point in every
+    // page. Dropped rather than escaped: a value that is not a nonce is not one, and a payload script the
+    // policy then refuses is the visible failure to have.
+    for (const nonce of ['" onload="alert(1)', 'abc"><script>alert(1)</script>', 'has space', 'weird;value', '<>']) {
+      const html = await inject(['<html><body></body></html>'], { nonce });
+      assert.match(html, /<script>\(self\.__FLIGHT_DATA/, `"${nonce}" must not reach the tag`);
+      assert.equal(countOf(html, 'nonce'), 0, `"${nonce}" was written into the document`);
+    }
   });
 
   test('escapes a payload that would close the script element early', async () => {

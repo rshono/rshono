@@ -65,12 +65,26 @@ function endsWithTrailer(buffer: Uint8Array, length: number): boolean {
   return true;
 }
 
+/**
+ * The characters a CSP nonce may be made of: base64 and base64url, which is what every generator of one emits
+ * — Hono's `secureHeaders()`, the only source the framework reads, produces base64 of 16 random bytes.
+ *
+ * The tag below is built by hand rather than by React, so this is the one attribute value in a rendered
+ * document that nothing else escapes. The value is not attacker-controlled today, but the framework does not
+ * own where it comes from: `c.get('secureHeadersNonce')` is an ordinary context variable that any middleware
+ * can set, and a nonce carrying a `"` would close the attribute and open a script-injection point in the
+ * document. Anything outside this set is dropped rather than escaped: a value this is not is not a nonce, and
+ * a page whose payload scripts are then refused by the policy is the visible failure to have.
+ */
+const NONCE_CHARS = /^[A-Za-z0-9+/=_-]+$/;
+
 export function injectFlightPayload(
   rscStream: ReadableStream<Uint8Array>,
   options: { nonce?: string; onDone?: () => void } = {},
 ): TransformStream<Uint8Array, Uint8Array> {
   const { nonce, onDone } = options;
-  const scriptOpen = `<script${nonce ? ` nonce="${nonce}"` : ''}>(self.__FLIGHT_DATA||=[]).push(`;
+  const safeNonce = nonce !== undefined && NONCE_CHARS.test(nonce) ? nonce : undefined;
+  const scriptOpen = `<script${safeNonce ? ` nonce="${safeNonce}"` : ''}>(self.__FLIGHT_DATA||=[]).push(`;
   const scriptClose = ')</script>';
 
   const { promise: flightWritten, resolve: flightDone } = Promise.withResolvers<void>();
