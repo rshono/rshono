@@ -279,10 +279,17 @@ test('a notFound page that redirects is honoured from both places a 404 is rende
   }
 });
 
-test('non-HTML clients get plain-text 404s', async () => {
+test('non-HTML clients get plain-text 404s, private like the rendered one', async () => {
   const res = await fetch(`${base}/api/definitely-not-an-endpoint`);
   assert.equal(res.status, 404);
   assert.equal(await res.text(), 'Not Found');
+  // `text/plain`, so the default the framework applies to page content types does not reach it — and a 404
+  // is heuristically cacheable, so a shared cache is free to store one that says nothing.
+  assert.equal(res.headers.get('cache-control'), 'private, no-cache');
+
+  const rendered = await fetch(`${base}/definitely-not-a-page`, { headers: { Accept: 'text/html' } });
+  await rendered.text();
+  assert.equal(rendered.headers.get('cache-control'), res.headers.get('cache-control'), 'the two 404s must agree');
 });
 
 test('useNavigation() gives a client island server-computed pathname/params/searchParams during SSR (no flicker)', async () => {

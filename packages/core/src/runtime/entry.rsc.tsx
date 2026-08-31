@@ -46,6 +46,13 @@ const { isDev } = __RSHONO_CONFIG__;
 /** How long a prerendered page may be reused before revalidating. Also what `public/` files get. */
 const SSG_CACHE_CONTROL = 'public, max-age=300';
 
+/**
+ * What a page response gets when nothing else set one: without it a shared cache is free to store a logged-in
+ * user's page and hand it to someone else. `private, no-cache` forbids that without blocking bfcache, which
+ * `no-store` would.
+ */
+const PAGE_CACHE_CONTROL = 'private, no-cache';
+
 /** The two content types a page can be served as, from the same URL — which is what makes `Vary` non-optional. */
 const PAGE_CONTENT_TYPE = /^(?:text\/html|text\/x-component)\b/;
 
@@ -161,7 +168,11 @@ function acceptsHtml(c: Context): boolean {
  * payload. It carries the `Vary` too: this is one of the answers a page URL gives depending on the `RSC` request header.
  */
 function plainNotFound(c: Context): Response {
-  return c.text('Not Found', 404, { vary: RSC_VARY_HEADER });
+  // `cache-control` explicitly, because the default above is applied to page *content types* and this is
+  // `text/plain`. A 404 is heuristically cacheable under RFC 9111, so without it a shared cache may store
+  // this one — while the rendered HTML 404 next to it, the same answer to the same request from a client
+  // that asked for HTML, is correctly private.
+  return c.text('Not Found', 404, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
 }
 
 /** A lazy once-cell: runs `load` at most once, but clears a rejection so a later call can retry. */
@@ -472,9 +483,7 @@ function buildApp(): Hono {
     // Page responses only from here down.
     if (!PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) return;
     appendVary(headers, RSC_VARY_HEADER);
-    // Without a default a shared cache is free to store a logged-in user's page and hand it to someone
-    // else. `private, no-cache` forbids that without blocking bfcache, which `no-store` would.
-    if (!headers.has('cache-control')) headers.set('cache-control', 'private, no-cache');
+    if (!headers.has('cache-control')) headers.set('cache-control', PAGE_CACHE_CONTROL);
   });
 
   // First, so the app's own middleware (`csrf()`, `bodyLimit()`, auth, logging) wraps everything registered
@@ -635,7 +644,9 @@ function buildApp(): Hono {
       }
     }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';
-    return c.text(`Internal Server Error${detail}`, 500, { vary: RSC_VARY_HEADER });
+    // Same reason as `plainNotFound`, minus the urgency: a 500 is not heuristically cacheable, so this half
+    // is consistency — the framework's own answers should not differ in what they promise about caching.
+    return c.text(`Internal Server Error${detail}`, 500, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
   });
 
   return app;

@@ -54,10 +54,15 @@ test('with no notFound page, an unmatched path is a plain 404', async () => {
   assert.equal(res.status, 404);
   assert.match(res.headers.get('content-type'), /text\/plain/);
   assert.match(res.headers.get('vary'), /\bRSC\b/, 'the same URL answers differently per the RSC header');
+  // A 404 is heuristically cacheable, and this one is `text/plain` — so it misses the default the framework
+  // applies to page content types, and has to carry it itself. A rendered HTML 404 is `private, no-cache`;
+  // the same answer to the same request must not promise something else because of who asked.
+  assert.equal(res.headers.get('cache-control'), 'private, no-cache');
 });
 
 test('with no error page, a thrown page falls back to the framework 500 without leaking the message', async () => {
   const res = await fetch(`${base}/boom`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'the framework’s own answers agree about caching');
   assert.equal(res.status, 500);
   const body = await res.text();
   assert.match(body, /Internal Server Error/);
