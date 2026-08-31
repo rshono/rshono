@@ -109,7 +109,7 @@ These are limitations of the comparison, not of the frameworks. Read them before
 5. **rshono pays a production-install cost the other two don't.** `@rspack/core` sits in
    `@rshono/core`'s `dependencies` rather than `devDependencies` — the bundler is what the CLI it ships
    builds with — so it lands in a production install. `footprint.mjs` measures it.
-6. **rshono is built on experimental `rspack.experiments.rsc` and `react-server-dom-rspack@0.0.x`.**
+6. **rshono is built on experimental `rspack.experiments.rsc` and a pre-1.0 `react-server-dom-rspack`.**
    Those move under it, which is why this is CI infrastructure to re-run per release rather than a
    number to publish once.
 7. **Not measured:** client-side navigation (three different protocols; measuring it badly is worse

@@ -35,7 +35,10 @@ typecheck` after `pnpm lint:fix`.
 - **`@rspack/core` and `react-server-dom-rspack` are pinned exactly, in `pnpm-workspace.yaml` overrides as
   well as in the manifests.** RSC internals are coupled across the two compilers and the two React builds; a
   split resolution fails inside minified React at render time. Don't bump them casually — a bump is a
-  release, and the whole suite is the check.
+  release, and the whole suite is the check. Move the manifests, the overrides and the lockfile in one commit:
+  a manifest pin is what a consumer resolves and an override is what this repo resolves, so drifting them
+  makes the suite green against a resolution nobody can install. `pnpm check:pins` is what holds them
+  together, and it runs in CI and again before a release.
 - **The apps import the framework through its published `exports`, which point at `dist/`.** A source change
   is invisible to them until `pnpm --filter @rshono/core build` has run. `pnpm dev` runs `tsc --watch` for
   exactly this.
@@ -48,6 +51,7 @@ typecheck` after `pnpm lint:fix`.
 ## Testing
 
 ```bash
+pnpm check:pins                        # the exact pins agree: manifests, overrides, lockfile, node_modules
 pnpm lint                              # one ESLint config, every package
 pnpm --filter @rshono/core typecheck
 pnpm --filter @rshono/core test        # unit + minimal-app + postcss + dev + production e2e + deploy targets

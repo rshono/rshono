@@ -11,6 +11,26 @@ those.
 
 ## [Unreleased]
 
+### Changed
+
+- **`@rspack/core` 2.1.7 → 2.2.0 and `react-server-dom-rspack` 0.0.3 → 0.1.0.** The two move as a pair —
+  `react-server-dom-rspack@0.1.0` declares a `@rspack/core: ^2.2.0-0` peer — and `0.1.0` is a minor on a
+  pre-1.0 package, so treat it as a breaking upstream change and read this entry before upgrading.
+
+  The manifests had already declared this pair since `6d8e3e4`, but the `pnpm-workspace.yaml` overrides and
+  the lockfile were left on 2.1.7 / 0.0.3. Because a manifest pin is what a consumer resolves and an override
+  is what this repo resolves, **the published versions had never been tested**: the suite, CI and every
+  fixture ran against the old pair while `npm i @rshono/core` installed the new one. The overrides and the
+  lockfile now name the same pair as the manifests, and the whole suite — including the scaffold job, which
+  installs a generated app from a registry with no overrides in play — is green against it.
+
+### Added
+
+- **`pnpm check:pins`**, which asserts the exactly-pinned dependencies agree across both published manifests,
+  the `pnpm-workspace.yaml` overrides, the lockfile and what is actually installed. It runs in CI before the
+  gates that would otherwise report a false green, and again in `pnpm release`, where `--skip-tests` cannot
+  skip it. Nothing compared those copies before, which is why the drift above lasted a month.
+
 ## [1.0.0-rc.17] - 2026-08-29
 
 ### Changed

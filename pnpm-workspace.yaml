@@ -10,8 +10,8 @@ packages:
 overrides:
   react: 19.2.8
   react-dom: 19.2.8
-  react-server-dom-rspack: 0.0.3
-  '@rspack/core': 2.1.7
+  react-server-dom-rspack: 0.1.0
+  '@rspack/core': 2.2.0
 allowBuilds:
   esbuild: false
   # wrangler brings workerd, whose install script only picks the platform binary out of the optional

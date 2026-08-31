@@ -8,7 +8,7 @@ rshono is a web framework built on [Hono](https://hono.dev), [Rspack](https://rs
 (`src/routes.ts`), one optional file (`src/server.ts`), nine exported values.
 
 > **Alpha.** Built on Rspack's experimental RSC support (`rspack.experiments.rsc`) and
-> `react-server-dom-rspack`, which is still `0.0.x`. Both are pinned to exact versions, so a release of
+> `react-server-dom-rspack`, which has not reached 1.0. Both are pinned to exact versions, so a release of
 > rshono is what moves them.
 
 ## Scaffold

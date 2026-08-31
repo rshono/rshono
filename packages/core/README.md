@@ -17,10 +17,11 @@ prerendering, and hard env/secret safety.
 
 > **Release candidate.** The framework itself is covered end to end (see [Testing](#testing)) and its API is
 > settled. What is not settled underneath it: Rspack's RSC support is an experimental API
-> (`rspack.experiments.rsc`) and `react-server-dom-rspack` is still `0.0.x`. Both are pinned to exact
-> versions — in the manifests and in workspace overrides — and a release of rshono is what moves them, so an
-> upstream change reaches you as a tested release rather than as a broken install. That is the whole of the
-> caveat, and it is the reason to read the [changelog](../../CHANGELOG.md) before upgrading.
+> (`rspack.experiments.rsc`) and `react-server-dom-rspack` has not reached 1.0, so its own minor bumps are
+> breaking by convention. Both are pinned to exact versions — in the manifests and in workspace overrides —
+> and a release of rshono is what moves them, so an upstream change reaches you as a tested release rather
+> than as a broken install. That is the whole of the caveat, and it is the reason to read the
+> [changelog](../../CHANGELOG.md) before upgrading.
 
 **Full documentation: [rshono.com/docs](https://www.rshono.com/docs).**
 

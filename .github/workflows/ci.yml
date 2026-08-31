@@ -50,6 +50,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # A manifest pin is what a consumer resolves; an override is what this repo resolves. When they drift,
+      # the whole suite goes green against a resolution nobody publishes — so this runs before the gates that
+      # would report that false green.
+      - name: Check the exact pins agree
+        run: pnpm check:pins
+
       # The type-aware rules need the same modules `tsc` resolves, and the apps reach the framework
       # through its published `exports` — which point at `dist/`. Without this step every
       # `@rshono/core` import lints as an unresolved type and the run fills with `no-unsafe-*`.

@@ -25,6 +25,7 @@
     "release": "node scripts/release.mjs",
     "release:dry": "node scripts/release.mjs --dry-run",
     "clean": "rm -rf packages/*/dist packages/*/node_modules apps/*/node_modules node_modules",
+    "check:pins": "node scripts/check-pinned-deps.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
