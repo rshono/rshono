@@ -103,7 +103,11 @@ function cspNonce(c: Context): string | undefined {
  *   however many proxies rewrote `Host` on the way in.
  * - An `Origin` that is the app's own contradicts either label — a browser calls a post from the app's own pages
  *   `same-origin` — so the pair is a shape no browser produces, and refusing it would only catch a proxy or a
- *   test client setting the label by hand while posting from the app itself.
+ *   test client setting the label by hand while posting from the app itself. Nothing else clears the label:
+ *   an `Origin` of `null` (a sandboxed iframe, a `data:` URL, `Referrer-Policy: no-referrer`) and no `Origin`
+ *   at all are both refused. A browser attaches one to every non-GET request, so neither is a shape it
+ *   produces — but a security predicate that says "not proven foreign" rather than "proven local" fails open
+ *   the day something does produce it.
  *
  * `publicUrl(c)` rather than `c.req.url`, so it honours `trustProxy` and compares against the origin the
  * browser actually used — which behind a proxy, `rshono dev`'s included, is not the one the server was reached
@@ -113,8 +117,7 @@ function cspNonce(c: Context): string | undefined {
 function refusesCrossSiteForm(c: Context): boolean {
   const site = c.req.header('sec-fetch-site');
   if (site !== 'cross-site' && site !== 'same-site') return false;
-  const origin = c.req.header('origin');
-  return origin !== undefined && origin !== publicUrl(c).origin;
+  return c.req.header('origin') !== publicUrl(c).origin;
 }
 
 async function loadPageModule(load: () => Promise<{ default: PageComponent }>, label: string): Promise<ServerEntry<PageComponent>> {

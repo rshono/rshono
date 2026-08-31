@@ -119,6 +119,15 @@ test('a browser-shaped form post from another origin cannot reach a server actio
     assert.notEqual(sameOrigin.status, 403, `${site} labelled, but posted from the app itself`);
   }
 
+  // Neither the label with no `Origin` at all nor `Origin: null` — a sandboxed iframe, a `data:` URL,
+  // `Referrer-Policy: no-referrer` — proves this came from here. A browser attaches an `Origin` to every
+  // non-GET request, so neither is a shape one produces; the guard says "proven local" rather than "not
+  // proven foreign" so that stays true of it the day something does.
+  const noOrigin = await post({ 'sec-fetch-site': 'cross-site' });
+  assert.equal(noOrigin.status, 403, 'a cross-site label with no Origin proves nothing');
+  const opaque = await post({ origin: 'null', 'sec-fetch-site': 'cross-site' });
+  assert.equal(opaque.status, 403, 'an opaque origin is not the app');
+
   // `same-origin` is the browser's own statement that this came from the app's own pages, and it is
   // unforgeable by page script — so it settles the question whatever `Origin` says. That short-circuit is
   // what keeps a proxy that rewrites `Host` from breaking every legitimate post behind it.
