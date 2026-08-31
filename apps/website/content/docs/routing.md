@@ -91,6 +91,11 @@ An endpoint route is served by a raw Hono handler instead of a component — JSO
 redirects, feeds. `method` defaults to `'all'`. There is no `'head'`: Hono dispatches a `HEAD` as a
 `GET` and strips the body off the response, so `'get'` already answers both.
 
+It is also how you answer a method a page does not. A page route is registered for `GET` and `POST` — plus
+the `HEAD` that rides the `GET` — and anything else is a 404 rather than a 405, deliberately: the `Allow`
+header a 405 owes the client would mean tracking the methods registered per path, for a distinction no client
+here acts on differently.
+
 ```ts
 { type: 'endpoint', path: '/api/health', method: 'get', server: () => import('./health') }
 ```

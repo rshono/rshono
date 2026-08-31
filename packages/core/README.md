@@ -306,6 +306,10 @@ Every target streams, which is the bar a new one has to clear.
   payload as a digest, and the client runtime navigates), but a visitor without JavaScript is left on the
   fallback under a 200, and a crawler indexes that 200 as a soft 404. The fix is app-side: decide in Hono
   middleware, or in the page component body above the boundary. `rshono dev` warns when it happens.
+- **A page route answers `GET`, `POST` and `HEAD`.** Every other method is a 404 rather than a 405: the
+  `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
+  path for a distinction nothing acts on differently here. An endpoint route is the way to answer a `PUT`,
+  `PATCH`, `DELETE` or `OPTIONS`.
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
   production ships no client source maps).

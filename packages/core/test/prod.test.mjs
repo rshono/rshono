@@ -376,6 +376,26 @@ test('endpoint route and Hono sub-app respond with JSON', async () => {
   assert.ok(Array.isArray(users.users) && users.users.length >= 3);
 });
 
+// The documented choice, pinned so it stays one: a page answers GET, POST and the HEAD that rides the GET,
+// and every other method is the notFound page rather than a 405 with an `Allow` header. An endpoint route is
+// how an app answers those — see the README's "Requirements & limitations".
+test('a method a page route does not answer is a 404, not a 405', async () => {
+  for (const method of ['PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+    // With the app's own Origin: the testbed registers `csrf()`, which refuses an unsafe method with a
+    // foreign one long before the router is reached — a 403 that would say nothing about routing.
+    const res = await fetch(`${base}/`, { method, headers: { Accept: 'text/html', Origin: base } });
+    await res.text();
+    assert.equal(res.status, 404, `${method} on a page`);
+    assert.equal(res.headers.get('allow'), null, 'no Allow header is promised, because no 405 is');
+  }
+
+  // The way out, and the reason 404 is defensible: an endpoint route answers whatever it registers, and
+  // `method` defaults to `all`. `/api/boom` throws by design, so its 500 *is* the proof that it ran.
+  const options = await fetch(`${base}/api/boom`, { method: 'OPTIONS', headers: { Origin: base } });
+  await options.text();
+  assert.equal(options.status, 500, 'an endpoint route with no method of its own answers every one of them');
+});
+
 // A HEAD promises the headers its GET would send, so it takes the same path — including the prerendered
 // bytes, which is the difference between reading a file and rendering a page it then throws away.
 test('a HEAD on a page route answers with the GET head and no body', async () => {
