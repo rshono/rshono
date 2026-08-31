@@ -2,7 +2,7 @@
 // exercises indirectly through one happy path. They import the *built* package, so they double as a
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
@@ -407,6 +407,40 @@ describe('readPrerendered', () => {
     assert.notEqual(other.etag, first.etag);
   });
 
+  // What the build's manifest is for: a `render: 'static'` route the build wrote nothing for — no
+  // `staticPaths`, a param it never saw, a page that did not render cleanly — falls through to SSR on every
+  // request, and misses are deliberately not cached, so without the index each of those pays a failed read
+  // first, forever.
+  test('does not touch the store for a path the build did not write', async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'listed'), { recursive: true });
+    writeFileSync(join(dir, 'listed', 'index.html'), '<!DOCTYPE html><p>listed</p>');
+    mkdirSync(join(dir, 'unlisted'), { recursive: true });
+    writeFileSync(join(dir, 'unlisted', 'index.html'), '<!DOCTYPE html><p>unlisted</p>');
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ files: ['listed/index.html'] }));
+
+    assert.ok(await readPrerendered(dir, '/listed'), 'a page the build recorded is served');
+    assert.equal(await readPrerendered(dir, '/unlisted'), null, 'the index is what the store holds — not whatever is on disk');
+    assert.equal(await readPrerendered(dir, '/listed', 'flight'), null, 'per variant: the flight half is best-effort and may not exist');
+  });
+
+  test('reads the store directly when the build left no manifest', async () => {
+    // A build from before there was one. Refusing to serve what it wrote would be worse than the failed
+    // read the index exists to avoid.
+    const dir = tempDir();
+    mkdirSync(join(dir, 'old'), { recursive: true });
+    writeFileSync(join(dir, 'old', 'index.html'), '<!DOCTYPE html><p>old</p>');
+    assert.ok(await readPrerendered(dir, '/old'));
+  });
+
+  test('treats a manifest it cannot parse as no manifest at all', async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'page'), { recursive: true });
+    writeFileSync(join(dir, 'page', 'index.html'), '<!DOCTYPE html><p>page</p>');
+    writeFileSync(join(dir, 'manifest.json'), 'not json');
+    assert.ok(await readPrerendered(dir, '/page'), 'a broken index must not take the store down with it');
+  });
+
   test('returns null for a missing page instead of throwing', async () => {
     assert.equal(await readPrerendered(tempDir(), '/nope'), null);
   });
@@ -458,6 +492,18 @@ describe('prerenderStaticRoutes', () => {
     const decode = (page) => new TextDecoder().decode(page.body);
     assert.equal(decode(await readPrerendered(ssgDir, '/docs/a')), '<!DOCTYPE html><p>ok</p>');
     assert.equal(decode(await readPrerendered(ssgDir, '/docs/a', 'flight')), '0:{"root":"flight"}');
+
+    // The index the reader gates on: every file, under the name a *request* resolves to, and nothing for
+    // the dynamic route that was never prerendered.
+    const manifest = JSON.parse(readFileSync(join(ssgDir, 'manifest.json'), 'utf8'));
+    assert.deepEqual(manifest.files.toSorted(), [
+      'about/index.html',
+      'about/index.rsc',
+      'docs/a/index.html',
+      'docs/a/index.rsc',
+      'docs/b/index.html',
+      'docs/b/index.rsc',
+    ]);
   });
 
   test('renders against siteUrl, so absolute URLs in the output are the deployed ones', async () => {

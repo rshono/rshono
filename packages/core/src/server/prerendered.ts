@@ -22,6 +22,18 @@ export const VARIANTS = {
 } as const satisfies Record<PrerenderVariant, { file: string; headers: Record<string, string>; contentType: string }>;
 
 /**
+ * The index the build leaves beside the pages, naming every file it wrote — one `files` array of
+ * {@link ssgFilePath} names.
+ *
+ * It exists so a reader can tell "this store has no page for that path" without asking the store, which is
+ * the difference between a `Map` lookup and a failed `readFile` (or, without a filesystem, a failed store
+ * fetch) on **every** request to a static route the build could not prerender — misses are deliberately not
+ * cached, so that one never warms up. Absent is not an error: a build from an older rshono has none, and a
+ * reader that finds none looks the way it always did.
+ */
+export const SSG_MANIFEST_FILE = 'manifest.json';
+
+/**
  * What a decoded path segment may not hold if it is to be one portable file name. `\ / : * ? " < > |` are
  * refused by Windows and `/` by every host, so a `staticPaths` value containing one fails the build rather
  * than writing a page on one machine and not on another — and a route pattern, whose params and wildcards are

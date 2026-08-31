@@ -182,6 +182,24 @@ describe('serving from a Worker', () => {
     assert.equal(await second.text(), '');
   });
 
+  test('does not ask the store for a page the build never prerendered', async () => {
+    // Every miss here is a subrequest, and misses are deliberately not cached — so a static route the
+    // build wrote nothing for would spend one on every request, forever. The build's manifest is what
+    // answers instead; it is fetched once per isolate, which is why it is allowed in the list below.
+    const asked = [];
+    const counting = { fetch: (request) => (asked.push(new URL(request.url).pathname), ASSETS.fetch(request)) };
+    const res = await worker.fetch(new Request(`${ORIGIN}/docs/never-prerendered`), { ASSETS: counting, ...APP_ENV }, {
+      waitUntil() {},
+      passThroughOnException() {},
+    });
+    await res.text();
+
+    assert.equal(res.status, 200, 'the route still renders per request');
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'rendered, not served from the store');
+    const pageReads = asked.filter((p) => p.startsWith('/__ssg/') && !p.endsWith('/manifest.json'));
+    assert.deepEqual(pageReads, [], 'the index already says there is no page under that path');
+  });
+
   test('serves a public/ file through the binding', async () => {
     const res = await fetchWorker('/robots.txt');
     assert.equal(res.status, 200);

@@ -2,7 +2,15 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { isPageRoute, type PageRoute, type Route } from '../router.js';
-import { createPageCache, ssgFilePath, toPrerenderedPage, VARIANTS, type PrerenderedPage, type PrerenderVariant } from './prerendered.js';
+import {
+  createPageCache,
+  ssgFilePath,
+  SSG_MANIFEST_FILE,
+  toPrerenderedPage,
+  VARIANTS,
+  type PrerenderedPage,
+  type PrerenderVariant,
+} from './prerendered.js';
 
 /**
  * Stand-in origin for a build that declared no `siteUrl`. Obviously wrong rather than a guess, so a page that
@@ -52,6 +60,25 @@ function interpolatePath(pattern: string, params: Record<string, string>): strin
 /** Prerendered pages, keyed by the request that produced them (see {@link readPrerendered}). */
 const pageCache = createPageCache();
 
+/** One in-flight or settled read of each store's {@link SSG_MANIFEST_FILE}; the file cannot change while the server is up. */
+const storeIndexes = new Map<string, Promise<ReadonlySet<string> | null>>();
+
+/**
+ * What `ssgDir` holds, as {@link ssgFilePath} names it — or `null` where the build left no manifest, which
+ * is every build made before there was one. A `null` gates nothing, so those keep the behaviour they had.
+ */
+function storeIndex(ssgDir: string): Promise<ReadonlySet<string> | null> {
+  let pending = storeIndexes.get(ssgDir);
+  if (!pending) {
+    // One `catch` for both failures worth the same answer: no manifest, and a manifest that is not one.
+    pending = readFile(join(ssgDir, SSG_MANIFEST_FILE), 'utf8')
+      .then((text) => new Set((JSON.parse(text) as { files?: string[] }).files ?? []) as ReadonlySet<string>)
+      .catch(() => null);
+    storeIndexes.set(ssgDir, pending);
+  }
+  return pending;
+}
+
 export async function readPrerendered(ssgDir: string, requestPath: string, variant: PrerenderVariant = 'html'): Promise<PrerenderedPage | null> {
   // Keyed by what the request carried rather than by the resolved filename, so a hit costs one Map lookup. Safe
   // because only *hits* are cached: an entry exists only if this exact key already passed the checks below.
@@ -61,6 +88,12 @@ export async function readPrerendered(ssgDir: string, requestPath: string, varia
 
   const relPath = ssgFilePath(requestPath, variant);
   if (relPath === null) return null;
+
+  // Before the store is touched: a `render: 'static'` route whose build wrote nothing — no `staticPaths`, a
+  // param the build never saw, a page that did not render cleanly — falls through to SSR on every request,
+  // and without this each of those pays a failed read first, forever.
+  const index = await storeIndex(ssgDir);
+  if (index && !index.has(relPath)) return null;
   // Belt and braces over the shared traversal guard: this proves the resolved file is under the root.
   const root = resolve(ssgDir);
   const file = resolve(root, relPath);
@@ -94,6 +127,16 @@ export interface PrerenderResult {
 }
 
 /**
+ * Records what the pass wrote, beside what it wrote. Written by the same pass for the same reason
+ * {@link ssgFilePath} is one function: an index that disagrees with the store is invisible, so the two are
+ * produced together or not at all.
+ */
+function writeManifest(ssgDir: string, files: readonly string[]): void {
+  mkdirSync(ssgDir, { recursive: true });
+  writeFileSync(join(ssgDir, SSG_MANIFEST_FILE), `${JSON.stringify({ files }, null, 2)}\n`);
+}
+
+/**
  * One representation of a path, as the app answered for it at build time. Discriminated on `ok` because both
  * callers have to tell "the app rendered this" from "it did not", and only one cares why.
  */
@@ -122,6 +165,8 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
 
   const written: string[] = [];
   const skipped: string[] = [];
+  /** Every file written, as the reader names it — {@link writeManifest}. */
+  const files: string[] = [];
 
   for (const route of staticRoutes) {
     let paths: string[];
@@ -161,6 +206,9 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
       const write = (variant: PrerenderVariant, body: string) => {
         mkdirSync(pageDir, { recursive: true });
         writeFileSync(join(pageDir, VARIANTS[variant].file), body);
+        // `ssgFilePath` again rather than the `join` above: the manifest is read against what a *request*
+        // resolves to, which is that function's output and not a filesystem path.
+        files.push(ssgFilePath(path, variant)!);
       };
       write('html', document.body);
 
@@ -176,6 +224,10 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
       written.push(path);
     }
   }
+
+  // Only where the app has static routes at all: an empty manifest would be a store, and a build with
+  // nothing to prerender should leave no `ssg/` directory for a preset to carry around.
+  if (staticRoutes.length > 0) writeManifest(ssgDir, files);
 
   return { written, skipped };
 }
