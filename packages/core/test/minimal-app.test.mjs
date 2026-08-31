@@ -3,8 +3,11 @@
 // `defineRoutes` shorthand. The rest of the suite runs against one richly-configured testbed, which
 // is exactly the app that would never catch "the framework assumes X exists".
 import assert from 'node:assert/strict';
+import { cpSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { buildApp, MINIMAL_APP_DIR, startApp, stopServer } from './helpers.mjs';
+import { buildApp, MINIMAL_APP_DIR, runCli, startApp, stopServer } from './helpers.mjs';
 
 buildApp(MINIMAL_APP_DIR);
 const { base, child, port } = await startApp(MINIMAL_APP_DIR, 'start');
@@ -107,4 +110,48 @@ test('a browser-shaped cross-site form post cannot reach a server action, even w
     body: 'x=1',
   });
   assert.notEqual(sameOrigin.status, 403);
+});
+
+// What the framework *refuses*, which for this app is the other half of the same claim: `src/routes.ts`
+// and `src/server.ts` are the two modules it cannot type-check, so both are validated at load. Each of
+// these used to be either a `TypeError` from inside a minified bundle, naming neither rshono nor the file
+// the developer has to open, or — for the duplicate path — a clean exit 0 with the second entry dead.
+const throwaway = [];
+after(() => {
+  for (const dir of throwaway) {
+    // The link, not what it points at: `node_modules` is the fixture's, borrowed rather than copied.
+    unlinkSync(join(dir, 'node_modules'));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** The minimal app somewhere disposable, with `src/routes.ts` replaced — a build that must fail, run safely. */
+function appWithRoutes(routesSource) {
+  const dir = mkdtempSync(join(tmpdir(), 'rshono-invalid-'));
+  throwaway.push(dir);
+  symlinkSync(join(MINIMAL_APP_DIR, 'node_modules'), join(dir, 'node_modules'), 'junction');
+  cpSync(join(MINIMAL_APP_DIR, 'package.json'), join(dir, 'package.json'));
+  cpSync(join(MINIMAL_APP_DIR, 'src', 'pages'), join(dir, 'src', 'pages'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'routes.ts'), routesSource);
+  return dir;
+}
+
+const HOME_AND = (second) =>
+  `import { defineRoutes } from '@rshono/core';\nexport const routes = defineRoutes([\n  { path: '/', component: () => import('./pages/home') },\n${second}]);\n`;
+
+test('a second route claiming a path the table already answers fails the build, naming both entries', () => {
+  const dir = appWithRoutes(HOME_AND("  { path: '/', component: () => import('./pages/manual') },\n"));
+  const { status, output } = runCli(dir, ['build']);
+  assert.equal(status, 1, `the build must not exit 0:\n${output}`);
+  assert.match(output, /\[rshono\] src\/routes\.ts: routes\[1\] \("\/"\) would never run — routes\[0\] \("\/"\) already answers GET, POST \//);
+  assert.doesNotMatch(output, /is not iterable|Cannot read properties/, 'and not by handing over a TypeError from a minified bundle');
+});
+
+test('a src/server.ts that does not default-export a Hono app fails the build, naming the file', () => {
+  const dir = appWithRoutes(HOME_AND(''));
+  writeFileSync(join(dir, 'src', 'server.ts'), 'export default { notAHono: true };\n');
+  const { status, output } = runCli(dir, ['build']);
+  assert.equal(status, 1, `the build must not exit 0:\n${output}`);
+  assert.match(output, /\[rshono\] src\/server\.ts must `export default` a Hono app/);
+  assert.doesNotMatch(output, /Cannot read properties of undefined/, "Hono's own failure names nothing the developer wrote");
 });

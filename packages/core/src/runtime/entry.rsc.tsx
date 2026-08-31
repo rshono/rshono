@@ -27,7 +27,7 @@ import { runtime } from '@rshono/deploy';
 import { routes as userRoutes } from '@rshono/routes';
 // @ts-expect-error — resolved by the '@rshono/server-app' alias (src/server.ts or the empty fallback)
 import * as serverAppModule from '@rshono/server-app';
-import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent, type PageProps, type Route, type RouteConfig } from '../router.js';
+import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent, type PageProps, type Route } from '../router.js';
 import { appendVary, etagMatches } from '../server/headers.js';
 import { beginPageRender, getRequestContext, publicUrl, readParams, reportServerError, runWithContext } from './context.js';
 import { isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
@@ -36,8 +36,9 @@ import { renderHTML } from './entry.ssr.js';
 import type { CancellableTransformer } from './flight-inject.js';
 import { RouterProvider } from './navigation.js';
 import { asksForRsc, isActionRequest, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
+import { validateRoutesModule, validateServerApp } from './validate-entries.js';
 
-const serverApp = ((serverAppModule as { default?: unknown }).default ?? null) as Hono | null;
+const serverApp = validateServerApp(serverAppModule);
 
 // Compiled into the bundle from rshono.config.ts by DefinePlugin; there is no runtime env-var interface.
 const { isDev } = __RSHONO_CONFIG__;
@@ -50,7 +51,9 @@ const PAGE_CONTENT_TYPE = /^(?:text\/html|text\/x-component)\b/;
 
 runtime.loadEnv();
 
-const routeConfig = userRoutes as RouteConfig;
+// Checked rather than cast: these two modules are the app's, and a mistake in either used to surface as a
+// `TypeError` from somewhere else entirely — or, for a duplicated path, as nothing at all.
+const routeConfig = validateRoutesModule(userRoutes);
 export const routes: readonly Route[] = routeConfig.routes;
 
 /** The result of a server action, as a `Result<T, E>` rather than an `ok` flag over one field. */

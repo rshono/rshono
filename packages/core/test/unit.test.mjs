@@ -20,6 +20,7 @@ import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
 import { beginPageRender, RequestContext } from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
+import { validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
 import { MINIMAL_APP_DIR } from './helpers.mjs';
 
 const tempDirs = [];
@@ -1107,5 +1108,106 @@ describe('walkHotUpdates', () => {
     target = 'c';
     assert.equal(await done, null);
     assert.equal(state.hash, 'c');
+  });
+});
+
+describe('validateRoutesModule', () => {
+  // The app's own `src/routes.ts`, checked before anything is built on it. Everything below either
+  // crashed somewhere unrelated (`nN is not iterable`, from a minified bundle) or did nothing at all.
+  const page = { path: '/', component: () => Promise.resolve({ default: () => null }) };
+  const endpoint = { type: 'endpoint', path: '/api/x', server: () => Promise.resolve({ handler: () => null }) };
+  const rejects = (exported, expected) => assert.throws(() => validateRoutesModule(exported), expected);
+
+  test('accepts both shapes the docs present, so leaving off defineRoutes is not a trap', () => {
+    assert.deepEqual(validateRoutesModule([page]), { routes: [page] });
+    const config = { routes: [page], notFound: { component: page.component } };
+    assert.equal(validateRoutesModule(config), config, 'a config is returned as it came');
+  });
+
+  test('names src/routes.ts when the export is not a route table at all', () => {
+    for (const exported of [undefined, null, 42, {}, { routes: 'nope' }]) {
+      rejects(exported, /\[rshono\] src\/routes\.ts must export `routes`/);
+    }
+  });
+
+  test('names the entry that is wrong, by position and by path', () => {
+    rejects([page, null], /routes\[1\] is null, not a route object/);
+    rejects([page, { component: page.component }], /routes\[1\] needs a `path` starting with "\/"/);
+    rejects([{ path: 'docs', component: page.component }], /routes\[0\] \("docs"\) needs a `path` starting with "\/"/);
+    rejects([{ path: '/x' }], /routes\[0\] \("\/x"\) needs `component`/);
+    rejects([{ type: 'page', path: '/x', component: page.component }], /the only `type` is 'endpoint'/);
+    rejects([{ type: 'endpoint', path: '/api/x' }], /is an endpoint, so it needs `server`/);
+  });
+
+  // Excess-property checking against a union accepts any key present in *some* member, so these
+  // type-check today and are then silently ignored — which looks exactly like a feature not working.
+  test('refuses a key that belongs to the other kind of route', () => {
+    rejects([{ ...endpoint, render: 'static' }], /has `render`, which only a page route has/);
+    rejects([{ ...endpoint, staticPaths: async () => [] }], /has `staticPaths`, which only a page route has/);
+    rejects([{ ...page, method: 'get' }], /has `method`, which only an endpoint route has/);
+    rejects([{ ...page, server: endpoint.server }], /has `server`, which only an endpoint route has/);
+  });
+
+  test('refuses a staticPaths the build would never call', () => {
+    rejects([{ ...page, path: '/docs/:slug', staticPaths: async () => [{ slug: 'a' }] }], /is not `render: 'static'`/);
+    rejects([{ ...page, render: 'static', staticPaths: 'nope' }], /`staticPaths` that is not a function/);
+    rejects([{ ...page, render: 'lazy' }], /has render "lazy" — it is 'static' or 'dynamic'/);
+  });
+
+  test("refuses a method the router cannot match, and points 'head' at 'get'", () => {
+    rejects([{ ...endpoint, method: 'HEAD' }], /has method "HEAD", which is not one of get, post/);
+    rejects([{ ...endpoint, method: 'head' }], /A HEAD is dispatched as a GET, so use 'get'/);
+  });
+
+  // The one that built cleanly, exited 0 and said nothing: Hono matches in registration order.
+  test('refuses a route every method of which the table already answers', () => {
+    rejects(
+      [page, { ...page, component: page.component }],
+      /routes\[1\] \("\/"\) would never run — routes\[0\] \("\/"\) already answers GET, POST \//,
+    );
+    rejects([endpoint, { ...endpoint, method: 'get' }], /already answers GET \/api\/x/, 'an `all` endpoint claims every method');
+    rejects([{ ...endpoint, path: '/' }, page], /already answers GET, POST \//, 'an endpoint shadows a page at the same path too');
+  });
+
+  test('leaves a route that still answers something alone', () => {
+    for (const table of [
+      // One path split across two methods — an ordinary thing to write.
+      [
+        { ...endpoint, method: 'get' },
+        { ...endpoint, method: 'post' },
+        { ...page, path: '/other' },
+      ],
+      // A catch-all behind a route claiming one method of the path: it still answers PUT, DELETE, …
+      [{ ...endpoint, method: 'post' }, endpoint],
+      // Overlapping *patterns* are the router's business, and specific-before-generic is the point.
+      [
+        { ...page, path: '/docs/getting-started' },
+        { ...page, path: '/docs/:slug' },
+      ],
+    ]) {
+      assert.deepEqual(validateRoutesModule(table).routes, table);
+    }
+  });
+
+  test('checks the two framework-owned pages as well', () => {
+    rejects({ routes: [page], notFound: {} }, /`notFound` must be a page/);
+    rejects({ routes: [page], error: () => null }, /`error` must be a page/);
+  });
+});
+
+describe('validateServerApp', () => {
+  test('takes the Hono app, or nothing where the app has no src/server.ts', () => {
+    // What the empty fallback module the alias resolves to default-exports.
+    assert.equal(validateServerApp({ default: null }), null);
+    assert.equal(validateServerApp({}), null);
+    assert.equal(validateServerApp(null), null);
+    const app = { fetch: () => null, routes: [] };
+    assert.equal(validateServerApp({ default: app }), app);
+  });
+
+  test('names src/server.ts rather than letting Hono throw from inside app.route()', () => {
+    for (const value of [{ notAHono: true }, 'nope', 42, { fetch: () => null }]) {
+      assert.throws(() => validateServerApp({ default: value }), /\[rshono\] src\/server\.ts must `export default` a Hono app/);
+    }
   });
 });
