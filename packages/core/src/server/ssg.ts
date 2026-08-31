@@ -34,23 +34,30 @@ export function resolveSiteOrigin(siteUrl: string | undefined): string {
   return parsed.origin;
 }
 
+/**
+ * A route's path with its params filled in, ready to render and to store.
+ *
+ * Throws for a pattern `staticPaths` cannot fill and for a set that does not fill it. Both are warned about
+ * and skipped by the caller, which already names the route — so these messages are the reason alone, written
+ * to be read at the end of that line.
+ */
 function interpolatePath(pattern: string, params: Record<string, string>): string {
   return pattern
     .split('/')
     .map((segment) => {
       if (!segment.startsWith(':')) {
         if (segment.includes('*')) {
-          throw new Error(`Cannot prerender "${pattern}": wildcard segments are not supported by staticPaths.`);
+          throw new Error(`wildcard segments are not supported by staticPaths`);
         }
         return segment;
       }
       const name = segment.slice(1);
       if (!/^\w+$/.test(name)) {
-        throw new Error(`Cannot prerender "${pattern}": optional/regex params are not supported by staticPaths.`);
+        throw new Error(`optional/regex params are not supported by staticPaths`);
       }
       const value = params[name];
       if (value === undefined) {
-        throw new Error(`staticPaths for "${pattern}" returned a param set without "${name}".`);
+        throw new Error(`staticPaths returned a param set without "${name}"`);
       }
       return encodeURIComponent(value);
     })
@@ -178,7 +185,18 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
         skipped.push(route.path);
         continue;
       }
-      paths = (await route.staticPaths()).map((params) => interpolatePath(route.path, params));
+      try {
+        paths = (await route.staticPaths()).map((params) => interpolatePath(route.path, params));
+      } catch (error) {
+        // A route whose paths cannot be computed — a wildcard or a regex/optional param, which `staticPaths`
+        // has no way to fill, or a set it filled wrongly — is unprerenderable, not unservable. It gets the
+        // same answer as the branch above rather than killing a build the route would have survived: the
+        // page is still there, rendered per request.
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`  ⚠ Static route "${route.path}" will SSR per request — ${reason.replace(/\.$/, '')}.`);
+        skipped.push(route.path);
+        continue;
+      }
     }
 
     for (const path of paths) {

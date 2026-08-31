@@ -556,22 +556,38 @@ describe('prerenderStaticRoutes', () => {
     assert.deepEqual(result.skipped, ['/boom']);
   });
 
-  test('rejects param shapes it cannot turn into a single file', async () => {
+  // A route whose paths cannot be computed is unprerenderable, not unservable — the same answer as a
+  // parameterised route with no `staticPaths` at all, one branch above it in the source. These used to
+  // throw out of the pass and take the whole build with them, for routes that work perfectly per request.
+  test('warns and skips a param shape it cannot turn into a single file, rather than failing the build', async () => {
     const cases = [
       { path: '/files/*', staticPaths: async () => [{}], expected: /wildcard segments/ },
       { path: '/docs/:slug{[a-z]+}', staticPaths: async () => [{ slug: 'a' }], expected: /optional\/regex params/ },
       { path: '/docs/:slug', staticPaths: async () => [{ wrong: 'a' }], expected: /without "slug"/ },
+      { path: '/docs/:slug', staticPaths: () => Promise.reject(new Error('the database is down')), expected: /database is down/ },
     ];
     for (const { path, staticPaths, expected } of cases) {
-      await assert.rejects(
-        prerenderStaticRoutes({
+      const warnings = [];
+      const warn = console.warn;
+      console.warn = (message) => warnings.push(String(message));
+      let result;
+      try {
+        result = await prerenderStaticRoutes({
           ssgDir: tempDir(),
-          routes: [{ path, render: 'static', staticPaths, component: async () => ({ default: () => null }) }],
+          routes: [
+            { path, render: 'static', staticPaths, component: async () => ({ default: () => null }) },
+            { path: '/about', render: 'static', component: async () => ({ default: () => null }) },
+          ],
           fetch: okResponse,
-        }),
-        expected,
-        `"${path}" should be rejected`,
-      );
+        });
+      } finally {
+        console.warn = warn;
+      }
+
+      assert.deepEqual(result.skipped, [path], `"${path}" should be skipped`);
+      assert.deepEqual(result.written, ['/about'], 'and the routes around it still prerender');
+      assert.match(warnings.join('\n'), expected, `"${path}" should say why`);
+      assert.match(warnings.join('\n'), /will SSR per request/i, 'and what happens instead');
     }
   });
 
