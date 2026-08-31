@@ -531,9 +531,12 @@ function buildApp(): Hono {
       const servesPrerendered = !isDev && route.render === 'static';
       const loadPage = once(() => loadPageModule(route.component, `"${route.path}"`));
 
-      const handler: Handler = async (c) => {
+      /** Everything the route answers, before a HEAD has its body taken off it. */
+      const respond = async (c: Context): Promise<Response> => {
         try {
-          if (servesPrerendered && c.req.method === 'GET') {
+          // A HEAD takes the GET path, prerendered bytes included: the headers it promises are the ones a
+          // GET would send, `etag` and `content-length` among them.
+          if (servesPrerendered && (c.req.method === 'GET' || c.req.method === 'HEAD')) {
             const isRsc = asksForRsc(c.req.raw);
             // One fixed set of bytes cannot carry a per-request nonce, so a document has to be rendered
             // where the app's CSP has one. Decided per request, so an app whose policy carries no `NONCE`
@@ -561,6 +564,21 @@ function buildApp(): Hono {
           if (isControlSignal(error)) return runWithContext(c, () => respondToControlSignal(c, error));
           throw error;
         }
+      };
+
+      const handler: Handler = async (c) => {
+        const response = await respond(c);
+        // Hono dispatches a HEAD to the GET route and then rebuilds the response as `new Response(null, res)`,
+        // which drops the body without reading it — so for a rendered page nothing ever consumes the stream:
+        // `flight-inject`'s `cancel` never runs, and neither does the `release()` that detaches the abort
+        // forwarder from the request signal. Cancelling here is what ends the render nobody asked to read.
+        if (c.req.method === 'HEAD' && response.body !== null) {
+          void response.body.cancel().catch(() => {
+            // Already errored or locked, and there is nothing left to release either way.
+          });
+          return new Response(null, response);
+        }
+        return response;
       };
       app.on(['GET', 'POST'], route.path, handler);
     } else {

@@ -376,6 +376,35 @@ test('endpoint route and Hono sub-app respond with JSON', async () => {
   assert.ok(Array.isArray(users.users) && users.users.length >= 3);
 });
 
+// A HEAD promises the headers its GET would send, so it takes the same path — including the prerendered
+// bytes, which is the difference between reading a file and rendering a page it then throws away.
+test('a HEAD on a page route answers with the GET head and no body', async () => {
+  for (const path of ['/', '/docs/getting-started']) {
+    const head = await fetch(`${base}${path}`, { method: 'HEAD' });
+    const get = await fetch(`${base}${path}`);
+    const body = await get.text();
+
+    assert.equal(head.status, get.status, path);
+    assert.equal(await head.text(), '', `${path}: a HEAD carries no body`);
+    for (const header of ['content-type', 'cache-control', 'vary', 'etag', 'content-length']) {
+      assert.equal(head.headers.get(header), get.headers.get(header), `${path}: ${header} must be what the GET would send`);
+    }
+    assert.ok(body.length > 0, `${path}: the GET this mirrors is not empty`);
+  }
+});
+
+// The prerendered half of the same rule, asserted on its own because it is the one that used to render:
+// a static route answering a HEAD by rendering it carries no ETag, so a conditional HEAD could never 304.
+test('a HEAD on a prerendered route is served from the store, ETag and all', async () => {
+  const head = await fetch(`${base}/docs/getting-started`, { method: 'HEAD' });
+  assert.match(head.headers.get('cache-control'), /public, max-age=/, 'the prerendered cache policy, not the rendered one');
+  const etag = head.headers.get('etag');
+  assert.ok(etag, 'a prerendered answer carries its validator');
+
+  const revalidated = await fetch(`${base}/docs/getting-started`, { method: 'HEAD', headers: { 'if-none-match': etag } });
+  assert.equal(revalidated.status, 304, 'and that validator has to work');
+});
+
 test("a HEAD on a method: 'get' endpoint is answered by that handler, bodiless", async () => {
   // Why `HTTPMethod` has no `'head'`: Hono dispatches a HEAD as a GET and strips the body, so `'get'`
   // answers both — and a route registered for HEAD alone answers neither, not even the GET.
