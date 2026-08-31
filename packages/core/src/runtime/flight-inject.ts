@@ -73,8 +73,9 @@ function endsWithTrailer(buffer: Uint8Array, length: number): boolean {
  * document that nothing else escapes. The value is not attacker-controlled today, but the framework does not
  * own where it comes from: `c.get('secureHeadersNonce')` is an ordinary context variable that any middleware
  * can set, and a nonce carrying a `"` would close the attribute and open a script-injection point in the
- * document. Anything outside this set is dropped rather than escaped: a value this is not is not a nonce, and
- * a page whose payload scripts are then refused by the policy is the visible failure to have.
+ * document. Anything outside this set is dropped rather than escaped, because a value made of other characters
+ * is not a nonce at all: a page whose payload scripts the policy then refuses is the visible failure to have,
+ * where an escaped garbage nonce would be a silent one.
  */
 const NONCE_CHARS = /^[A-Za-z0-9+/=_-]+$/;
 

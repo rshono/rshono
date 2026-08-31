@@ -1195,6 +1195,7 @@ describe('env-shadow-loader', () => {
       'export const x = globalThis.process.env.DATABASE_URL;',
       'export const x = globalThis?.process?.env?.DATABASE_URL;',
       "export const x = global['process'].env.DATABASE_URL;",
+      "export const x = globalThis?.['process']?.env?.DATABASE_URL;",
       'export const x = self.process.env.DATABASE_URL;',
     ]) {
       const warnings = [];

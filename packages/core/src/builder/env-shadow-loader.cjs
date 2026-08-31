@@ -59,7 +59,7 @@ const MENTIONS_PROCESS = /\bprocess\b/;
  * for the app's own source, since a library feature-detecting `globalThis.process?.env?.NODE_ENV` is doing
  * nothing wrong and has no app secret to read.
  */
-const GLOBAL_PROCESS = /\b(?:globalThis|global|self)\s*\??\s*(?:\.\s*process\b|\[\s*(['"`])process\1\s*\])/;
+const GLOBAL_PROCESS = /\b(?:globalThis|global|self)\s*(?:\?\.|\.)?\s*(?:process\b|\[\s*(['"`])process\1\s*\])/;
 
 /**
  * Shadows `process.env` with the PUBLIC_-only view inside SSR-layer modules, so a secret read from a
