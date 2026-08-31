@@ -176,6 +176,10 @@ with whatever arguments it likes. A [CSRF check](/docs/configuration#security-mi
 request came from your own site; it says nothing about _who_ sent it. Authenticate, authorize and validate
 arguments inside the action, exactly as in a route handler.
 
+An action's arguments are decoded from the request body, which means the body is buffered before your code
+sees any of it. Register [`bodyLimit()`](/docs/configuration#security-middleware) so there is a size past
+which that never happens — `rshono build` warns when nothing under `src/` registers one.
+
 ### Errors
 
 Thrown action errors are logged server-side and **redacted in the production payload** — React sends no

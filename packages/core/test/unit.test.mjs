@@ -2,7 +2,7 @@
 // exercises indirectly through one happy path. They import the *built* package, so they double as a
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
@@ -21,7 +21,7 @@ import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/ru
 import { beginPageRender, RequestContext } from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
 import { validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
-import { MINIMAL_APP_DIR } from './helpers.mjs';
+import { MINIMAL_APP_DIR, TESTBED_DIR } from './helpers.mjs';
 
 const tempDirs = [];
 function tempDir() {
@@ -935,6 +935,67 @@ describe('server bundle externals', () => {
     );
     assert.equal(verdict('D:/app/src/components/home.tsx'), undefined, 'forward-slash drive paths too');
     assert.equal(verdict('\\\\server\\share\\home.tsx'), undefined, 'and UNC paths');
+  });
+});
+
+describe('the security-middleware build warning', () => {
+  /** The minimal app somewhere disposable, plus whatever `src/server.ts` the case wants. */
+  function appWithServer(serverSource) {
+    const dir = mkdtempSync(join(tmpdir(), 'rshono-warn-'));
+    symlinkSync(join(MINIMAL_APP_DIR, 'node_modules'), join(dir, 'node_modules'), 'junction');
+    cpSync(join(MINIMAL_APP_DIR, 'package.json'), join(dir, 'package.json'));
+    cpSync(join(MINIMAL_APP_DIR, 'src'), join(dir, 'src'), { recursive: true });
+    if (serverSource !== null) writeFileSync(join(dir, 'src', 'server.ts'), serverSource);
+    after(() => {
+      // The link, not what it points at: `node_modules` is the fixture's, borrowed rather than copied.
+      unlinkSync(join(dir, 'node_modules'));
+      rmSync(dir, { recursive: true, force: true });
+    });
+    return dir;
+  }
+
+  /** What `createConfigs` warns about for `rootDir`, as one string. Builds only — `dev` says nothing. */
+  function warningsFor(rootDir, { isDev = false } = {}) {
+    const warn = console.warn;
+    const lines = [];
+    console.warn = (...args) => lines.push(args.join(' '));
+    try {
+      createConfigs({ rootDir, isDev, config: {}, preset: NODE_PRESET });
+    } finally {
+      console.warn = warn;
+    }
+    return lines.join('\n');
+  }
+
+  test('an app with no src/server.ts is told it has neither control', () => {
+    assert.match(warningsFor(MINIMAL_APP_DIR), /No src\/server\.ts/);
+  });
+
+  test('an app whose src/server.ts never registers bodyLimit is told about the body cap', () => {
+    // Having a src/server.ts is not the same as having the cap in it, and this half used to be warned
+    // about nowhere: the first check only ever asked whether the file existed. Every `'use server'`
+    // export is a public POST endpoint, and the action path buffers the whole body before it can decide
+    // anything about it.
+    const dir = appWithServer("import { Hono } from 'hono';\nexport default new Hono();\n");
+    const warnings = warningsFor(dir);
+    assert.match(warnings, /No bodyLimit\(\) anywhere in src\//);
+    assert.doesNotMatch(warnings, /No src\/server\.ts/, 'the file is there — only the cap is missing');
+  });
+
+  test('the scan is the whole of src/, so a cap registered from a helper module counts', () => {
+    // A textual scan of one file would call this app unprotected. The failure mode of getting it wrong is
+    // a warning nobody needed, so it reads wide rather than narrow.
+    const dir = appWithServer("import { Hono } from 'hono';\nimport { security } from './security';\nexport default new Hono().use(security());\n");
+    writeFileSync(
+      join(dir, 'src', 'security.ts'),
+      "import { bodyLimit } from 'hono/body-limit';\nexport const security = () => bodyLimit({ maxSize: 1024 });\n",
+    );
+    assert.equal(warningsFor(dir), '', 'a registered cap must not be reported as missing');
+  });
+
+  test('the testbed, which registers both, is warned about nothing — and dev is never warned at all', () => {
+    assert.equal(warningsFor(TESTBED_DIR), '');
+    assert.equal(warningsFor(MINIMAL_APP_DIR, { isDev: true }), '', 'a rebuild would print it every time');
   });
 });
 

@@ -1,6 +1,6 @@
 import { rspack, type Compiler, type RspackOptions, type RuleSetRule } from '@rspack/core';
 import { ReactRefreshRspackPlugin } from '@rspack/plugin-react-refresh';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, sep, win32 } from 'node:path';
 import type { RshonoConfig } from '../config.js';
@@ -104,6 +104,30 @@ export interface RspackConfigOptions {
   onServerComponentChanges?: () => void;
 }
 
+/** Source files worth reading for {@link mentions} — the app's own code, whatever dialect it is written in. */
+const SOURCE_FILE = /\.[cm]?[jt]sx?$/;
+
+/**
+ * Whether `identifier` appears anywhere in the app's own source. The whole tree rather than `src/server.ts`
+ * alone, so middleware registered from a helper module counts.
+ *
+ * A textual scan on purpose. What is being answered is "did the author think about this at all", which is a
+ * question a build warning is allowed to get wrong: the failure mode is a warning that is unwarranted, never a
+ * build that fails or a behaviour that changes. Resolving it properly would mean reading the module graph, and
+ * a middleware registered from a package outside `src/` would still slip past.
+ */
+function mentions(srcDir: string, identifier: string): boolean {
+  try {
+    for (const entry of readdirSync(srcDir, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !SOURCE_FILE.test(entry.name)) continue;
+      if (readFileSync(join(entry.parentPath, entry.name), 'utf8').includes(identifier)) return true;
+    }
+  } catch {
+    // An unreadable `src/` is not this function's to report: the build is about to fail on `routes.ts`.
+  }
+  return false;
+}
+
 export function createConfigs(options: RspackConfigOptions): [RspackOptions, RspackOptions] {
   const { rootDir, isDev, config, preset, onServerComponentChanges } = options;
   const srcDir = join(rootDir, 'src');
@@ -123,11 +147,22 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
   // Optional, and staying optional — but per-request security is Hono middleware registered there, so an app
   // without one has opted out of all of it, which is worth hearing once rather than discovering. Builds only:
   // `dev` would print it on every rebuild, and it is not news on a developer's machine.
-  if (!serverAppFile && !isDev) {
-    console.warn(
-      '  ⚠ No src/server.ts — this build has no CSRF check and no request body cap. Both are Hono middleware\n' +
-        '    (`csrf()`, `bodyLimit()`); `npx @rshono/create` scaffolds a src/server.ts with them registered.',
-    );
+  if (!isDev) {
+    if (!serverAppFile) {
+      console.warn(
+        '  ⚠ No src/server.ts — this build has no CSRF check and no request body cap. Both are Hono middleware\n' +
+          '    (`csrf()`, `bodyLimit()`); `npx @rshono/create` scaffolds a src/server.ts with them registered.',
+      );
+    } else if (!mentions(srcDir, 'bodyLimit')) {
+      // Having a src/server.ts is not the same as having the cap in it, and this half used to be warned about
+      // nowhere: every `'use server'` export is a public POST endpoint by design, and the action path buffers
+      // the whole body before it can decide anything about it.
+      console.warn(
+        "  ⚠ No bodyLimit() anywhere in src/ — this build has no request body cap. Every 'use server' export is\n" +
+          '    a public POST endpoint, and the action path buffers whatever arrives before it can reject it.\n' +
+          '    Add `server.use(bodyLimit({ maxSize: 1024 * 1024 }))` to src/server.ts (from `hono/body-limit`).',
+      );
+    }
   }
 
   const rscEntry = join(FRAMEWORK_DIST, 'runtime', 'entry.rsc.js');
