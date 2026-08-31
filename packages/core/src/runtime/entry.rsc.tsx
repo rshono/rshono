@@ -450,7 +450,21 @@ function buildApp(): Hono {
       return c.redirect(signal.location, signal.status as RedirectStatusCode);
     }
     if (loadNotFoundPage) {
-      return renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc, notFound: true });
+      try {
+        return await renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc, notFound: true });
+      } catch (error) {
+        // The `notFound` page is already the answer to a request that went wrong, so a failure here has
+        // nowhere to escalate to: this runs from `onError` as well as from the page handler, and Hono calls
+        // `onError` inside its own catch — a throw from there rejects `app.fetch`, which
+        // `@hono/node-server` turns into a bodiless 500 with nothing in the log. So it is answered here, the
+        // way a failing `error` page is answered below.
+        //
+        // A `redirect()` from the page is the exception: nothing is committed yet, the branch above cannot
+        // fail, and this is what the same page does when `app.notFound` renders it — so it is honoured, and
+        // recurses exactly once.
+        if (error instanceof RedirectSignal) return respondToControlSignal(c, error);
+        reportServerError(error, { source: 'render', request: c.req.raw, message: '[rshono] the notFound page failed to render:' });
+      }
     }
     return plainNotFound(c);
   };

@@ -216,6 +216,33 @@ test('an unmatched path renders the notFound page from routes.ts, as a document 
   assert.match(await flight.text(), /nothing here/, 'a soft navigation swaps the 404 page in instead of reloading');
 });
 
+// A `notFound` page that throws is the one failure with nowhere to escalate to: it renders from `onError`
+// as well as from the page handler, and Hono calls `onError` inside its own catch — so a throw from there
+// used to reject `app.fetch` and be answered by the host with a bodiless 500 that nothing logged.
+// `?boom=` makes the testbed's 404 page fail on demand; see components/404.tsx.
+test('a notFound page that throws notFound() answers a 404 with a body, and says so in the log', async () => {
+  for (const path of ['/definitely-not-a-page', '/profile/9999']) {
+    const logsBefore = getOutput().length;
+    const res = await fetch(`${base}${path}?boom=notfound`, { headers: { Accept: 'text/html' } });
+
+    assert.equal(res.status, 404, `${path}: still a 404, just without the app's page`);
+    assert.equal(await res.text(), 'Not Found', `${path}: a body, not the host's empty 500`);
+
+    await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+    assert.match(getOutput().slice(logsBefore), /the notFound page failed to render/, `${path}: and it is reported`);
+  }
+});
+
+test('a notFound page that redirects is honoured from both places a 404 is rendered', async () => {
+  // Not a failure at all: nothing is committed when the signal arrives, and `app.notFound` has always
+  // answered it this way — so the path through the page handler has to agree rather than degrade.
+  for (const path of ['/definitely-not-a-page', '/profile/9999']) {
+    const res = await fetch(`${base}${path}?boom=redirect`, { headers: { Accept: 'text/html' }, redirect: 'manual' });
+    assert.equal(res.status, 303, path);
+    assert.match(res.headers.get('location') ?? '', /\/users$/, path);
+  }
+});
+
 test('non-HTML clients get plain-text 404s', async () => {
   const res = await fetch(`${base}/api/definitely-not-an-endpoint`);
   assert.equal(res.status, 404);
