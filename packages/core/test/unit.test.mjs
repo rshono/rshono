@@ -17,6 +17,7 @@ import { resolveServerConfig } from '../dist/server/server-config.js';
 import { createPageCache, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
+import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
 import { beginPageRender, RequestContext } from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
@@ -935,6 +936,102 @@ describe('server bundle externals', () => {
     );
     assert.equal(verdict('D:/app/src/components/home.tsx'), undefined, 'forward-slash drive paths too');
     assert.equal(verdict('\\\\server\\share\\home.tsx'), undefined, 'and UNC paths');
+  });
+});
+
+describe('parseRenderRequest', () => {
+  const BASE = 'https://app.test/page';
+  const parse = (init) => parseRenderRequest(new Request(BASE, init));
+
+  test('classifies a GET by the RSC header alone', () => {
+    assert.deepEqual(parse({}), { kind: 'document' });
+    assert.deepEqual(parse({ headers: { RSC: '1' } }), { kind: 'rsc' });
+    // Exactly two states — that is what makes `Vary: RSC` cheap enough to put on a cacheable response.
+    assert.deepEqual(parse({ headers: { RSC: '0' } }), { kind: 'document' });
+    assert.deepEqual(parse({ headers: { RSC: 'true' } }), { kind: 'document' });
+    // An action id on a GET is not a shape the union can hold, and a GET must never run one.
+    assert.deepEqual(parse({ headers: { 'x-rsc-action': 'abc' } }), { kind: 'document' });
+  });
+
+  test("a POST is a client-initiated action exactly when it carries 'x-rsc-action'", () => {
+    // Which branch a POST takes is a security boundary, not just dispatch. `x-rsc-action` is not a
+    // CORS-safelisted header, so a page on another origin cannot send one without a preflight the framework
+    // never answers — which is why this branch carries no origin check of its own. If the classification
+    // ever moved to something a cross-origin form *can* send, that defence would be gone with no test
+    // failing anywhere else. See `SECURITY.md` and `refusesCrossSiteForm`.
+    assert.deepEqual(parse({ method: 'POST', headers: { 'x-rsc-action': 'abc' }, body: '[]' }), { kind: 'rsc-action', actionId: 'abc' });
+    // The header decides even when the body is form-shaped: a client-initiated call is not forgeable
+    // whatever it is encoded as.
+    assert.deepEqual(parse({ method: 'POST', headers: { 'x-rsc-action': 'abc', 'content-type': 'multipart/form-data; boundary=x' }, body: '' }), {
+      kind: 'rsc-action',
+      actionId: 'abc',
+    });
+    assert.deepEqual(parse({ method: 'POST', headers: { 'x-rsc-action': '' }, body: '[]' }), { kind: 'document' }, 'an empty id names nothing');
+  });
+
+  test('a POST is a form action exactly for the content types a browser can send cross-origin', () => {
+    // These two need no preflight, which is what makes this the forgeable shape and the one
+    // `refusesCrossSiteForm` stands in front of.
+    for (const contentType of ['application/x-www-form-urlencoded', 'multipart/form-data; boundary=----x', 'MULTIPART/FORM-DATA; boundary=y']) {
+      assert.deepEqual(parse({ method: 'POST', headers: { 'content-type': contentType }, body: 'x=1' }), { kind: 'form-action' }, contentType);
+    }
+    // Matched as a prefix, so the `; charset=UTF-8` a browser appends does not fall out of the branch — and
+    // erring wide is the safe direction here: an over-matched POST lands on the guarded branch and decodes to
+    // nothing, where an under-matched one would land on a branch with no origin check.
+    assert.deepEqual(parse({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencodedX' }, body: 'x=1' }), {
+      kind: 'form-action',
+    });
+    // Anything else is not an action at all — it renders the page and runs nothing, so a `text/plain` POST
+    // without the header cannot reach an action however it is aimed.
+    for (const contentType of ['application/json', 'text/plain', 'text/html', 'application/xml']) {
+      assert.deepEqual(parse({ method: 'POST', headers: { 'content-type': contentType }, body: '{}' }), { kind: 'document' }, contentType);
+    }
+    assert.deepEqual(parse({ method: 'POST', body: 'x=1' }), { kind: 'document' }, 'no content-type at all');
+  });
+
+  test('what each shape means downstream', () => {
+    const shapes = {
+      document: parse({}),
+      rsc: parse({ headers: { RSC: '1' } }),
+      'form-action': parse({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'x=1' }),
+      'rsc-action': parse({ method: 'POST', headers: { 'x-rsc-action': 'abc' }, body: '[]' }),
+    };
+    assert.deepEqual(Object.fromEntries(Object.entries(shapes).map(([name, shape]) => [name, [wantsRsc(shape), isActionRequest(shape)]])), {
+      document: [false, false],
+      rsc: [true, false],
+      // A no-JS form post answers with a document; a client-initiated call answers with a payload.
+      'form-action': [false, true],
+      'rsc-action': [true, true],
+    });
+  });
+
+  test('asksForRsc reads the same header without parsing the rest', () => {
+    // The prerendered-page path takes it on every GET, so it never builds a `RenderRequest` it would drop.
+    assert.equal(asksForRsc(new Request(BASE, { headers: { RSC: '1' } })), true);
+    assert.equal(asksForRsc(new Request(BASE)), false);
+    assert.equal(asksForRsc(new Request(BASE, { method: 'POST', headers: { 'x-rsc-action': 'abc' }, body: '[]' })), false, 'RSC, not the action id');
+  });
+
+  test('createRscRequest round-trips through the parser it is read by', () => {
+    // `location` is the browser global the client runtime resolves a relative href against.
+    const location = globalThis.location;
+    globalThis.location = { origin: 'https://app.test' };
+    try {
+      const navigation = createRscRequest('/docs?q=1');
+      assert.equal(navigation.method, 'GET');
+      assert.equal(navigation.url, 'https://app.test/docs?q=1');
+      assert.deepEqual(parseRenderRequest(navigation), { kind: 'rsc' });
+
+      const action = createRscRequest('/docs', { id: 'abc123', body: '[]' });
+      assert.equal(action.method, 'POST');
+      assert.deepEqual(parseRenderRequest(action), { kind: 'rsc-action', actionId: 'abc123' });
+      // The header the whole cross-origin argument rests on has to be the one actually sent.
+      assert.equal(action.headers.get('x-rsc-action'), 'abc123');
+      assert.equal(action.headers.get('rsc'), '1');
+    } finally {
+      if (location === undefined) delete globalThis.location;
+      else globalThis.location = location;
+    }
   });
 });
 

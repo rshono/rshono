@@ -48,6 +48,14 @@ The framework owns four boundaries, and a defect in any of them is a vulnerabili
   not a framework vulnerability. (The one exception the framework does enforce is a form post to a server
   action from another origin — a sibling subdomain included, since `Sec-Fetch-Site: same-site` is what a
   browser labels that — which it refuses whether or not `csrf()` is registered.)
+
+  The _other_ action shape has no such rule and needs none, which is worth writing down because it is
+  load-bearing: a client-initiated action call is selected by the `x-rsc-action` request header, and that is
+  not a CORS-safelisted header. A page on another origin cannot send one without a successful preflight, and
+  the framework answers no preflight, so that shape cannot be forged from a browser at all. An app that adds
+  `cors()` middleware permissive enough to allow `x-rsc-action` from another origin has taken that defence
+  away and is asking for exactly what it asked for; `csrf()` is what should still be standing behind it.
+
 - **Anything reachable only with `trustProxy: true` and no proxy stripping the headers.** That setting is
   documented as "only behind a proxy you control".
 - **Dev-server behaviour.** `rshono dev` binds `127.0.0.1`, serves unminified source and widens `script-src`
