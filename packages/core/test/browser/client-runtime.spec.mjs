@@ -194,6 +194,29 @@ test.describe('server actions', () => {
     await expect(page.getByText(email)).toBeVisible();
   });
 
+  test('an action answered with something that is not a payload reports the status, not a parser error', async ({ page }) => {
+    await page.goto('/users');
+
+    // Stands in for every response the action path can get that is not a flight payload: a `bodyLimit()`
+    // 413, a proxy's error page, a 502 mid-deploy. Handed to the flight parser they all surface as
+    // "Connection closed.", with the status nowhere in sight.
+    await page.route('**/users', async (route, request) => {
+      if (request.method() !== 'POST') return route.continue();
+      await route.fulfill({ status: 413, contentType: 'text/plain', body: 'Payload Too Large' });
+    });
+
+    await page.getByPlaceholder('Grace Hopper').fill('Grace Hopper');
+    await page.getByPlaceholder('grace@example.com').fill('grace@example.com');
+    await page.getByRole('button', { name: 'Add user' }).click();
+
+    const notice = page.locator('.notice.error');
+    await expect(notice).toContainText('413');
+    await expect(notice).toContainText('Payload Too Large');
+    await expect(notice).not.toContainText('Connection closed');
+    // The page is still the page: a failed action must not take the tree down with it.
+    await expect(page.getByText('Ada Lovelace')).toBeVisible();
+  });
+
   test('a rejected action surfaces its message instead of tearing down the page', async ({ page }) => {
     await page.goto('/users');
 

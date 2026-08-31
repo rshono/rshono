@@ -114,12 +114,39 @@ function showFatal(error: unknown, componentStack?: string | null): void {
   }, 0);
 }
 
+/** What every flight response is typed as. The charset and any other parameters follow it. */
+const FLIGHT_CONTENT_TYPE = 'text/x-component';
+
+/**
+ * Fetches a payload, refusing a response that is not one.
+ *
+ * The status cannot be the gate: a payload legitimately arrives as a 404 from the `notFound` page and as a
+ * 500 from an action that threw, and both carry a real payload the caller has to see. The content type is.
+ *
+ * What this catches is the response that is not a payload at all — a `bodyLimit()` 413, a proxy's error page,
+ * a 502 mid-deploy. Handed to the flight parser those all surface as `Error: Connection closed.`, with the
+ * status and the body nowhere in sight; here they become an error that says what arrived.
+ */
+async function payloadResponse(request: Request): Promise<Response> {
+  const response = await fetch(request);
+  const contentType = response.headers.get('content-type');
+  if (contentType?.startsWith(FLIGHT_CONTENT_TYPE)) return response;
+  // Read for the message: a plain-text refusal says what it refused only in its body, and HTTP/2 has no
+  // `statusText` at all. Bounded, because this is an error path and the body is not ours to trust.
+  const body = await response.text().then(
+    (text) => text.trim().slice(0, 200),
+    () => '',
+  );
+  const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
+  throw new Error(`[rshono] the server answered ${status} (${contentType ?? 'no content type'}) instead of a payload${body ? `: ${body}` : ''}`);
+}
+
 /**
  * Asks a URL for its flight payload. Deliberately uncached — a payload can never be staler than the click
  * that wanted it, and the browser's own HTTP cache is what makes a repeat visit cheap.
  */
 function requestPayload(href: string, signal?: AbortSignal): Promise<RscPayload> {
-  return createFromFetch<RscPayload>(fetch(createRscRequest(new URL(href, location.href).href, undefined, signal)));
+  return createFromFetch<RscPayload>(payloadResponse(createRscRequest(new URL(href, location.href).href, undefined, signal)));
 }
 
 /**
@@ -363,7 +390,7 @@ async function main() {
     });
     let payload: RscPayload;
     try {
-      payload = await createFromFetch<RscPayload>(fetch(request), { temporaryReferences });
+      payload = await createFromFetch<RscPayload>(payloadResponse(request), { temporaryReferences });
     } catch (error) {
       if (handleControlDigest(error)) return undefined;
       throw error;
@@ -374,7 +401,14 @@ async function main() {
     }
     if (documentUrl() === calledFrom) React.startTransition(() => void setPayload(payload));
     if (payload.notFound) return undefined;
-    const result = payload.returnValue!;
+    const result = payload.returnValue;
+    if (!result) {
+      // A payload that is not this action's own reply: the server rendered a page in its place. An action
+      // that had already run has its result carried across (see `actionResults` in entry.rsc.tsx), so
+      // reaching here means the request failed before it ran at all — an undecodable body, most likely.
+      // Reading `.ok` off it used to hand the caller `Cannot read properties of undefined`.
+      throw new Error('[rshono] the server action produced no result — the request failed around it and the server answered with a page instead. Its log has the error.');
+    }
     if (!result.ok) throw result.error;
     return result.value;
   });

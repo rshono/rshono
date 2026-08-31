@@ -400,6 +400,40 @@ test('a thrown server action is redacted in the payload, but logged in full serv
   assert.match(logged, /A name and a valid email are required/, 'the real error message must reach the server log — it is the only signal left');
 });
 
+// An action and the page it answers with are one response, so a render that fails *after* the action ran
+// takes the action's reply with it unless the result is carried across. `/unloadable` is a page whose module
+// throws as it evaluates — a chunk that went missing between deploys, from the runtime's side.
+test('an action whose page then fails to load still gets its result back', async () => {
+  const res = await fetch(`${base}/unloadable`, {
+    method: 'POST',
+    headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
+    body: JSON.stringify([{ name: 'Drift Dana', email: 'dana@example.com' }]),
+  });
+
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/x-component/, 'the client is holding a live tree, so the reply is still a payload');
+  const payload = await res.text();
+  assert.match(payload, /"returnValue":\{"ok":true/, 'the action ran and its result is the caller’s, error page or not');
+  assert.match(payload, /Drift Dana/, 'including the value it returned');
+  assert.match(payload, /Something went wrong/, 'and the page it comes with is the app’s error page');
+});
+
+test('an action request that fails before the action runs answers with a payload carrying no result', async () => {
+  // The other half: nothing ran, so there is nothing to carry. What matters is that the reply is still a
+  // payload the client can decode — it is what lets the runtime say so, instead of reading `.ok` off it.
+  const res = await fetch(`${base}/users`, {
+    method: 'POST',
+    headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
+    body: 'not-a-flight-reply',
+  });
+
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/x-component/);
+  const payload = await res.text();
+  assert.doesNotMatch(payload, /"returnValue":\{/, 'the action never ran, so no result may be invented for it');
+  assert.match(payload, /Something went wrong/);
+});
+
 test('onServerError sees the errors the framework catches, tagged by source, without replacing the log', async () => {
   const logsBefore = getOutput().length;
 

@@ -68,6 +68,20 @@ export type RscPayload = {
 };
 
 /**
+ * The result of an action that has already run, for the request whose *render* then failed.
+ *
+ * The action and the page it answers with are one response: an action returns its value through the payload
+ * of the page rendered after it. So when that render throws — a page module that will not load, most
+ * plausibly a chunk that went away mid-deploy — `onError` renders the `error` page in its place, and without
+ * this the reply carries no `returnValue` at all. The caller of an action that ran, and may well have
+ * written something, would be told only that a field was missing.
+ *
+ * Keyed on the Hono context the way `beginPageRender` keys its own marker, and weakly, so nothing outlives
+ * the request it belongs to.
+ */
+const actionResults = new WeakMap<Context, ActionResult>();
+
+/**
  * The per-request CSP nonce, if the app asked for one.
  *
  * The framework never mints it: `secureHeaders()` does, when its policy contains the `NONCE`
@@ -336,6 +350,9 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
         returnValue = { ok: false, error };
         actionStatus = 500;
       }
+      // The action is done and its result is the caller's, whatever becomes of the render below. See
+      // {@link actionResults}.
+      actionResults.set(c, returnValue);
     } else {
       // A `<form action={serverAction}>` post, which is the path that runs before hydration and with
       // JavaScript off. Unlike the client-initiated one it carries no custom header, so it is also the only
@@ -522,7 +539,9 @@ function buildApp(): Hono {
           }
         : { message: 'Internal Server Error' };
       try {
-        return await runWithContext(c, async () => renderComponent(c, await loadErrorPage(), { status: 500, isRsc, errorInfo }));
+        return await runWithContext(c, async () =>
+          renderComponent(c, await loadErrorPage(), { status: 500, isRsc, errorInfo, returnValue: actionResults.get(c) }),
+        );
       } catch (renderError) {
         reportServerError(renderError, { source: 'request', request: c.req.raw, message: '[rshono] the error page failed to render:' });
       }

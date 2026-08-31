@@ -52,6 +52,11 @@ export const routes = defineRoutes({
       component: () => import('./components/boundary-demo'),
     },
     {
+      // Deliberately broken, and linked from nowhere: its module throws as it evaluates. See the component.
+      path: '/unloadable',
+      component: () => import('./components/unloadable'),
+    },
+    {
       type: 'endpoint',
       path: '/api/quick-health',
       // `'get'` and not `'head'`, which the union no longer offers: Hono dispatches a HEAD as a GET, so
