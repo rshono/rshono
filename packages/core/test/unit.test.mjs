@@ -14,7 +14,7 @@ import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
 import { appendVary, etagMatches } from '../dist/server/headers.js';
 import { resolveServerConfig } from '../dist/server/server-config.js';
-import { createPageCache, prerenderedRelPath, ssgFilePath } from '../dist/server/prerendered.js';
+import { createPageCache, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
@@ -255,6 +255,9 @@ describe('etagMatches', () => {
 });
 
 describe('ssgFilePath', () => {
+  // The one mapping from a path to the file holding its page — the build's and every deploy target's,
+  // because two of them is how a page gets written where no request will ever look for it.
+  //
   // Always '/'-separated, on every host: the same string addresses a file (`resolve()` takes forward
   // slashes on Windows) and a key in an asset store, where a backslash is simply the wrong character.
   test('maps a concrete route path to its index.html', () => {
@@ -268,24 +271,45 @@ describe('ssgFilePath', () => {
     assert.equal(ssgFilePath('/docs', 'flight'), 'docs/index.rsc');
   });
 
-  test('refuses patterns that are not a single concrete path', () => {
-    assert.equal(ssgFilePath('/docs/:slug'), null);
-    assert.equal(ssgFilePath('/files/*'), null);
-  });
-});
-
-describe('prerenderedRelPath', () => {
-  // The shared guard every deploy target relies on: an asset store addressed by key has no
-  // `resolve()` to fall back on, so a traversal has to be refused here or not at all.
-  test('refuses traversal in a request path', () => {
-    for (const attempt of ['/../secret', '/docs/../../etc/passwd', '/..', '/docs/..', '/./docs', '/docs/./x']) {
-      assert.equal(prerenderedRelPath(attempt, 'html'), null, `${attempt} must not resolve to a file`);
+  // The blocker this replaced: the build interpolated `staticPaths` values with `encodeURIComponent`,
+  // while Hono hands a handler `c.req.path` with `decodeURI` already run over any path holding a `%`.
+  // Every non-ASCII slug was therefore built and then never served.
+  test('resolves the encoded and the decoded form of a path to the same file', () => {
+    for (const [encoded, decoded] of [
+      ['/docs/caf%C3%A9', '/docs/café'],
+      ['/docs/a%20b', '/docs/a b'],
+      ['/%C3%BC', '/ü'],
+      ['/docs/%E6%97%A5%E6%9C%AC', '/docs/日本'],
+    ]) {
+      assert.equal(ssgFilePath(encoded), `${decoded.slice(1)}/index.html`, `${encoded} must resolve decoded`);
+      assert.equal(ssgFilePath(decoded), ssgFilePath(encoded), `${decoded} and ${encoded} are one page`);
     }
   });
 
-  test('passes an ordinary path through to its file', () => {
-    assert.equal(prerenderedRelPath('/docs/getting-started', 'html'), 'docs/getting-started/index.html');
-    assert.equal(prerenderedRelPath('/', 'flight'), 'index.rsc');
+  test('refuses a segment no portable file name can hold', () => {
+    // The first two are route patterns rather than paths; the rest are characters Windows refuses, or a
+    // `%2F` that would otherwise smuggle a second segment into one param value.
+    for (const path of ['/docs/:slug', '/files/*', '/docs/a%2Fb', '/docs/a%5Cb', '/docs/a?b', '/docs/a|b', '/docs//x']) {
+      assert.equal(ssgFilePath(path), null, `${path} must not resolve to a file`);
+    }
+  });
+
+  // The shared guard every deploy target relies on: an asset store addressed by key has no
+  // `resolve()` to fall back on, so a traversal has to be refused here or not at all.
+  test('refuses traversal in a request path, escaped or not', () => {
+    const attempts = ['/../secret', '/docs/../../etc/passwd', '/..', '/docs/..', '/./docs', '/docs/./x', '/%2e%2e/secret', '/..%2f'];
+    for (const attempt of attempts) {
+      assert.equal(ssgFilePath(attempt, 'html'), null, `${attempt} must not resolve to a file`);
+    }
+  });
+});
+
+describe('ssgAssetPath', () => {
+  // Workers reads the same tree through a URL, so the key has to survive being put into one.
+  test('escapes each segment of a store key, and only the segments', () => {
+    assert.equal(ssgAssetPath('docs/café/index.html'), 'docs/caf%C3%A9/index.html');
+    assert.equal(ssgAssetPath('docs/a b/index.rsc'), 'docs/a%20b/index.rsc');
+    assert.equal(ssgAssetPath('docs/a#b/index.html'), 'docs/a%23b/index.html', 'a # would otherwise start a fragment');
   });
 });
 
@@ -342,7 +366,7 @@ describe('readPrerendered', () => {
   });
 
   test('refuses to escape the ssg directory, decoded form included', async () => {
-    // `prerenderedRelPath` above is where the exhaustive path cases live; what this adds is that the
+    // `ssgFilePath` above is where the exhaustive path cases live; what this adds is that the
     // percent-encoded form is decoded *before* the check rather than after it.
     const dir = tempDir();
     for (const attempt of ['/../', '/..%2f', '/docs/../../etc']) {
@@ -459,16 +483,19 @@ describe('prerenderStaticRoutes', () => {
     }
   });
 
-  test('percent-encodes a param value so it stays one path segment', async () => {
+  // The round trip, not `interpolatePath` in isolation — testing the halves separately is exactly what let
+  // a page be built under a name no request ever resolves to.
+  test('a param value needing percent-encoding is served back for the path the browser asks for', async () => {
+    const ssgDir = tempDir();
     const requested = [];
-    await prerenderStaticRoutes({
-      ssgDir: tempDir(),
+    const result = await prerenderStaticRoutes({
+      ssgDir,
       routes: [
         {
           path: '/docs/:slug',
           render: 'static',
           component: async () => ({ default: () => null }),
-          staticPaths: async () => [{ slug: 'a b/c' }],
+          staticPaths: async () => [{ slug: 'café' }, { slug: 'a b' }],
         },
       ],
       fetch: (request) => {
@@ -476,7 +503,40 @@ describe('prerenderStaticRoutes', () => {
         return okResponse(request);
       },
     });
-    assert.deepEqual(requested, ['/docs/a%20b%2Fc', '/docs/a%20b%2Fc'], 'once per representation');
+
+    assert.deepEqual(result.written, ['/docs/caf%C3%A9', '/docs/a%20b']);
+    assert.deepEqual(
+      requested,
+      ['/docs/caf%C3%A9', '/docs/caf%C3%A9', '/docs/a%20b', '/docs/a%20b'],
+      'the page is fetched at the URL a browser would use, once per representation',
+    );
+
+    // …and read back at `c.req.path`, which is what Hono hands the handler: `decodeURI` has already run.
+    for (const requestPath of ['/docs/café', '/docs/a b']) {
+      assert.ok(await readPrerendered(ssgDir, requestPath), `${requestPath} must be served from the build`);
+      assert.ok(await readPrerendered(ssgDir, requestPath, 'flight'), `${requestPath} must soft-navigate from the build`);
+    }
+  });
+
+  test('fails the build for a value it cannot store as one file, rather than writing a page nothing serves', async () => {
+    for (const slug of ['a b/c', 'a:b', '..']) {
+      await assert.rejects(
+        prerenderStaticRoutes({
+          ssgDir: tempDir(),
+          routes: [
+            {
+              path: '/docs/:slug',
+              render: 'static',
+              component: async () => ({ default: () => null }),
+              staticPaths: async () => [{ slug }],
+            },
+          ],
+          fetch: okResponse,
+        }),
+        /Cannot prerender .* for route "\/docs\/:slug"/,
+        `"${slug}" should be rejected`,
+      );
+    }
   });
 });
 

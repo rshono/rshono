@@ -153,6 +153,17 @@ describe('serving from a Worker', () => {
     assert.match(res.headers.get('etag') ?? '', /^W\//, 'weak: something in front may re-encode the bytes without changing the representation');
   });
 
+  test('serves a percent-encoded slug out of the store the filesystem targets read by name', async () => {
+    // One build, one on-disk name, every target: the store is addressed by URL here and by file name
+    // elsewhere, and the two used to resolve a non-ASCII slug differently — a hit on Workers and a
+    // permanent miss on node, vercel and aws-lambda, from the same `dist/`.
+    const res = await fetchWorker('/docs/caf%C3%A9');
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=300', 'served from the build, not re-rendered');
+    assert.match(body, /Café/);
+  });
+
   test('answers the same URL with the prerendered flight payload when asked for one', async () => {
     const res = await fetchWorker('/docs/getting-started', { headers: { RSC: '1' } });
     const body = await res.text();

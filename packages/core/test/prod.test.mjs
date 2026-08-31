@@ -430,6 +430,22 @@ test('the build writes both representations of a static route', () => {
   assert.match(readFileSync(join(dir, 'index.rsc'), 'utf8'), /Getting Started/);
 });
 
+test('a slug that has to be percent-encoded is written where the request for it resolves', async () => {
+  // The half that used to be missing. The build interpolated the value with `encodeURIComponent` and wrote
+  // `docs/caf%C3%A9/`, while Hono hands the handler a `c.req.path` it has already run `decodeURI` over — so
+  // the page was reported as prerendered and every request for it silently fell back to SSR, forever.
+  const dir = join(TESTBED_DIST, 'ssg', 'docs', 'café');
+  assert.match(readFileSync(join(dir, 'index.html'), 'utf8'), /pre-rendered at build time/, 'stored under the decoded name');
+
+  for (const { name, headers } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/docs/caf%C3%A9`, { headers });
+    assert.equal(res.status, 200);
+    assert.ok(res.headers.get('etag'), `${name}: served from the build, not re-rendered per request`);
+    assert.match(res.headers.get('cache-control') ?? '', /public/, `${name}: a prerendered page is publicly cacheable`);
+    assert.match(await res.text(), /Café/);
+  }
+});
+
 test('a prerendered route is served from disk in both representations, publicly cacheable and revalidatable', async () => {
   // Prerendering used to pay off only for cold loads and crawlers: a flight request skipped the built
   // file and re-rendered the page the build had already produced.

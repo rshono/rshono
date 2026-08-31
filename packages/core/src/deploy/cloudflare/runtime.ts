@@ -1,5 +1,5 @@
 import type { Context, Hono } from 'hono';
-import { createPageCache, prerenderedRelPath, toPrerenderedPage, type PrerenderedPage } from '../../server/prerendered.js';
+import { createPageCache, ssgAssetPath, ssgFilePath, toPrerenderedPage, type PrerenderedPage } from '../../server/prerendered.js';
 import type { DeployRuntime } from '../contract.js';
 
 /**
@@ -77,14 +77,16 @@ export const runtime: DeployRuntime = {
   },
 
   async readPrerendered(c: Context, variant): Promise<PrerenderedPage | null> {
-    const relPath = prerenderedRelPath(c.req.path, variant);
+    const relPath = ssgFilePath(c.req.path, variant);
     if (relPath === null) return null;
 
     const key = `${variant}\0${relPath}`;
     const cached = pageCache.get(key);
     if (cached) return cached;
 
-    const asset = await assetResponse(c, `${SSG_PREFIX}/${relPath}`);
+    // Escaped on the way into the URL and decoded again by the store, so this lands on the file the build
+    // wrote under exactly `relPath` — a page whose slug holds a `#` or a `?` included.
+    const asset = await assetResponse(c, `${SSG_PREFIX}/${ssgAssetPath(relPath)}`);
     if (!asset || asset.status !== 200) return null;
 
     // The store's own validator where it has one — it already describes these exact bytes.

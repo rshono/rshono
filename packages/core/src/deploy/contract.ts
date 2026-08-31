@@ -52,7 +52,7 @@ export interface DeployRuntime {
    *
    * Takes the whole {@link Context} because without a filesystem the store *is* a request-scoped
    * binding (`c.env.ASSETS` on Workers). The path is untrusted either way, so an implementation treats
-   * traversal as a miss — see `prerenderedRelPath`.
+   * traversal as a miss — see `ssgFilePath`, the one mapping from a path to the file that holds its page.
    */
   readPrerendered(c: Context, variant: PrerenderVariant): Promise<PrerenderedPage | null>;
   /** Loads `.env` files where the platform has a filesystem. Env is bindings elsewhere. */

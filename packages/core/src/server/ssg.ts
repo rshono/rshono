@@ -2,15 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { isPageRoute, type PageRoute, type Route } from '../router.js';
-import {
-  createPageCache,
-  prerenderedRelPath,
-  ssgFilePath,
-  toPrerenderedPage,
-  VARIANTS,
-  type PrerenderedPage,
-  type PrerenderVariant,
-} from './prerendered.js';
+import { createPageCache, ssgFilePath, toPrerenderedPage, VARIANTS, type PrerenderedPage, type PrerenderVariant } from './prerendered.js';
 
 /**
  * Stand-in origin for a build that declared no `siteUrl`. Obviously wrong rather than a guess, so a page that
@@ -67,7 +59,7 @@ export async function readPrerendered(ssgDir: string, requestPath: string, varia
   const cached = pageCache.get(key);
   if (cached) return cached;
 
-  const relPath = prerenderedRelPath(requestPath, variant);
+  const relPath = ssgFilePath(requestPath, variant);
   if (relPath === null) return null;
   // Belt and braces over the shared traversal guard: this proves the resolved file is under the root.
   const root = resolve(ssgDir);
@@ -145,6 +137,19 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
     }
 
     for (const path of paths) {
+      // Resolved *before* the render, so a path no file can hold fails the build naming the path, rather than
+      // after the work and as a bare `join(dir, null)` TypeError. The same call answers for the reader, which
+      // is the whole point: a page written under a name the request path never resolves to is a page the build
+      // reports as prerendered and nothing ever serves.
+      const relPath = ssgFilePath(path, 'html');
+      if (relPath === null) {
+        throw new Error(
+          `Cannot prerender "${path}" for route "${route.path}": a path segment is "." or "..", or holds a ` +
+            `character a portable file name cannot — one of \\ / : * ? " < > | or a control character.`,
+        );
+      }
+      const pageDir = join(ssgDir, dirname(relPath));
+
       const document = await renderVariant(fetch, origin + path, 'html');
       if (!document.ok) {
         console.warn(`  ⚠ "${path}" rendered ${document.reason} at build time — skipping, will SSR per request.`);
@@ -152,10 +157,10 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
         continue;
       }
 
+      // Both representations of a page share its directory and differ only in the file name.
       const write = (variant: PrerenderVariant, body: string) => {
-        const file = join(ssgDir, ssgFilePath(path, variant)!);
-        mkdirSync(dirname(file), { recursive: true });
-        writeFileSync(file, body);
+        mkdirSync(pageDir, { recursive: true });
+        writeFileSync(join(pageDir, VARIANTS[variant].file), body);
       };
       write('html', document.body);
 
