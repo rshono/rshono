@@ -13,16 +13,34 @@ those.
 
 ### Changed
 
-- **`@rspack/core` 2.1.7 → 2.2.0 and `react-server-dom-rspack` 0.0.3 → 0.1.0.** The two move as a pair —
+- **`@rspack/core` 2.1.7 → 2.2.1 and `react-server-dom-rspack` 0.0.3 → 0.1.0.** The two move as a pair —
   `react-server-dom-rspack@0.1.0` declares a `@rspack/core: ^2.2.0-0` peer — and `0.1.0` is a minor on a
   pre-1.0 package, so treat it as a breaking upstream change and read this entry before upgrading.
 
-  The manifests had already declared this pair since `6d8e3e4`, but the `pnpm-workspace.yaml` overrides and
-  the lockfile were left on 2.1.7 / 0.0.3. Because a manifest pin is what a consumer resolves and an override
-  is what this repo resolves, **the published versions had never been tested**: the suite, CI and every
-  fixture ran against the old pair while `npm i @rshono/core` installed the new one. The overrides and the
-  lockfile now name the same pair as the manifests, and the whole suite — including the scaffold job, which
-  installs a generated app from a registry with no overrides in play — is green against it.
+  The manifests had already declared 2.2.0 / 0.1.0 since `6d8e3e4`, but the `pnpm-workspace.yaml` overrides
+  and the lockfile were left on 2.1.7 / 0.0.3. Because a manifest pin is what a consumer resolves and an
+  override is what this repo resolves, **the published versions had never been tested**: the suite, CI and
+  every fixture ran against the old pair while `npm i @rshono/core` installed the new one. The overrides and
+  the lockfile now name the same pair as the manifests, and the whole suite — including the scaffold job,
+  which installs a generated app from a registry with no overrides in play — is green against it.
+
+  `react-server-dom-rspack` stays at **0.1.0**, which is its `latest`. There is a `19.3.0` on npm, but it is
+  tagged `canary` and peers `react: ^19.3.0` / `react-dom: ^19.3.0` — versions that exist only as React
+  canaries — so taking it would mean shipping a stable framework on a React canary. `react`, `react-dom` and
+  `hono` are already at their latest stable releases and did not move.
+
+- **Every other dependency refreshed to its latest release.** `@types/node` `^26.2.0` → `^26.4.0` (which
+  `FRAMEWORK_DEPS` carries into scaffolded apps), `@types/react-dom` `^19.2.4` → `^19.2.5`, `eslint`
+  `^10.8.1` → `^10.9.1`, `typescript-eslint` `^8.67.0` → `^8.68.0`, and for the website `markdown-it`
+  `^15.0.1`, `@types/markdown-it` `^14.2.0`, `wrangler` `^4.127.1`.
+
+  The website's own `typescript` moves `~6.0.3` → `^7.0.2`, matching `packages/core` and `apps/testbed`. Its
+  `tsconfig.json` was already written for 7 — the `paths`-without-`baseUrl` comment says so — and it
+  typechecks clean, so the 6.x pin was an oversight rather than a constraint.
+
+  **The root `typescript` stays on `~6.0.3`.** It is there for the linter, and `typescript-eslint@8.68.0` —
+  the latest — still peers `typescript >=4.8.4 <6.1.0`. Nothing to do until that range widens; see
+  CONTRIBUTING.md, "Two TypeScripts".
 
 ### Added
 
