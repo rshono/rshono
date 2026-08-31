@@ -61,14 +61,15 @@ export const runtime: DeployRuntime = {
   mountStaticAssets(app: Hono): void {
     // Normally dead — the CDN answers `/_static/*` before the worker is invoked — but keeps the deployment
     // correct, if slower, under an assets configuration that routes everything to the worker first.
-    app.on(['GET', 'HEAD'], '/_static/*', async (c, next) => {
+    // `GET` covers `HEAD` — Hono dispatches one as the other. See `HTTPMethod`.
+    app.get('/_static/*', async (c, next) => {
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);
       return asset && asset.status !== 404 ? serveAsset(asset) : next();
     });
   },
 
   mountPublicFallback(app: Hono): void {
-    app.on(['GET', 'HEAD'], '/*', async (c, next) => {
+    app.get('/*', async (c, next) => {
       // The prerender tree lives in the same store, but the app only serves it through `readPrerendered`.
       if (c.req.path.startsWith(`${SSG_PREFIX}/`)) return next();
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);

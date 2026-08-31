@@ -210,14 +210,24 @@ export interface EndpointRoute {
    * @see {@link https://hono.dev/docs/api/routing | Hono — routing}
    */
   path: string;
-  /** HTTP method to match. Defaults to `'all'` — every method. */
+  /**
+   * HTTP method to match. Defaults to `'all'` — every method.
+   *
+   * There is no `'head'`: Hono dispatches a `HEAD` as a `GET` and strips the body off the response, so a
+   * `HEAD` is already answered by the `'get'` handler (and by `'all'`), and a route registered for `HEAD`
+   * alone would never be reached.
+   */
   method?: HTTPMethod;
   /** Dynamic import of the {@link EndpointServerModule} exporting `handler`. */
   server: () => Promise<EndpointServerModule>;
 }
 
-/** HTTP methods an {@link EndpointRoute} can match. `'all'` matches every method. */
-export type HTTPMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' | 'all';
+/**
+ * HTTP methods an {@link EndpointRoute} can match. `'all'` matches every method.
+ *
+ * No `'head'`, deliberately — see {@link EndpointRoute.method}. A `HEAD` reaches the `'get'` handler.
+ */
+export type HTTPMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'options' | 'all';
 
 /** Any entry in the `routes` array: a {@link PageRoute} or an {@link EndpointRoute}. */
 export type Route = PageRoute | EndpointRoute;

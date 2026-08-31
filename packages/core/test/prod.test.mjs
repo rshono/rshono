@@ -313,6 +313,24 @@ test('endpoint route and Hono sub-app respond with JSON', async () => {
   assert.ok(Array.isArray(users.users) && users.users.length >= 3);
 });
 
+test("a HEAD on a method: 'get' endpoint is answered by that handler, bodiless", async () => {
+  // Why `HTTPMethod` has no `'head'`: Hono dispatches a HEAD as a GET and strips the body, so `'get'`
+  // answers both — and a route registered for HEAD alone answers neither, not even the GET.
+  const res = await fetch(`${base}/api/quick-health`, { method: 'HEAD' });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/json/);
+  assert.equal(await res.text(), '', 'a HEAD carries the headers and no body');
+
+  // The framework's own mounts have to hold the same way, now that they register `GET` alone.
+  const html = await (await fetch(`${base}/`)).text();
+  const chunk = html.match(/src="(\/_static\/chunks\/main\.[0-9a-f]+\.js)"/)[1];
+  for (const path of ['/robots.txt', chunk]) {
+    const asset = await fetch(`${base}${path}`, { method: 'HEAD' });
+    assert.equal(asset.status, 200, `${path} must answer a HEAD`);
+    assert.equal(await asset.text(), '', `${path}: a HEAD carries no body`);
+  }
+});
+
 test('a thrown endpoint renders the error page from routes.ts, redacted, in both representations', async () => {
   for (const { name, headers, contentType } of REPRESENTATIONS) {
     const res = await fetch(`${base}/api/boom`, { headers: { Accept: 'text/html', ...headers } });

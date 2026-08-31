@@ -54,6 +54,9 @@ export const routes = defineRoutes({
     {
       type: 'endpoint',
       path: '/api/quick-health',
+      // `'get'` and not `'head'`, which the union no longer offers: Hono dispatches a HEAD as a GET, so
+      // this one registration answers both — and a HEAD-only route would answer neither.
+      method: 'get',
       server: () => import('./health'),
     },
     {

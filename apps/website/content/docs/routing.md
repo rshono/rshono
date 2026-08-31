@@ -88,7 +88,8 @@ Rules worth knowing:
 ## Endpoint routes
 
 An endpoint route is served by a raw Hono handler instead of a component — JSON APIs, webhooks,
-redirects, feeds. `method` defaults to `'all'`.
+redirects, feeds. `method` defaults to `'all'`. There is no `'head'`: Hono dispatches a `HEAD` as a
+`GET` and strips the body off the response, so `'get'` already answers both.
 
 ```ts
 { type: 'endpoint', path: '/api/health', method: 'get', server: () => import('./health') }
