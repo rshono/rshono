@@ -94,20 +94,25 @@ function cspNonce(c: Context): string | undefined {
  *
  * Both halves are required, because either alone refuses something real:
  *
- * - `Sec-Fetch-Site: cross-site` is the browser's own statement of provenance, and every browser that can post
- *   a form to a server action sends it. An absent header means a non-browser client, which cannot be a CSRF
- *   victim; `same-site` is left alone too, since a subdomain policy is `csrf()`'s to express.
- * - An `Origin` that is the app's own contradicts that label — a browser calls a post from the app's own pages
+ * - `Sec-Fetch-Site` is the browser's own statement of provenance, unforgeable by page script, and every
+ *   browser that can post a form to a server action sends it. `cross-site` and `same-site` are the two labels
+ *   that mean "not from this origin" — `same-site` is what a *sibling subdomain* gets, which is a user-content
+ *   host, a stale CNAME or a subdomain takeover, so leaving it to `csrf()` meant an app without one could have
+ *   any `'use server'` export driven from next door. An absent header means a non-browser client, which cannot
+ *   be a CSRF victim. `same-origin` and `none` settle it on their own, and are what a genuine post carries
+ *   however many proxies rewrote `Host` on the way in.
+ * - An `Origin` that is the app's own contradicts either label — a browser calls a post from the app's own pages
  *   `same-origin` — so the pair is a shape no browser produces, and refusing it would only catch a proxy or a
  *   test client setting the label by hand while posting from the app itself.
  *
  * `publicUrl(c)` rather than `c.req.url`, so it honours `trustProxy` and compares against the origin the
  * browser actually used — which behind a proxy, `rshono dev`'s included, is not the one the server was reached
- * on. The cost is that an app deliberately accepting cross-site *form* posts to an action cannot; that is what
- * an `{ type: 'endpoint' }` route is for.
+ * on. The cost is that an app deliberately accepting *form* posts to an action from another origin of its own
+ * cannot, `csrf()`'s allowlist included; that is what an `{ type: 'endpoint' }` route is for.
  */
 function refusesCrossSiteForm(c: Context): boolean {
-  if (c.req.header('sec-fetch-site') !== 'cross-site') return false;
+  const site = c.req.header('sec-fetch-site');
+  if (site !== 'cross-site' && site !== 'same-site') return false;
   const origin = c.req.header('origin');
   return origin !== undefined && origin !== publicUrl(c).origin;
 }

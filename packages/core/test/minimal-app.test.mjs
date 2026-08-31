@@ -89,27 +89,41 @@ test('with no server.ts there is no CSRF check — that is `csrf()` from hono, a
   assert.notEqual(res.status, 403, 'nothing in the framework rejects this any more');
 });
 
-test('a browser-shaped cross-site form post cannot reach a server action, even with no server.ts', async () => {
+test('a browser-shaped form post from another origin cannot reach a server action, even with no server.ts', async () => {
   // The one place the framework does refuse: a form post is the only action shape a browser can be made to
   // send from another site — the client-initiated one carries `x-rsc-action`, which needs a preflight it will
   // not get. So this is not a CSRF policy stepping on `csrf()`'s toes; it is the framework declining to run
   // its own action mechanism for a request that mechanism cannot produce. An app *with* src/server.ts has
   // `csrf()` in front of this, which rejects the same request first and for better reasons.
-  const res = await fetch(`${base}/`, {
-    method: 'POST',
-    headers: { origin: 'https://evil.test', 'sec-fetch-site': 'cross-site', 'content-type': 'application/x-www-form-urlencoded' },
-    body: 'x=1',
-  });
-  assert.equal(res.status, 403);
+  const post = (headers) =>
+    fetch(`${base}/`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
+      body: 'x=1',
+    });
 
-  // And the pair a browser never sends — cross-site label, the app's own origin — is left alone, or a proxy
-  // that sets the label by hand would break every legitimate form post behind it.
-  const sameOrigin = await fetch(`${base}/`, {
-    method: 'POST',
-    headers: { origin: base, 'sec-fetch-site': 'cross-site', 'content-type': 'application/x-www-form-urlencoded' },
-    body: 'x=1',
-  });
-  assert.notEqual(sameOrigin.status, 403);
+  const crossSite = await post({ origin: 'https://evil.test', 'sec-fetch-site': 'cross-site' });
+  assert.equal(crossSite.status, 403);
+
+  // `same-site` is the label a *sibling subdomain* gets — a user-content host, a stale CNAME, a subdomain
+  // takeover. It used to be left to `csrf()` on the grounds that a subdomain policy is `csrf()`'s to
+  // express, which for an app that has no `csrf()` meant any `'use server'` export could be driven from
+  // next door with any arguments.
+  const subdomain = await post({ origin: 'https://user-content.evil.test', 'sec-fetch-site': 'same-site' });
+  assert.equal(subdomain.status, 403, 'a sibling subdomain is another origin');
+
+  // And the pair a browser never sends — a not-from-here label with the app's own origin — is left alone, or
+  // a proxy that sets the label by hand would break every legitimate form post behind it.
+  for (const site of ['cross-site', 'same-site']) {
+    const sameOrigin = await post({ origin: base, 'sec-fetch-site': site });
+    assert.notEqual(sameOrigin.status, 403, `${site} labelled, but posted from the app itself`);
+  }
+
+  // `same-origin` is the browser's own statement that this came from the app's own pages, and it is
+  // unforgeable by page script — so it settles the question whatever `Origin` says. That short-circuit is
+  // what keeps a proxy that rewrites `Host` from breaking every legitimate post behind it.
+  const genuine = await post({ origin: 'https://rewritten-by-proxy.test', 'sec-fetch-site': 'same-origin' });
+  assert.notEqual(genuine.status, 403, 'the browser said this came from the app itself');
 });
 
 // What the framework *refuses*, which for this app is the other half of the same claim: `src/routes.ts`
