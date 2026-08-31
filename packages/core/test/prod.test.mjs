@@ -577,6 +577,9 @@ test('baseline security headers are set on every response', async () => {
 
 test('secrets never reach the browser — not in the HTML, the flight payload, or a client chunk', async () => {
   const html = await (await fetch(`${base}/`)).text();
+  // `leak-helper.ts` reaches the env three ways and never once by the dotted spelling the shadow used to be
+  // gated on — `process?.env`, `process['env']` and an alias. Each of them rendered the real value here while
+  // the browser bundle saw the `PUBLIC_`-only view; the loader unit tests hold the whole table.
   assert.match(html, /Using leak helper:\s*(?:<!--\s*-->)?\(no secret\)/, 'no-directive helper leaked a real secret into SSR HTML');
   assert.ok(!html.includes(APP_ENV.DATABASE_URL), 'DATABASE_URL value must not appear in SSR HTML');
   assert.ok(html.includes(APP_ENV.PUBLIC_API_ENDPOINT), 'the PUBLIC_ variable should be inlined');

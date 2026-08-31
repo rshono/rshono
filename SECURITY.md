@@ -27,7 +27,10 @@ The framework owns four boundaries, and a defect in any of them is a vulnerabili
 
 - **The env split.** A `PUBLIC_`-prefixed variable is meant to be the only thing that can reach the browser,
   in the client bundle and in SSR'd output alike. Anything that gets a non-prefixed variable into either is
-  in scope.
+  in scope. The one route the framework cannot cover is a read through the global object —
+  `globalThis.process.env`, `global.process.env` — because the SSR-side shadow replaces the `process`
+  *binding*, which `globalThis.process` goes around. The build warns when a module under `src/` does that;
+  read `process.env` directly and the shadow applies.
 - **Server action dispatch.** Every `'use server'` export is a public HTTP endpoint by design — that is
   documented, and authenticating inside the action is the app's job. What is _not_ by design: running an
   action the request did not name, running one from a cross-site form post, or leaking a thrown action's

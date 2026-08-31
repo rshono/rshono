@@ -60,6 +60,9 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
     console.error(stats.toString({ preset: 'errors-warnings', colors: true }));
     process.exit(1);
   }
+  // Printed rather than left to the summary below, which counts warnings without saying what they are —
+  // and one of them is the env shadow reporting a read it cannot cover. See `env-shadow-loader.cjs`.
+  if (stats.hasWarnings()) console.warn(stats.toString({ preset: 'errors-warnings', colors: true }));
   console.log(stats.toString({ preset: 'summary', colors: true }));
 
   const publicDir = join(rootDir, 'public');

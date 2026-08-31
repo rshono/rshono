@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { after, describe, test } from 'node:test';
 
 import { scanPageFiles } from '../dist/builder/page-files.js';
@@ -957,10 +957,22 @@ describe('the env-shadow prelude', () => {
 describe('env-shadow-loader', () => {
   const envShadowLoader = createRequire(import.meta.url)('../dist/builder/env-shadow-loader.cjs');
   const PRELUDE = 'const process = { env: {} }; ';
+  const APP_SRC = join(tmpdir(), 'rshono-app', 'src');
 
-  /** The slice of Rspack's loader context this loader reads. `layer` is the layer the *module* is in. */
-  const run = (source, { layer = 'ssr' } = {}) =>
-    envShadowLoader.call({ getOptions: () => ({ prelude: PRELUDE, layer: 'ssr' }), _module: { layer } }, source);
+  /**
+   * The slice of Rspack's loader context this loader reads. `layer` is the layer the *module* is in, and
+   * `resourcePath` decides whether a module counts as the app's own source for the warning below.
+   */
+  const run = (source, { layer = 'ssr', resourcePath = join(APP_SRC, 'component.tsx'), warnings } = {}) =>
+    envShadowLoader.call(
+      {
+        getOptions: () => ({ prelude: PRELUDE, layer: 'ssr', appSrcPrefix: APP_SRC + sep }),
+        _module: { layer },
+        resourcePath,
+        emitWarning: (warning) => warnings?.push(warning.message),
+      },
+      source,
+    );
 
   test('shadows env only in the layer it was configured for', () => {
     const source = 'export const x = process.env.SECRET;';
@@ -969,11 +981,67 @@ describe('env-shadow-loader', () => {
     assert.equal(run(source, { layer: null }), source);
   });
 
-  test('leaves a module that never mentions process.env untouched', () => {
+  test('leaves a module that never mentions process untouched', () => {
     // The fast path: every module in the bundle now reaches this loader, so the common case has to be one
     // string scan and out.
-    const source = 'export const x = 1;';
-    assert.equal(run(source), source);
+    assert.equal(run('export const x = 1;'), 'export const x = 1;');
+    // And a word that merely contains it is not a mention. Being wrong here only costs bytes, but
+    // `child_process` and `preprocess` are common enough to be worth not paying for.
+    for (const source of ['export const x = preprocess(1);', 'export const x = processEnv;', "import cp from 'node:child_process';"]) {
+      assert.equal(run(source), source, `"${source}" must not drag the prelude in`);
+    }
+  });
+
+  test('shadows every shape that reads the env through the process binding, not just the literal process.env', () => {
+    // A gate on the substring `process.env` saw one shape out of six. The prelude replaces the whole
+    // binding, so all of them are covered once it is emitted — `process?.env` above all, which is how env
+    // access is written in code meant to run in a browser *and* on a server, i.e. in a `'use client'`
+    // component. Every miss rendered the real value into the SSR'd HTML while the browser bundle saw the
+    // `PUBLIC_`-only view: a leaked secret, and a hydration mismatch besides.
+    for (const source of [
+      'export const x = process.env.DATABASE_URL;',
+      'const { DATABASE_URL } = process.env;',
+      'export const x = process?.env.DATABASE_URL;',
+      "export const x = process['env'].DATABASE_URL;",
+      'const { env } = process;',
+      'const p = process; export const x = p.env.DATABASE_URL;',
+      "export const x = typeof process !== 'undefined' ? process.env.DATABASE_URL : '';",
+    ]) {
+      assert.equal(run(source), PRELUDE + source, `"${source}" must be shadowed`);
+    }
+  });
+
+  test('warns when the app reads process through the global object, which no binding can shadow', () => {
+    // `globalThis.process` is the real `process` however the module names it, so the prelude cannot reach
+    // it — the read has to be found by a person. Only the app's own source is worth saying it about: a
+    // library feature-detecting `globalThis.process?.env?.NODE_ENV` is doing nothing wrong and has no app
+    // secret to read.
+    for (const source of [
+      'export const x = globalThis.process.env.DATABASE_URL;',
+      'export const x = globalThis?.process?.env?.DATABASE_URL;',
+      "export const x = global['process'].env.DATABASE_URL;",
+      'export const x = self.process.env.DATABASE_URL;',
+    ]) {
+      const warnings = [];
+      assert.equal(run(source, { warnings }), PRELUDE + source, 'the prelude is still emitted');
+      assert.equal(warnings.length, 1, `"${source}" must be reported`);
+      assert.match(warnings[0], /reads `process` through the global object/);
+    }
+
+    const fromLibrary = [];
+    run('export const x = globalThis.process.env.NODE_ENV;', {
+      resourcePath: join(tmpdir(), 'rshono-app', 'node_modules', 'ui', 'index.js'),
+      warnings: fromLibrary,
+    });
+    assert.deepEqual(fromLibrary, [], 'a dependency is not the app author to tell');
+
+    const rsc = [];
+    run('export const x = globalThis.process.env.DATABASE_URL;', { layer: 'rsc', warnings: rsc });
+    assert.deepEqual(rsc, [], 'a server component is meant to read the real env');
+
+    const shadowed = [];
+    run('export const x = process.env.DATABASE_URL;', { warnings: shadowed });
+    assert.deepEqual(shadowed, [], 'the shape the shadow does cover says nothing');
   });
 
   test('inserts the prelude after the whole directive prologue, not after the first directive', () => {

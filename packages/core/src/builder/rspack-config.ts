@@ -2,7 +2,7 @@ import { rspack, type Compiler, type RspackOptions, type RuleSetRule } from '@rs
 import { ReactRefreshRspackPlugin } from '@rspack/plugin-react-refresh';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { basename, dirname, join, win32 } from 'node:path';
+import { basename, dirname, join, sep, win32 } from 'node:path';
 import type { RshonoConfig } from '../config.js';
 import type { DeployPreset } from '../deploy/presets.js';
 import { resolveServerConfig } from '../server/server-config.js';
@@ -293,7 +293,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
           // the same layer, and scoping this to the app's own source left those rendering against the real
           // `process.env` while the browser bundle saw the `PUBLIC_`-only view — a hydration mismatch on
           // anything the host sets, and a leak for anything secret. The loader's own layer check is what
-          // decides; every other module gets one `includes('process.env')` scan.
+          // decides; every other module gets one `includes('process')` scan.
           test: /\.[cm]?[tj]sx?$/,
           enforce: 'pre',
           use: [
@@ -306,6 +306,11 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
               options: {
                 prelude: `const process = Object.assign(Object.create(globalThis.process ?? Object.prototype), { env: ${JSON.stringify(publicEnv(isDev))} }); `,
                 layer: Layers.ssr,
+                // Only the app's own source is warned about when it reaches `process` through the global
+                // object, which no prelude can shadow — a library feature-detecting `globalThis.process` is
+                // doing nothing wrong and has no app secret to read. The separator is part of the prefix so
+                // a sibling directory named `src-old` is not mistaken for it.
+                appSrcPrefix: srcDir + sep,
               },
             },
           ],
