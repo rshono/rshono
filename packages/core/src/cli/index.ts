@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { DEPLOY_TARGETS, resolveDeployPreset } from '../deploy/presets.js';
 import { loadConfig } from '../server/load-config.js';
 import { loadEnvFiles } from '../server/load-env.js';
+import { parsePort } from '../server/server-config.js';
 
 // The commands are imported where they are dispatched: `build` and `dev` pull in Rspack, and a static import
 // would load it for `start` too — ~30 MB of RSS and ~70ms of startup that would then sit in the server's own
@@ -22,6 +23,16 @@ Options:
   -h, --help          show this help
   -v, --version       print the version
 `;
+
+/** {@link parsePort}, reported the way the CLI reports every other bad input: one line, no stack. */
+function readPort(value: string | undefined, source: string): number | undefined {
+  try {
+    return parsePort(value, source);
+  } catch (error) {
+    console.error(`rshono: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -52,14 +63,9 @@ async function main(): Promise<void> {
   loadEnvFiles(rootDir);
   const config = await loadConfig(rootDir, values.config);
 
-  const flagPort = values.port ? Number(values.port) : undefined;
-  if (values.port && Number.isNaN(flagPort)) {
-    console.error(`rshono: invalid --port "${values.port}"`);
-    process.exit(1);
-  }
-  // Precedence: --port flag > PORT env > the command's built-in default.
-  const envPort = process.env.PORT ? Number(process.env.PORT) : undefined;
-  const port = flagPort ?? envPort;
+  // Precedence: --port flag > PORT env > the command's built-in default. Both sources go through the same
+  // parse as the bundle's own, so `PORT=""` means "unset" in the CLI and in the server it starts alike.
+  const port = readPort(values.port, '--port') ?? readPort(process.env.PORT, 'PORT');
   const host = process.env.HOST;
 
   switch (command) {

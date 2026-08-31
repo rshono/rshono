@@ -13,7 +13,7 @@ import { checkReactVersions } from '../dist/builder/react-versions.js';
 import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
 import { appendVary, etagMatches } from '../dist/server/headers.js';
-import { resolveServerConfig } from '../dist/server/server-config.js';
+import { parsePort, resolveServerConfig } from '../dist/server/server-config.js';
 import { createPageCache, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
@@ -234,6 +234,33 @@ describe('resolveServerConfig', () => {
     const config = resolveServerConfig({ trustProxy: false }, { isDev: true });
     assert.equal(config.trustProxy, true);
     assert.equal(config.isDev, true);
+  });
+});
+
+// The same parse backs `--port`, `PORT` in the CLI, and `PORT` in the node bundle — one function, so the
+// three cannot drift apart. `test/start.test.mjs` covers what the CLI does with the result.
+describe('parsePort', () => {
+  test('reads a port, including 0 — "any free port"', () => {
+    assert.equal(parsePort('3000', 'PORT'), 3000);
+    assert.equal(parsePort('0', 'PORT'), 0, 'an explicit 0 is a request, not an accident');
+    assert.equal(parsePort('65535', 'PORT'), 65535);
+    assert.equal(parsePort(' 8080 ', 'PORT'), 8080, 'a shell heredoc or a .env file leaves whitespace behind');
+  });
+
+  test('reads blank as unset rather than as port 0', () => {
+    assert.equal(parsePort(undefined, 'PORT'), undefined);
+    assert.equal(parsePort('', 'PORT'), undefined, 'an empty PORT is common in CI and container templates');
+    assert.equal(parsePort('   ', 'PORT'), undefined);
+  });
+
+  test('refuses anything else, naming the source and the value', () => {
+    for (const value of ['abc', '-1', '65536', '3.5', '0x50', '1e3', '+80']) {
+      assert.throws(
+        () => parsePort(value, '--port'),
+        (error) => error instanceof RangeError && error.message.includes('--port') && error.message.includes(JSON.stringify(value)),
+        `${value} is not a port`,
+      );
+    }
   });
 });
 
