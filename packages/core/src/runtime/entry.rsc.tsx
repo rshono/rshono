@@ -610,7 +610,10 @@ function buildApp(): Hono {
   app.notFound(async (c) => {
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadNotFoundPage && (isRsc || acceptsHtml(c))) {
-      return runWithContext(c, async () => renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc }));
+      // `notFound: true` here as well as on the signal path: the two produce the same page for the same
+      // status, and a payload that says so from one route and not the other is a wire contract with a hole
+      // in it. The client reads it to tell "this is the 404 page" from "this is the page you asked for".
+      return runWithContext(c, async () => renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc, notFound: true }));
     }
     return plainNotFound(c);
   });

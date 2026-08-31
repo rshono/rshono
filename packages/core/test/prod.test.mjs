@@ -237,6 +237,14 @@ test('notFound() in a server component renders the 404 page', async () => {
   const res = await fetch(`${base}/profile/9999`, { headers: { Accept: 'text/html' } });
   assert.equal(res.status, 404);
   assert.match(await res.text(), /404 — nothing here/);
+
+  // A flight fetch is the other shape, and it is not a 404: `renderComponent` hands the payload stream back
+  // before the render can throw, so a `notFound()` from inside a component rides that payload as a digest —
+  // the response was committed the moment it was returned. The client runtime turns the digest into a real
+  // load, which is the 404 above. Same signal, same page, two ways of getting there.
+  const flight = await fetch(`${base}/profile/9999`, { headers: { RSC: '1' } });
+  assert.equal(flight.status, 200);
+  assert.match(await flight.text(), /RSHONO_NOT_FOUND/, 'the digest is what reaches the client, not a 404 payload');
 });
 
 test('an unmatched path renders the notFound page from routes.ts, as a document and as flight', async () => {
@@ -249,7 +257,11 @@ test('an unmatched path renders the notFound page from routes.ts, as a document 
   const flight = await fetch(`${base}/definitely-not-a-page`, { headers: { RSC: '1' } });
   assert.equal(flight.status, 404);
   assert.match(flight.headers.get('content-type'), /text\/x-component/);
-  assert.match(await flight.text(), /nothing here/, 'a soft navigation swaps the 404 page in instead of reloading');
+  const payload = await flight.text();
+  assert.match(payload, /nothing here/, 'a soft navigation swaps the 404 page in instead of reloading');
+  // The same page for the same status as the `notFound()` path below, so it has to say the same thing about
+  // itself: a client cannot tell the 404 page from the page it asked for by looking at the tree.
+  assert.match(payload, /"notFound":true/, 'the payload has to declare itself the not-found page');
 });
 
 // A `notFound` page that throws is the one failure with nowhere to escalate to: it renders from `onError`
