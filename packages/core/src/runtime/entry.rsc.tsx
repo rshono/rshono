@@ -27,7 +27,7 @@ import { runtime } from '@rshono/deploy';
 import { routes as userRoutes } from '@rshono/routes';
 // @ts-expect-error — resolved by the '@rshono/server-app' alias (src/server.ts or the empty fallback)
 import * as serverAppModule from '@rshono/server-app';
-import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent, type PageProps, type Route, type RouteConfig } from '../router.js';
+import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent, type PageProps, type Route } from '../router.js';
 import { appendVary, etagMatches } from '../server/headers.js';
 import { beginPageRender, getRequestContext, publicUrl, readParams, reportServerError, runWithContext } from './context.js';
 import { isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
@@ -36,21 +36,48 @@ import { renderHTML } from './entry.ssr.js';
 import type { CancellableTransformer } from './flight-inject.js';
 import { RouterProvider } from './navigation.js';
 import { asksForRsc, isActionRequest, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
+import { validateRoutesModule, validateServerApp } from './validate-entries.js';
 
-const serverApp = ((serverAppModule as { default?: unknown }).default ?? null) as Hono | null;
+const serverApp = validateServerApp(serverAppModule);
 
 // Compiled into the bundle from rshono.config.ts by DefinePlugin; there is no runtime env-var interface.
 const { isDev } = __RSHONO_CONFIG__;
 
-/** How long a prerendered page may be reused before revalidating. Also what `public/` files get. */
+/**
+ * How long a prerendered page may be reused before revalidating. Also what `public/` files get.
+ *
+ * Not a config field, deliberately: it is a per-response header, and `rshono.config.ts` is compiled into the
+ * bundle — a cache policy you cannot change without a rebuild is the wrong shape. An app that wants a longer
+ * `max-age`, or a `stale-while-revalidate`, sets it from middleware **after `await next()`**:
+ *
+ * ```ts
+ * server.use('/docs/*', async (c, next) => {
+ *   await next();
+ *   c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+ * });
+ * ```
+ *
+ * After, because the response below is built with `cache-control` in the bag it hands `c.body(...)`, and
+ * that replaces a header prepared with `c.header(...)` before the handler ran. The `ETag` is untouched
+ * either way, so revalidation still costs a 304 rather than the page.
+ */
 const SSG_CACHE_CONTROL = 'public, max-age=300';
+
+/**
+ * What a page response gets when nothing else set one: without it a shared cache is free to store a logged-in
+ * user's page and hand it to someone else. `private, no-cache` forbids that without blocking bfcache, which
+ * `no-store` would.
+ */
+const PAGE_CACHE_CONTROL = 'private, no-cache';
 
 /** The two content types a page can be served as, from the same URL — which is what makes `Vary` non-optional. */
 const PAGE_CONTENT_TYPE = /^(?:text\/html|text\/x-component)\b/;
 
 runtime.loadEnv();
 
-const routeConfig = userRoutes as RouteConfig;
+// Checked rather than cast: these two modules are the app's, and a mistake in either used to surface as a
+// `TypeError` from somewhere else entirely — or, for a duplicated path, as nothing at all.
+const routeConfig = validateRoutesModule(userRoutes);
 export const routes: readonly Route[] = routeConfig.routes;
 
 /** The result of a server action, as a `Result<T, E>` rather than an `ok` flag over one field. */
@@ -63,6 +90,20 @@ export type RscPayload = {
   redirect?: string;
   notFound?: boolean;
 };
+
+/**
+ * The result of an action that has already run, for the request whose *render* then failed.
+ *
+ * The action and the page it answers with are one response: an action returns its value through the payload
+ * of the page rendered after it. So when that render throws — a page module that will not load, most
+ * plausibly a chunk that went away mid-deploy — `onError` renders the `error` page in its place, and without
+ * this the reply carries no `returnValue` at all. The caller of an action that ran, and may well have
+ * written something, would be told only that a field was missing.
+ *
+ * Keyed on the Hono context the way `beginPageRender` keys its own marker, and weakly, so nothing outlives
+ * the request it belongs to.
+ */
+const actionResults = new WeakMap<Context, ActionResult>();
 
 /**
  * The per-request CSP nonce, if the app asked for one.
@@ -91,22 +132,30 @@ function cspNonce(c: Context): string | undefined {
  *
  * Both halves are required, because either alone refuses something real:
  *
- * - `Sec-Fetch-Site: cross-site` is the browser's own statement of provenance, and every browser that can post
- *   a form to a server action sends it. An absent header means a non-browser client, which cannot be a CSRF
- *   victim; `same-site` is left alone too, since a subdomain policy is `csrf()`'s to express.
- * - An `Origin` that is the app's own contradicts that label — a browser calls a post from the app's own pages
+ * - `Sec-Fetch-Site` is the browser's own statement of provenance, unforgeable by page script, and every
+ *   browser that can post a form to a server action sends it. `cross-site` and `same-site` are the two labels
+ *   that mean "not from this origin" — `same-site` is what a *sibling subdomain* gets, which is a user-content
+ *   host, a stale CNAME or a subdomain takeover, so leaving it to `csrf()` meant an app without one could have
+ *   any `'use server'` export driven from next door. An absent header means a non-browser client, which cannot
+ *   be a CSRF victim. `same-origin` and `none` settle it on their own, and are what a genuine post carries
+ *   however many proxies rewrote `Host` on the way in.
+ * - An `Origin` that is the app's own contradicts either label — a browser calls a post from the app's own pages
  *   `same-origin` — so the pair is a shape no browser produces, and refusing it would only catch a proxy or a
- *   test client setting the label by hand while posting from the app itself.
+ *   test client setting the label by hand while posting from the app itself. Nothing else clears the label:
+ *   an `Origin` of `null` (a sandboxed iframe, a `data:` URL, `Referrer-Policy: no-referrer`) and no `Origin`
+ *   at all are both refused. A browser attaches one to every non-GET request, so neither is a shape it
+ *   produces — but a security predicate that says "not proven foreign" rather than "proven local" fails open
+ *   the day something does produce it.
  *
  * `publicUrl(c)` rather than `c.req.url`, so it honours `trustProxy` and compares against the origin the
  * browser actually used — which behind a proxy, `rshono dev`'s included, is not the one the server was reached
- * on. The cost is that an app deliberately accepting cross-site *form* posts to an action cannot; that is what
- * an `{ type: 'endpoint' }` route is for.
+ * on. The cost is that an app deliberately accepting *form* posts to an action from another origin of its own
+ * cannot, `csrf()`'s allowlist included; that is what an `{ type: 'endpoint' }` route is for.
  */
 function refusesCrossSiteForm(c: Context): boolean {
-  if (c.req.header('sec-fetch-site') !== 'cross-site') return false;
-  const origin = c.req.header('origin');
-  return origin !== undefined && origin !== publicUrl(c).origin;
+  const site = c.req.header('sec-fetch-site');
+  if (site !== 'cross-site' && site !== 'same-site') return false;
+  return c.req.header('origin') !== publicUrl(c).origin;
 }
 
 async function loadPageModule(load: () => Promise<{ default: PageComponent }>, label: string): Promise<ServerEntry<PageComponent>> {
@@ -136,7 +185,11 @@ function acceptsHtml(c: Context): boolean {
  * payload. It carries the `Vary` too: this is one of the answers a page URL gives depending on the `RSC` request header.
  */
 function plainNotFound(c: Context): Response {
-  return c.text('Not Found', 404, { vary: RSC_VARY_HEADER });
+  // `cache-control` explicitly, because the default above is applied to page *content types* and this is
+  // `text/plain`. A 404 is heuristically cacheable under RFC 9111, so without it a shared cache may store
+  // this one — while the rendered HTML 404 next to it, the same answer to the same request from a client
+  // that asked for HTML, is correctly private.
+  return c.text('Not Found', 404, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
 }
 
 /** A lazy once-cell: runs `load` at most once, but clears a rejection so a later call can retry. */
@@ -166,6 +219,39 @@ function releaseWhenDone(stream: ReadableStream<Uint8Array>, done: () => void): 
       flush: done,
       cancel: done,
     } as CancellableTransformer<Uint8Array, Uint8Array>),
+  );
+}
+
+/**
+ * A macrotask boundary: `setImmediate` where there is one — the current turn's check phase rather than a
+ * timer — and `setTimeout` as the portable fallback, for a runtime without it. `flight-inject.ts` has the
+ * same two lines and the same reason; they are not shared because that module belongs to the SSR layer, and
+ * importing it here would give the RSC layer its own instance of it.
+ */
+const deferTask: (run: () => void) => void =
+  typeof setImmediate === 'function'
+    ? setImmediate
+    : (run) => {
+        setTimeout(run, 0);
+      };
+
+/**
+ * Dev-only: says that a control signal arrived too late to be one.
+ *
+ * The root fix is in app code, so authoring time is where this has to be said, and a docs paragraph is not
+ * where anyone reads it. `isDev` is the baked build flag, so a production server pays one boolean check on a
+ * path that has already gone wrong — and says nothing.
+ */
+function warnLateControlSignal(c: Context, signal: ControlSignal): void {
+  const isRedirect = signal instanceof RedirectSignal;
+  console.warn(
+    `[rshono] ${isRedirect ? `redirect(${JSON.stringify(signal.location)})` : 'notFound()'} was called from a boundary that ` +
+      `resolved after the page shell had already been sent (${c.req.method} ${c.req.path}), so it cannot become a real ` +
+      `${isRedirect ? '3xx' : '404'}: the response is committed as 200 text/html. A browser with JavaScript follows the ` +
+      `digest that rides the payload; one without stays on the Suspense fallback, and a crawler indexes the 200.${
+        isRedirect ? '' : ' A JavaScript client recovers by reloading, which renders this same page again.'
+      }` +
+      ' Decide before the render starts streaming — in Hono middleware, or in the page component body above the boundary.',
   );
 }
 
@@ -240,15 +326,34 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
   beginPageRender(c);
 
   let controlSignal: ControlSignal | undefined;
+  /** Set once `renderHTML` has returned, which is where the response head stops being changeable. */
+  let shellFlushed = false;
   const rscStream = renderToReadableStream(rscPayload, {
     temporaryReferences: opts.temporaryReferences,
     signal,
     onError(error) {
       if (isControlSignal(error)) {
         controlSignal = error;
+        if (shellFlushed) {
+          if (isDev) warnLateControlSignal(c, error);
+          // Past the shell the status line, the headers and the first bytes are on the wire, so the digest
+          // React writes into the payload is the only path left — and everything still rendering is for a
+          // page the browser is about to navigate away from. Winding it down stops those boundaries, runs
+          // `flight-inject`'s cancel/flush, and fires the `release()` above now rather than whenever the
+          // doomed render happens to finish.
+          //
+          // One macrotask later rather than from inside `onError`, where React is still handling the error
+          // that produced the digest — the row carrying it is the only recovery the client has, and an abort
+          // that re-entered React there could cut the render off before it is written. Measured to survive
+          // either way on react-server-dom-rspack 0.1.0; deferred anyway, because that ordering is an
+          // internal the `^19.1.0` peer range does not promise, and the cost is one macrotask on a render
+          // that is already doomed. The reason is the signal itself, so every boundary the abort errors
+          // carries the digest rather than a bare AbortError the client would paint as a fault.
+          if (!signal.aborted) deferTask(() => renderAbort.abort(error));
+        }
         return error.digest;
       }
-      if (!signal.aborted) reportServerError(error, { source: 'render', request: c.req.raw, message: '[rshono] render error:' });
+      if (!signal.aborted) reportServerError(error, { source: 'render', hono: c, message: '[rshono] render error:' });
     },
   });
 
@@ -266,14 +371,18 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
       signal,
       nonce,
       onDone: release,
-      onShellError: (error) => reportServerError(error, { source: 'ssr', request: c.req.raw, message: '[rshono] SSR shell error:' }),
-      onError: (error) => reportServerError(error, { source: 'ssr', request: c.req.raw, message: '[rshono] SSR error:' }),
+      onShellError: (error) => reportServerError(error, { source: 'ssr', hono: c, message: '[rshono] SSR shell error:' }),
+      onError: (error) => reportServerError(error, { source: 'ssr', hono: c, message: '[rshono] SSR error:' }),
     });
   } catch (error) {
     release();
     if (controlSignal) throw controlSignal;
     throw error;
   }
+  // `renderHTML` returns at *shell ready*, so from here the response is the one that ships. Set before the
+  // check below rather than after it, so nothing lands in the window between the two: a signal that arrives
+  // in it is handled there *and* schedules an abort, and aborting an aborted controller is a no-op.
+  shellFlushed = true;
   if (controlSignal) {
     // The shell resolved, so this response is live: React is being pumped into the payload-injecting
     // transform, and a `redirect()` that surfaced from a boundary settling just before the shell was ready
@@ -321,10 +430,13 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
         if (isControlSignal(error)) throw error;
         // In production React sends a thrown action error to the client as an opaque marker, so this is
         // the only place the real one is visible.
-        reportServerError(error, { source: 'action', request, message: '[rshono] server action error:' });
+        reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action error:' });
         returnValue = { ok: false, error };
         actionStatus = 500;
       }
+      // The action is done and its result is the caller's, whatever becomes of the render below. See
+      // {@link actionResults}.
+      actionResults.set(c, returnValue);
     } else {
       // A `<form action={serverAction}>` post, which is the path that runs before hydration and with
       // JavaScript off. Unlike the client-initiated one it carries no custom header, so it is also the only
@@ -345,7 +457,7 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
           // because this path has no client boundary and no `useActionState` to hand the error to, so the
           // app's `error` page is the honest answer. `reportServerError` de-duplicates, so the re-throw
           // reaching `onError` does not report it a second time.
-          reportServerError(error, { source: 'action', request, message: '[rshono] server action error:' });
+          reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action error:' });
           throw error;
         }
         formState = (await decodeFormState(result, formData, __rspack_rsc_manifest__.serverManifest)) ?? undefined;
@@ -368,8 +480,7 @@ function buildApp(): Hono {
 
   // A floor, not a policy: an app wanting the full set registers `secureHeaders()` in src/server.ts, and
   // because this is registered first it unwinds last, so the "only if unset" checks stand aside for it.
-  // Owned by the framework because it also has to cover `mountStaticAssets` — a terminal handler the
-  // app's own middleware never sees.
+  // Owned by the framework so that an app with no src/server.ts at all still gets it.
   app.use(async (c, next) => {
     await next();
     const headers = c.res.headers;
@@ -389,18 +500,21 @@ function buildApp(): Hono {
     // Page responses only from here down.
     if (!PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) return;
     appendVary(headers, RSC_VARY_HEADER);
-    // Without a default a shared cache is free to store a logged-in user's page and hand it to someone
-    // else. `private, no-cache` forbids that without blocking bfcache, which `no-store` would.
-    if (!headers.has('cache-control')) headers.set('cache-control', 'private, no-cache');
+    if (!headers.has('cache-control')) headers.set('cache-control', PAGE_CACHE_CONTROL);
   });
 
-  runtime.mountStaticAssets(app);
-
-  // Ahead of the page routes, so the app's own middleware (`csrf()`, `bodyLimit()`, auth, logging) wraps
-  // page requests too. The flip side: a *terminal* handler in src/server.ts shadows a page at the same path.
+  // First, so the app's own middleware (`csrf()`, `bodyLimit()`, auth, logging) wraps everything registered
+  // below: the page routes, and the asset handlers too. Assets used to be mounted ahead of this, which left
+  // `/_static/*` answered by a terminal handler nothing of the app's ever saw — no `secureHeaders()`, and so
+  // no HSTS on exactly the requests a downgrade attack lands on. The flip side is the same one it always had,
+  // one path wider: a *terminal* handler in src/server.ts shadows a page at the same path, and unscoped
+  // middleware now also runs for `/_static`, which is a reserved prefix an app should not be matching on
+  // purpose anyway.
   if (serverApp) {
     app.route('/', serverApp);
   }
+
+  runtime.mountStaticAssets(app);
 
   const memoizePage = (page: FallbackPage, label: string) => once(() => loadPageModule(page.component, label));
   const loadNotFoundPage = routeConfig.notFound ? memoizePage(routeConfig.notFound, 'the notFound page') : null;
@@ -418,7 +532,21 @@ function buildApp(): Hono {
       return c.redirect(signal.location, signal.status as RedirectStatusCode);
     }
     if (loadNotFoundPage) {
-      return renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc, notFound: true });
+      try {
+        return await renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc, notFound: true });
+      } catch (error) {
+        // The `notFound` page is already the answer to a request that went wrong, so a failure here has
+        // nowhere to escalate to: this runs from `onError` as well as from the page handler, and Hono calls
+        // `onError` inside its own catch — a throw from there rejects `app.fetch`, which
+        // `@hono/node-server` turns into a bodiless 500 with nothing in the log. So it is answered here, the
+        // way a failing `error` page is answered below.
+        //
+        // A `redirect()` from the page is the exception: nothing is committed yet, the branch above cannot
+        // fail, and this is what the same page does when `app.notFound` renders it — so it is honoured, and
+        // recurses exactly once.
+        if (error instanceof RedirectSignal) return respondToControlSignal(c, error);
+        reportServerError(error, { source: 'render', hono: c, message: '[rshono] the notFound page failed to render:' });
+      }
     }
     return plainNotFound(c);
   };
@@ -429,9 +557,12 @@ function buildApp(): Hono {
       const servesPrerendered = !isDev && route.render === 'static';
       const loadPage = once(() => loadPageModule(route.component, `"${route.path}"`));
 
-      const handler: Handler = async (c) => {
+      /** Everything the route answers, before a HEAD has its body taken off it. */
+      const respond = async (c: Context): Promise<Response> => {
         try {
-          if (servesPrerendered && c.req.method === 'GET') {
+          // A HEAD takes the GET path, prerendered bytes included: the headers it promises are the ones a
+          // GET would send, `etag` and `content-length` among them.
+          if (servesPrerendered && (c.req.method === 'GET' || c.req.method === 'HEAD')) {
             const isRsc = asksForRsc(c.req.raw);
             // One fixed set of bytes cannot carry a per-request nonce, so a document has to be rendered
             // where the app's CSP has one. Decided per request, so an app whose policy carries no `NONCE`
@@ -460,6 +591,21 @@ function buildApp(): Hono {
           throw error;
         }
       };
+
+      const handler: Handler = async (c) => {
+        const response = await respond(c);
+        // Hono dispatches a HEAD to the GET route and then rebuilds the response as `new Response(null, res)`,
+        // which drops the body without reading it — so for a rendered page nothing ever consumes the stream:
+        // `flight-inject`'s `cancel` never runs, and neither does the `release()` that detaches the abort
+        // forwarder from the request signal. Cancelling here is what ends the render nobody asked to read.
+        if (c.req.method === 'HEAD' && response.body !== null) {
+          void response.body.cancel().catch(() => {
+            // Already errored or locked, and there is nothing left to release either way.
+          });
+          return new Response(null, response);
+        }
+        return response;
+      };
       app.on(['GET', 'POST'], route.path, handler);
     } else {
       const loadEndpoint = once(() => route.server());
@@ -470,9 +616,17 @@ function buildApp(): Hono {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return endpointHandler(c, next);
       };
-      const method = route.method ?? 'all';
-      if (method === 'all') app.all(route.path, handler);
-      else app.on(method.toUpperCase(), route.path, handler);
+      // De-duplicated, because `app.on(['GET', 'GET'], …)` registers the path twice. Validation refuses
+      // `'all'` inside a list, so a list that reaches here is concrete methods only.
+      const methods = [...new Set([route.method ?? 'all'].flat())];
+      if (methods.includes('all')) app.all(route.path, handler);
+      else {
+        app.on(
+          methods.map((method) => method.toUpperCase()),
+          route.path,
+          handler,
+        );
+      }
     }
   }
 
@@ -481,7 +635,10 @@ function buildApp(): Hono {
   app.notFound(async (c) => {
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadNotFoundPage && (isRsc || acceptsHtml(c))) {
-      return runWithContext(c, async () => renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc }));
+      // `notFound: true` here as well as on the signal path: the two produce the same page for the same
+      // status, and a payload that says so from one route and not the other is a wire contract with a hole
+      // in it. The client reads it to tell "this is the 404 page" from "this is the page you asked for".
+      return runWithContext(c, async () => renderComponent(c, await loadNotFoundPage(), { status: 404, isRsc, notFound: true }));
     }
     return plainNotFound(c);
   });
@@ -497,7 +654,7 @@ function buildApp(): Hono {
       const res = error.getResponse();
       return c.newResponse(res.body, res);
     }
-    reportServerError(error, { source: 'request', request: c.req.raw, message: '[rshono] request error:' });
+    reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadErrorPage && (isRsc || acceptsHtml(c))) {
       const errorInfo: ErrorPageInfo = isDev
@@ -507,13 +664,17 @@ function buildApp(): Hono {
           }
         : { message: 'Internal Server Error' };
       try {
-        return await runWithContext(c, async () => renderComponent(c, await loadErrorPage(), { status: 500, isRsc, errorInfo }));
+        return await runWithContext(c, async () =>
+          renderComponent(c, await loadErrorPage(), { status: 500, isRsc, errorInfo, returnValue: actionResults.get(c) }),
+        );
       } catch (renderError) {
-        reportServerError(renderError, { source: 'request', request: c.req.raw, message: '[rshono] the error page failed to render:' });
+        reportServerError(renderError, { source: 'request', hono: c, message: '[rshono] the error page failed to render:' });
       }
     }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';
-    return c.text(`Internal Server Error${detail}`, 500, { vary: RSC_VARY_HEADER });
+    // Same reason as `plainNotFound`, minus the urgency: a 500 is not heuristically cacheable, so this half
+    // is consistency — the framework's own answers should not differ in what they promise about caching.
+    return c.text(`Internal Server Error${detail}`, 500, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
   });
 
   return app;

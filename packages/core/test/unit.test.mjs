@@ -2,25 +2,36 @@
 // exercises indirectly through one happy path. They import the *built* package, so they double as a
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { basename, dirname, join, sep } from 'node:path';
+import { after, before, describe, test } from 'node:test';
 
 import { scanPageFiles } from '../dist/builder/page-files.js';
 import { checkReactVersions } from '../dist/builder/react-versions.js';
 import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
 import { appendVary, etagMatches } from '../dist/server/headers.js';
-import { resolveServerConfig } from '../dist/server/server-config.js';
-import { createPageCache, prerenderedRelPath, ssgFilePath } from '../dist/server/prerendered.js';
+import { loadConfig } from '../dist/server/load-config.js';
+import { parsePort, resolveServerConfig } from '../dist/server/server-config.js';
+import { createPageCache, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
+import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
-import { beginPageRender, RequestContext } from '../dist/runtime/context.js';
+import {
+  beginPageRender,
+  getRequestContext,
+  onServerError,
+  publicUrl,
+  reportServerError,
+  RequestContext,
+  runWithContext,
+} from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
-import { MINIMAL_APP_DIR } from './helpers.mjs';
+import { validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
+import { MINIMAL_APP_DIR, TESTBED_DIR } from './helpers.mjs';
 
 const tempDirs = [];
 function tempDir() {
@@ -81,6 +92,38 @@ describe('injectFlightPayload', () => {
     });
   }
 
+  // The five splits above all land in one batch: they are enqueued synchronously, so the boundary macrotask
+  // has not run between them. This one puts a real macrotask between the halves, which is the only shape
+  // `emitBatch` can miss — it tests the joined batch, and a tail is what carries the miss across batches.
+  // React does not produce it (its final flush is one synchronous run), but this injector exists precisely
+  // because `rsc-html-stream` made a narrower version of that same assumption, so it is guarded rather than
+  // asserted about React.
+  test('holds back a document trailer split across two batches', async () => {
+    /** One chunk per batch: the wait is long enough that the injector's boundary has fired in between. */
+    const batchedStreamOf = (chunks) => {
+      let next = 0;
+      return new ReadableStream({
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          if (next >= chunks.length) controller.close();
+          else controller.enqueue(encoder.encode(chunks[next++]));
+        },
+      });
+    };
+
+    const html = await readAll(batchedStreamOf(['<html><body><p>hi</p></bo', 'dy></html>']).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']))));
+    assert.equal(countOf(html, '</body></html>'), 1, 'exactly one trailer, however the batches fell');
+    assert.ok(html.indexOf('__FLIGHT_DATA') < html.indexOf('</body></html>'), 'the script must not land inside the trailer');
+    assert.match(html, /<script>\(self\.__FLIGHT_DATA\|\|=\[\]\)\.push\("0:\\"hi\\"\\n"\)<\/script><\/body><\/html>$/);
+
+    // The other half of holding a tail back: one that never completes still has to come back out. It comes
+    // out *after* the payload scripts, which is deliberate — releasing it as soon as a script wants to go out
+    // is exactly the bug above, since the next batch may be the rest of the trailer. Only a truncated
+    // document can reach this, it is 13 bytes at most, and they stay inside `<body>`.
+    const stump = await readAll(batchedStreamOf(['<html><body>a</bod']).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']))));
+    assert.match(stump, /^<html><body>a<script>.*<\/script><\/bod<\/body><\/html>$/, 'a tail that was not a trailer is not lost');
+  });
+
   test('puts the payload script inside the body, before the trailer', async () => {
     const html = await inject(['<html><body><p>hi</p></body></html>']);
     assert.ok(html.indexOf('__FLIGHT_DATA') < html.indexOf('</body></html>'), 'the script must not land after </body>');
@@ -89,6 +132,23 @@ describe('injectFlightPayload', () => {
   test('carries the CSP nonce on the injected script', async () => {
     const html = await inject(['<html><body></body></html>'], { nonce: 'abc123' });
     assert.match(html, /<script nonce="abc123">/);
+    // Base64url too — a generator may emit either alphabet, and `=` padding.
+    const urlSafe = await inject(['<html><body></body></html>'], { nonce: 'aB-_0z==' });
+    assert.match(urlSafe, /<script nonce="aB-_0z==">/);
+  });
+
+  test('drops a nonce that is not one rather than writing it into the tag', async () => {
+    // This tag is built by hand, so its attribute value is the one in a rendered document that nothing else
+    // escapes. The value is not attacker-controlled today — it comes from Hono's `secureHeaders()` — but the
+    // framework does not own where it comes from: `secureHeadersNonce` is an ordinary context variable any
+    // middleware can set. A `"` in it would close the attribute and open a script-injection point in every
+    // page. Dropped rather than escaped: a value that is not a nonce is not one, and a payload script the
+    // policy then refuses is the visible failure to have.
+    for (const nonce of ['" onload="alert(1)', 'abc"><script>alert(1)</script>', 'has space', 'weird;value', '<>']) {
+      const html = await inject(['<html><body></body></html>'], { nonce });
+      assert.match(html, /<script>\(self\.__FLIGHT_DATA/, `"${nonce}" must not reach the tag`);
+      assert.equal(countOf(html, 'nonce'), 0, `"${nonce}" was written into the document`);
+    }
   });
 
   test('escapes a payload that would close the script element early', async () => {
@@ -199,11 +259,347 @@ describe('injectFlightPayload', () => {
       assert.equal(released, 1);
     });
   });
+
+  // A slow client must park the producers rather than let them run to completion into the readable's queue.
+  // The payload pump is the half that had no gate at all: it writes into the transform's controller from a
+  // detached promise, so nothing about the transform's own backpressure applied to it.
+  test('stops producing while the consumer is not reading', async () => {
+    let htmlPulled = 0;
+    let flushes = 0;
+    // Shaped like React: a run of chunks per flush, flushes separated by a macrotask.
+    const html = new ReadableStream({
+      async pull(controller) {
+        if (htmlPulled % 5 === 0) {
+          flushes++;
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        if (++htmlPulled > 500) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode('<p>hi</p>'));
+      },
+    });
+    let flightPulled = 0;
+    const flight = new ReadableStream({
+      pull(controller) {
+        if (++flightPulled > 500) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode(`${flightPulled}:"hi"\n`));
+      },
+    });
+
+    const reader = html.pipeThrough(injectFlightPayload(flight)).getReader();
+    await reader.read(); // one chunk, then stall — a client that stopped reading
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.ok(flightPulled < 10, `the payload must park, not run to completion (pulled ${flightPulled})`);
+    assert.ok(htmlPulled < 20, `the document must park, not run to completion (pulled ${htmlPulled})`);
+    assert.ok(flushes >= 1, 'sanity: the source did produce');
+
+    // And reading again has to resume it, rather than having deadlocked on a permit nobody releases.
+    const before = flightPulled;
+    for (let i = 0; i < 20; i++) await reader.read();
+    assert.ok(flightPulled > before, 'reading again must resume the payload');
+    await reader.cancel();
+  });
 });
 
 // Two fields, because only two things here are decided by the build. The CSRF check, the CSP and the
 // body cap used to live alongside them and are now Hono middleware an app registers in src/server.ts
 // — see prod-config.test.mjs, which exercises them over HTTP rather than through a resolver.
+// The ambient context, which every `getRequestContext()` call in an app resolves through. Sequential tests
+// cannot see the failure that matters here: one request reading another's context.
+describe('runWithContext', () => {
+  const contextFor = (path) => ({ req: { url: `http://example.test${path}`, param: () => ({}) }, env: {} });
+
+  test('keeps one context per flow across suspensions', async () => {
+    const seen = [];
+    /** Reads the ambient context either side of an await, so what is asserted is that the store survives one. */
+    const flow = (path, delay) =>
+      runWithContext(contextFor(path), async () => {
+        const before = getRequestContext().url.pathname;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        const after = getRequestContext().url.pathname;
+        seen.push({ path, before, after });
+      });
+
+    // Interleaved deliberately: the longest-running flow starts first and finishes last, so every other
+    // flow enters and leaves inside it.
+    await Promise.all([flow('/a', 30), flow('/b', 5), flow('/c', 15), flow('/d', 0)]);
+
+    assert.equal(seen.length, 4);
+    for (const { path, before, after } of seen) {
+      assert.equal(before, path, `${path} read the wrong context before its await`);
+      assert.equal(after, path, `${path} read the wrong context after its await — another flow's store leaked in`);
+    }
+  });
+
+  test('throws outside a flow rather than resolving to the last one that ran', () => {
+    assert.throws(() => getRequestContext(), /outside a request/);
+  });
+
+  test('hands back the same wrapper for the same request, and a different one for another', () => {
+    const c = contextFor('/a');
+    const [first, second] = runWithContext(c, () => [getRequestContext(), getRequestContext()]);
+    assert.equal(first, second, 'memoised per request, so repeated calls are one object');
+    assert.notEqual(runWithContext(contextFor('/a'), getRequestContext), first, 'and never shared between requests');
+  });
+});
+
+// The single funnel every caught server-side error goes through. `prod.test.mjs` covers the happy path over
+// HTTP; these are the parts an app only meets when something else has already gone wrong.
+describe('reportServerError', () => {
+  const hono = { req: { raw: new Request('http://example.test/boom') } };
+  const report = (error, source = 'request') => reportServerError(error, { source, hono, message: '[rshono] test:' });
+
+  /** Runs `body` with `console.error` collected rather than printed — every report writes one. */
+  function withStderr(body) {
+    const lines = [];
+    const original = console.error;
+    console.error = (...args) => lines.push(args.map(String).join(' '));
+    try {
+      body(lines);
+    } finally {
+      console.error = original;
+    }
+    return lines;
+  }
+
+  // Registered handlers are module state with no way to unregister, so every test sets its own and the
+  // last one leaves a no-op behind.
+  after(() => onServerError(() => {}));
+
+  test('hands the handler the source, the request and the Hono context, and still writes to stderr', () => {
+    const seen = [];
+    onServerError((error, context) => seen.push({ error, ...context }));
+    const lines = withStderr(() => report(new Error('boom'), 'action'));
+
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].source, 'action');
+    assert.equal(seen[0].error.message, 'boom');
+    assert.equal(seen[0].request.url, 'http://example.test/boom', 'the request is derived from the context');
+    assert.equal(seen[0].hono, hono);
+    assert.equal(typeof seen[0].waitUntil, 'function');
+    assert.match(lines.join('\n'), /\[rshono\] test:/, 'a handler must not replace the stderr log');
+  });
+
+  test('reports one fault once, however many stages catch it', () => {
+    const seen = [];
+    onServerError((_error, { source }) => seen.push(source));
+    withStderr(() => {
+      const error = new Error('one fault');
+      // What a thrown server action does: reported where it is known to be an action, then re-thrown, which
+      // lands it in the top-level handler as well. Two sources for one fault is worse than only the outer.
+      report(error, 'action');
+      report(error, 'request');
+    });
+    assert.deepEqual(seen, ['action'], 'the first stage to recognise it wins — it is the one that knows what it was');
+  });
+
+  test('reports a primitive throw wherever it is caught, having nothing to track it by', () => {
+    const seen = [];
+    onServerError((_error, { source }) => seen.push(source));
+    withStderr(() => {
+      report('a string', 'render');
+      report('a string', 'request');
+    });
+    assert.deepEqual(seen, ['render', 'request'], 'a primitive cannot go in a WeakSet, so it is reported twice');
+  });
+
+  test('a handler that throws is caught and logged, and does not fail the request', () => {
+    onServerError(() => {
+      throw new Error('the tracker is down');
+    });
+    const lines = withStderr(() => {
+      assert.doesNotThrow(() => report(new Error('boom')), 'reporting can never be what fails a request');
+    });
+    assert.match(lines.join('\n'), /the onServerError handler threw/);
+    assert.match(lines.join('\n'), /the tracker is down/, 'and the handler’s own error is not swallowed');
+  });
+
+  test('registering again replaces the previous handler', () => {
+    const calls = [];
+    onServerError(() => calls.push('first'));
+    onServerError(() => calls.push('second'));
+    withStderr(() => report(new Error('boom')));
+    assert.deepEqual(calls, ['second'], 'one funnel, not a growing list');
+  });
+
+  test('waitUntil is a no-op where the platform has no execution context, and swallows a rejection', async () => {
+    // `c.executionCtx` *throws* rather than answering undefined, so a handler reaching for it itself would
+    // have its report swallowed by the guard above — on exactly the platforms where nothing needed holding
+    // open. And an unhandled rejection from a report must not be what ends the process.
+    const rejections = [];
+    const onRejection = (error) => rejections.push(error);
+    process.on('unhandledRejection', onRejection);
+    // Captured across the await rather than with `withStderr`: the rejection is logged a tick after the
+    // report returns, which is exactly the window that helper closes.
+    const lines = [];
+    const original = console.error;
+    console.error = (...args) => lines.push(args.map(String).join(' '));
+    try {
+      onServerError((_error, { waitUntil }) => {
+        assert.doesNotThrow(() => waitUntil(Promise.resolve('sent')));
+        waitUntil(Promise.reject(new Error('the tracker refused it')));
+      });
+      report(new Error('boom'));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(rejections, [], 'a failed report must not surface as an unhandled rejection');
+      assert.match(lines.join('\n'), /waitUntil rejected/);
+      assert.match(lines.join('\n'), /the tracker refused it/);
+    } finally {
+      console.error = original;
+      process.off('unhandledRejection', onRejection);
+    }
+  });
+});
+
+// Every branch here ends in a message someone reads while a build is failing, and only the happy path of
+// `--config` was covered — indirectly, by `prod-config.test.mjs` building with a fixture config.
+describe('loadConfig', () => {
+  test('returns an empty config where the project has none', async () => {
+    assert.deepEqual(await loadConfig(tempDir()), {}, 'no config file is not an error — every field has a default');
+  });
+
+  test('finds rshono.config.{ts,js,mjs} at the root, in that order', async () => {
+    for (const [name, marker] of [
+      ['rshono.config.ts', 'ts'],
+      ['rshono.config.js', 'js'],
+      ['rshono.config.mjs', 'mjs'],
+    ]) {
+      const dir = tempDir();
+      writeFileSync(join(dir, name), `export default { siteUrl: 'https://${marker}.example' };\n`);
+      assert.equal((await loadConfig(dir)).siteUrl, `https://${marker}.example`, `${name} must be found`);
+    }
+
+    // Precedence, so a leftover file cannot quietly win: .ts first.
+    const dir = tempDir();
+    writeFileSync(join(dir, 'rshono.config.mjs'), "export default { siteUrl: 'https://mjs.example' };\n");
+    writeFileSync(join(dir, 'rshono.config.ts'), "export default { siteUrl: 'https://ts.example' };\n");
+    assert.equal((await loadConfig(dir)).siteUrl, 'https://ts.example');
+  });
+
+  test('names an explicit --config that is not there, rather than failing later', async () => {
+    const missing = join(tempDir(), 'nope.config.mjs');
+    await assert.rejects(loadConfig(tempDir(), missing), /\[rshono\] config file not found: /);
+  });
+
+  test('resolves a relative --config against the working directory', async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'custom.config.mjs'), "export default { siteUrl: 'https://custom.example' };\n");
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      assert.equal((await loadConfig(tempDir(), 'custom.config.mjs')).siteUrl, 'https://custom.example');
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  test('says a config with no default export is missing one', async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'rshono.config.mjs'), "export const config = { siteUrl: 'https://x.example' };\n");
+    await assert.rejects(loadConfig(dir), /must `export default` a config object/);
+  });
+
+  // The bespoke branch: Node strips types itself, and the one thing it will not do is rewrite a `.js`
+  // specifier to the `.ts` file beside it. Without the hint this surfaces as a raw ERR_MODULE_NOT_FOUND
+  // naming a path that does exist — as a .ts file.
+  test("explains a .ts config importing a sibling by its '.js' specifier", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'shared.ts'), 'export const siteUrl = "https://shared.example";\n');
+    writeFileSync(join(dir, 'rshono.config.ts'), "import { siteUrl } from './shared.js';\nexport default { siteUrl };\n");
+    await assert.rejects(loadConfig(dir), (error) => {
+      assert.match(error.message, /imports a module Node could not resolve/);
+      assert.match(error.message, /does not rewrite a \.js specifier/);
+      assert.equal(error.cause?.code, 'ERR_MODULE_NOT_FOUND', 'the original is kept as the cause');
+      return true;
+    });
+
+    // And the same import by its real extension loads, so the advice is advice that works. In a directory
+    // of its own: Node's module registry keeps the failed load above under its URL, so rewriting the file
+    // in place would re-throw it.
+    const fixed = tempDir();
+    writeFileSync(join(fixed, 'shared.ts'), 'export const siteUrl = "https://shared.example";\n');
+    writeFileSync(join(fixed, 'rshono.config.ts'), "import { siteUrl } from './shared.ts';\nexport default { siteUrl };\n");
+    assert.equal((await loadConfig(fixed)).siteUrl, 'https://shared.example');
+  });
+
+  test('lets any other import failure through as itself', async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'rshono.config.mjs'), 'throw new Error("config blew up");\n');
+    await assert.rejects(loadConfig(dir), /config blew up/, 'a config that throws must not be dressed up as a resolution hint');
+  });
+});
+
+// The browser-facing URL, which is what `csrf()` and every absolute link the app builds depend on. Reached
+// only through `prod-config.test.mjs`'s `csrf()` assertions until now, so the pieces below — a forwarded
+// chain, a forwarded host with no port, a host that is not one — were covered end to end at best and not at
+// all in the cases the e2e app does not send.
+describe('publicUrl', () => {
+  /** The two members `publicUrl` reads, and nothing else, so the test says what it depends on. */
+  const request = (url, headers = {}) => ({ req: { url, header: (name) => headers[name.toLowerCase()] } });
+
+  test('ignores the forwarded headers when trustProxy is off', () => {
+    const url = publicUrl(request('http://127.0.0.1:3000/a?b=1', { 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' }));
+    assert.equal(url.href, 'http://127.0.0.1:3000/a?b=1', 'the default must be the address the server was reached on');
+  });
+
+  describe('with trustProxy on', () => {
+    // The flag is a module-level const read from the `DefinePlugin` global when the module is first
+    // evaluated, so the only way to reach the other branch is a fresh module instance with the global
+    // already set. The query string is what makes the import fresh.
+    let trusted;
+    before(async () => {
+      globalThis.__RSHONO_CONFIG__ = { trustProxy: true, isDev: false };
+      trusted = (await import('../dist/runtime/context.js?trustProxy=1')).publicUrl;
+    });
+    after(() => {
+      delete globalThis.__RSHONO_CONFIG__;
+    });
+
+    test('takes the host and scheme the browser used, and drops the internal port', () => {
+      // The port is the subtle one: assigning `url.host` would keep :3000 when the new value has none,
+      // which is why the implementation parses instead. Asserted end to end once; never in isolation.
+      const url = trusted(request('http://127.0.0.1:3000/a?b=1', { 'x-forwarded-host': 'example.com', 'x-forwarded-proto': 'https' }));
+      assert.equal(url.href, 'https://example.com/a?b=1');
+    });
+
+    test('keeps a port the forwarded host names', () => {
+      const url = trusted(request('http://127.0.0.1:3000/', { 'x-forwarded-host': 'example.com:8443', 'x-forwarded-proto': 'https' }));
+      assert.equal(url.href, 'https://example.com:8443/');
+    });
+
+    test('honours the first hop of a proxy chain, which is the client-facing one', () => {
+      const url = trusted(
+        request('http://127.0.0.1:3000/', { 'x-forwarded-host': 'example.com, inner.local:8080', 'x-forwarded-proto': 'https, http' }),
+      );
+      assert.equal(url.href, 'https://example.com/', 'a chain appends, so the browser-facing value is the first entry');
+    });
+
+    test('leaves the URL alone where a header is not usable', () => {
+      const internal = 'http://127.0.0.1:3000/a';
+      // A host no URL can hold, an empty value, and a scheme a browser could not have requested. Each
+      // leaves that half of the URL as it was rather than throwing or guessing.
+      assert.equal(trusted(request(internal, { 'x-forwarded-host': 'a b' })).href, internal, 'an unparseable host');
+      assert.equal(trusted(request(internal, { 'x-forwarded-host': '  ' })).href, internal, 'a blank host');
+      assert.equal(trusted(request(internal, { 'x-forwarded-host': ', example.com' })).href, internal, 'a blank first hop');
+      assert.equal(trusted(request(internal, { 'x-forwarded-proto': 'ftp' })).href, internal, 'a scheme that is not http(s)');
+      assert.equal(trusted(request(internal, { 'x-forwarded-proto': 'HTTPS' })).href, internal, 'and it is compared case-sensitively');
+    });
+
+    test('returns a fresh URL each call, so a caller mutating one cannot affect the next', () => {
+      const c = request('http://127.0.0.1:3000/', { 'x-forwarded-host': 'example.com' });
+      const first = trusted(c);
+      first.pathname = '/mutated';
+      assert.equal(trusted(c).pathname, '/');
+    });
+  });
+});
+
 describe('resolveServerConfig', () => {
   test('applies the documented defaults', () => {
     const config = resolveServerConfig({}, { isDev: false });
@@ -215,6 +611,33 @@ describe('resolveServerConfig', () => {
     const config = resolveServerConfig({ trustProxy: false }, { isDev: true });
     assert.equal(config.trustProxy, true);
     assert.equal(config.isDev, true);
+  });
+});
+
+// The same parse backs `--port`, `PORT` in the CLI, and `PORT` in the node bundle — one function, so the
+// three cannot drift apart. `test/start.test.mjs` covers what the CLI does with the result.
+describe('parsePort', () => {
+  test('reads a port, including 0 — "any free port"', () => {
+    assert.equal(parsePort('3000', 'PORT'), 3000);
+    assert.equal(parsePort('0', 'PORT'), 0, 'an explicit 0 is a request, not an accident');
+    assert.equal(parsePort('65535', 'PORT'), 65535);
+    assert.equal(parsePort(' 8080 ', 'PORT'), 8080, 'a shell heredoc or a .env file leaves whitespace behind');
+  });
+
+  test('reads blank as unset rather than as port 0', () => {
+    assert.equal(parsePort(undefined, 'PORT'), undefined);
+    assert.equal(parsePort('', 'PORT'), undefined, 'an empty PORT is common in CI and container templates');
+    assert.equal(parsePort('   ', 'PORT'), undefined);
+  });
+
+  test('refuses anything else, naming the source and the value', () => {
+    for (const value of ['abc', '-1', '65536', '3.5', '0x50', '1e3', '+80']) {
+      assert.throws(
+        () => parsePort(value, '--port'),
+        (error) => error instanceof RangeError && error.message.includes('--port') && error.message.includes(JSON.stringify(value)),
+        `${value} is not a port`,
+      );
+    }
   });
 });
 
@@ -255,6 +678,9 @@ describe('etagMatches', () => {
 });
 
 describe('ssgFilePath', () => {
+  // The one mapping from a path to the file holding its page — the build's and every deploy target's,
+  // because two of them is how a page gets written where no request will ever look for it.
+  //
   // Always '/'-separated, on every host: the same string addresses a file (`resolve()` takes forward
   // slashes on Windows) and a key in an asset store, where a backslash is simply the wrong character.
   test('maps a concrete route path to its index.html', () => {
@@ -268,24 +694,76 @@ describe('ssgFilePath', () => {
     assert.equal(ssgFilePath('/docs', 'flight'), 'docs/index.rsc');
   });
 
-  test('refuses patterns that are not a single concrete path', () => {
-    assert.equal(ssgFilePath('/docs/:slug'), null);
-    assert.equal(ssgFilePath('/files/*'), null);
-  });
-});
-
-describe('prerenderedRelPath', () => {
-  // The shared guard every deploy target relies on: an asset store addressed by key has no
-  // `resolve()` to fall back on, so a traversal has to be refused here or not at all.
-  test('refuses traversal in a request path', () => {
-    for (const attempt of ['/../secret', '/docs/../../etc/passwd', '/..', '/docs/..', '/./docs', '/docs/./x']) {
-      assert.equal(prerenderedRelPath(attempt, 'html'), null, `${attempt} must not resolve to a file`);
+  // The blocker this replaced: the build interpolated `staticPaths` values with `encodeURIComponent`,
+  // while Hono hands a handler `c.req.path` with `decodeURI` already run over any path holding a `%`.
+  // Every non-ASCII slug was therefore built and then never served.
+  test('resolves the encoded and the decoded form of a path to the same file', () => {
+    for (const [encoded, decoded] of [
+      ['/docs/caf%C3%A9', '/docs/café'],
+      ['/docs/a%20b', '/docs/a b'],
+      ['/%C3%BC', '/ü'],
+      ['/docs/%E6%97%A5%E6%9C%AC', '/docs/日本'],
+    ]) {
+      assert.equal(ssgFilePath(encoded), `${decoded.slice(1)}/index.html`, `${encoded} must resolve decoded`);
+      assert.equal(ssgFilePath(decoded), ssgFilePath(encoded), `${decoded} and ${encoded} are one page`);
     }
   });
 
-  test('passes an ordinary path through to its file', () => {
-    assert.equal(prerenderedRelPath('/docs/getting-started', 'html'), 'docs/getting-started/index.html');
-    assert.equal(prerenderedRelPath('/', 'flight'), 'index.rsc');
+  test('refuses a segment no portable file name can hold', () => {
+    // The first two are route patterns rather than paths; the rest are characters Windows refuses, or a
+    // `%2F` that would otherwise smuggle a second segment into one param value.
+    for (const path of ['/docs/:slug', '/files/*', '/docs/a%2Fb', '/docs/a%5Cb', '/docs/a?b', '/docs/a|b', '/docs//x']) {
+      assert.equal(ssgFilePath(path), null, `${path} must not resolve to a file`);
+    }
+  });
+
+  // The shared guard every deploy target relies on: an asset store addressed by key has no
+  // `resolve()` to fall back on, so a traversal has to be refused here or not at all.
+  test('refuses traversal in a request path, escaped or not', () => {
+    const attempts = ['/../secret', '/docs/../../etc/passwd', '/..', '/docs/..', '/./docs', '/docs/./x', '/%2e%2e/secret', '/..%2f', '/..%2F'];
+    for (const attempt of attempts) {
+      assert.equal(ssgFilePath(attempt, 'html'), null, `${attempt} must not resolve to a file`);
+    }
+  });
+
+  // Not a traversal, and pinned so nobody "fixes" it into one: a double-encoded escape decodes to the
+  // literal text `..%2f`, which is one ordinary directory name. The single-encoded forms above are the
+  // ones that decode to a separator, and those are refused.
+  test('treats a double-encoded escape as the literal name it is', () => {
+    assert.equal(ssgFilePath('/..%252f'), '..%2f/index.html');
+  });
+
+  // The guard checks *decoded* segments, so what arrives decoded and what does not is load-bearing. Both
+  // layers below are upstream, and neither is ours to change — hence a test rather than a comment.
+  test('the upstream layers the guard is written against keep their promises', async () => {
+    // 1. The URL parser resolves a percent-encoded dot segment when the Request is built, so `%2e%2e`
+    //    never reaches a handler as a segment at all.
+    for (const encoded of ['%2e%2e', '%2E%2E']) {
+      assert.equal(new URL(`/docs/${encoded}/x`, 'http://example.test').pathname, '/x', `${encoded} must be resolved by the URL parser`);
+    }
+
+    // 2. Hono hands a handler the path with `decodeURI` run over it, which is the form `ssgFilePath`
+    //    stores under — and `decodeURI` leaves the reserved escapes alone, so a `%2F` arrives as an escape
+    //    rather than as a separator and cannot smuggle a second segment past the router. The framework's
+    //    own per-segment `decodeURIComponent` is what then refuses it as a file name (asserted above).
+    const { Hono } = await import('hono');
+    const app = new Hono();
+    const seen = [];
+    app.get('*', (c) => {
+      seen.push(c.req.path);
+      return c.text('ok');
+    });
+    for (const path of ['/docs/caf%C3%A9', '/docs/a%2Fb']) await app.fetch(new Request(`http://example.test${path}`));
+    assert.deepEqual(seen, ['/docs/café', '/docs/a%2Fb'], 'a non-reserved escape arrives decoded; a %2F arrives as itself');
+  });
+});
+
+describe('ssgAssetPath', () => {
+  // Workers reads the same tree through a URL, so the key has to survive being put into one.
+  test('escapes each segment of a store key, and only the segments', () => {
+    assert.equal(ssgAssetPath('docs/café/index.html'), 'docs/caf%C3%A9/index.html');
+    assert.equal(ssgAssetPath('docs/a b/index.rsc'), 'docs/a%20b/index.rsc');
+    assert.equal(ssgAssetPath('docs/a#b/index.html'), 'docs/a%23b/index.html', 'a # would otherwise start a fragment');
   });
 });
 
@@ -337,17 +815,65 @@ describe('readPrerendered', () => {
     assert.notEqual(other.etag, first.etag);
   });
 
+  // What the build's manifest is for: a `render: 'static'` route the build wrote nothing for — no
+  // `staticPaths`, a param it never saw, a page that did not render cleanly — falls through to SSR on every
+  // request, and misses are deliberately not cached, so without the index each of those pays a failed read
+  // first, forever.
+  test('does not touch the store for a path the build did not write', async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'listed'), { recursive: true });
+    writeFileSync(join(dir, 'listed', 'index.html'), '<!DOCTYPE html><p>listed</p>');
+    mkdirSync(join(dir, 'unlisted'), { recursive: true });
+    writeFileSync(join(dir, 'unlisted', 'index.html'), '<!DOCTYPE html><p>unlisted</p>');
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ files: ['listed/index.html'] }));
+
+    assert.ok(await readPrerendered(dir, '/listed'), 'a page the build recorded is served');
+    assert.equal(await readPrerendered(dir, '/unlisted'), null, 'the index is what the store holds — not whatever is on disk');
+    assert.equal(await readPrerendered(dir, '/listed', 'flight'), null, 'per variant: the flight half is best-effort and may not exist');
+  });
+
+  test('reads the store directly when the build left no manifest', async () => {
+    // A build from before there was one. Refusing to serve what it wrote would be worse than the failed
+    // read the index exists to avoid.
+    const dir = tempDir();
+    mkdirSync(join(dir, 'old'), { recursive: true });
+    writeFileSync(join(dir, 'old', 'index.html'), '<!DOCTYPE html><p>old</p>');
+    assert.ok(await readPrerendered(dir, '/old'));
+  });
+
+  test('treats a manifest it cannot parse as no manifest at all', async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'page'), { recursive: true });
+    writeFileSync(join(dir, 'page', 'index.html'), '<!DOCTYPE html><p>page</p>');
+    writeFileSync(join(dir, 'manifest.json'), 'not json');
+    assert.ok(await readPrerendered(dir, '/page'), 'a broken index must not take the store down with it');
+  });
+
   test('returns null for a missing page instead of throwing', async () => {
     assert.equal(await readPrerendered(tempDir(), '/nope'), null);
   });
 
-  test('refuses to escape the ssg directory, decoded form included', async () => {
-    // `prerenderedRelPath` above is where the exhaustive path cases live; what this adds is that the
-    // percent-encoded form is decoded *before* the check rather than after it.
-    const dir = tempDir();
-    for (const attempt of ['/../', '/..%2f', '/docs/../../etc']) {
-      assert.equal(await readPrerendered(dir, attempt), null, `traversal attempt "${attempt}" must not resolve`);
+  test('refuses to escape the ssg directory, with the file a traversal would reach actually there', async () => {
+    // The version of this test that shipped first ran its attempts against a *freshly created empty* temp
+    // dir, so `null` proved nothing beyond "no file was there". Here the file a traversal is aiming at
+    // exists and is readable, so the only thing that can refuse it is the guard.
+    const parent = tempDir();
+    const store = join(parent, 'store');
+    mkdirSync(join(parent, 'sibling'), { recursive: true });
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(parent, 'sibling', 'index.html'), '<!DOCTYPE html><p>outside the store</p>');
+    // The control: the bytes are there, one `..` away from the root, and nothing but the guard is between
+    // them and a response.
+    assert.match(readFileSync(join(store, '..', 'sibling', 'index.html'), 'utf8'), /outside the store/);
+
+    for (const attempt of ['/../sibling', '/../sibling/', '/docs/../../sibling', '/..%2fsibling', '/%2e%2e/sibling']) {
+      assert.equal(await readPrerendered(store, attempt), null, `traversal attempt "${attempt}" must not resolve`);
     }
+
+    // And a page genuinely inside the store still resolves, so the guard is not simply refusing everything.
+    mkdirSync(join(store, 'sibling'), { recursive: true });
+    writeFileSync(join(store, 'sibling', 'index.html'), '<!DOCTYPE html><p>inside</p>');
+    assert.ok(await readPrerendered(store, '/sibling'), 'the same name inside the root is an ordinary page');
   });
 });
 
@@ -379,15 +905,94 @@ describe('prerenderStaticRoutes', () => {
       },
     });
 
-    assert.deepEqual(result.written, ['/about', '/docs/a', '/docs/b']);
+    assert.deepEqual(result.written, ['/about', '/docs/a', '/docs/b'], 'reported in route order, whatever order they rendered in');
     assert.deepEqual(
-      requested,
-      ['document /about', 'flight /about', 'document /docs/a', 'flight /docs/a', 'document /docs/b', 'flight /docs/b'],
+      requested.toSorted(),
+      ['document /about', 'document /docs/a', 'document /docs/b', 'flight /about', 'flight /docs/a', 'flight /docs/b'],
       'each path is rendered as a document and as a flight payload; a dynamic route is never prerendered',
     );
+    // Sorted above because paths render concurrently. Within a path the order is still fixed: the flight
+    // payload is only asked for once the document has come back 200.
+    for (const path of ['/about', '/docs/a', '/docs/b']) {
+      assert.ok(requested.indexOf(`document ${path}`) < requested.indexOf(`flight ${path}`), `${path}: document before flight`);
+    }
     const decode = (page) => new TextDecoder().decode(page.body);
     assert.equal(decode(await readPrerendered(ssgDir, '/docs/a')), '<!DOCTYPE html><p>ok</p>');
     assert.equal(decode(await readPrerendered(ssgDir, '/docs/a', 'flight')), '0:{"root":"flight"}');
+
+    // The index the reader gates on: every file, under the name a *request* resolves to, and nothing for
+    // the dynamic route that was never prerendered.
+    const manifest = JSON.parse(readFileSync(join(ssgDir, 'manifest.json'), 'utf8'));
+    assert.deepEqual(manifest.files.toSorted(), [
+      'about/index.html',
+      'about/index.rsc',
+      'docs/a/index.html',
+      'docs/a/index.rsc',
+      'docs/b/index.html',
+      'docs/b/index.rsc',
+    ]);
+  });
+
+  test('renders a path once however many times staticPaths returns it', async () => {
+    const requested = [];
+    const warnings = [];
+    const warn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    let result;
+    try {
+      result = await prerenderStaticRoutes({
+        ssgDir: tempDir(),
+        routes: [
+          {
+            path: '/docs/:slug',
+            render: 'static',
+            component: async () => ({ default: () => null }),
+            staticPaths: async () => [{ slug: 'a' }, { slug: 'b' }, { slug: 'a' }],
+          },
+        ],
+        fetch: (request) => {
+          requested.push(new URL(request.url).pathname);
+          return okResponse(request);
+        },
+      });
+    } finally {
+      console.warn = warn;
+    }
+
+    assert.deepEqual(result.written, ['/docs/a', '/docs/b']);
+    assert.equal(requested.filter((path) => path === '/docs/a').length, 2, 'one document and one flight payload, not two of each');
+    assert.match(warnings.join('\n'), /repeated 1 path/, 'and the app is told, since a repeated entry is usually a bug in its query');
+  });
+
+  test('renders paths concurrently, up to a bound', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const slugs = Array.from({ length: 20 }, (_, index) => `p${index}`);
+    const result = await prerenderStaticRoutes({
+      ssgDir: tempDir(),
+      routes: [
+        {
+          path: '/docs/:slug',
+          render: 'static',
+          component: async () => ({ default: () => null }),
+          staticPaths: async () => slugs.map((slug) => ({ slug })),
+        },
+      ],
+      fetch: async (request) => {
+        peak = Math.max(peak, ++inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        return okResponse(request);
+      },
+    });
+
+    assert.deepEqual(
+      result.written,
+      slugs.map((slug) => `/docs/${slug}`),
+      'reported in staticPaths order, whatever order they finished in',
+    );
+    assert.ok(peak > 1, "rendered one at a time, a few hundred paths pay every page's latency in series");
+    assert.ok(peak <= 8, `and rendered all at once, a build points the whole site at the app's database (peak ${peak})`);
   });
 
   test('renders against siteUrl, so absolute URLs in the output are the deployed ones', async () => {
@@ -440,35 +1045,54 @@ describe('prerenderStaticRoutes', () => {
     assert.deepEqual(result.skipped, ['/boom']);
   });
 
-  test('rejects param shapes it cannot turn into a single file', async () => {
+  // A route whose paths cannot be computed is unprerenderable, not unservable — the same answer as a
+  // parameterised route with no `staticPaths` at all, one branch above it in the source. These used to
+  // throw out of the pass and take the whole build with them, for routes that work perfectly per request.
+  test('warns and skips a param shape it cannot turn into a single file, rather than failing the build', async () => {
     const cases = [
       { path: '/files/*', staticPaths: async () => [{}], expected: /wildcard segments/ },
       { path: '/docs/:slug{[a-z]+}', staticPaths: async () => [{ slug: 'a' }], expected: /optional\/regex params/ },
       { path: '/docs/:slug', staticPaths: async () => [{ wrong: 'a' }], expected: /without "slug"/ },
+      { path: '/docs/:slug', staticPaths: () => Promise.reject(new Error('the database is down')), expected: /database is down/ },
     ];
     for (const { path, staticPaths, expected } of cases) {
-      await assert.rejects(
-        prerenderStaticRoutes({
+      const warnings = [];
+      const warn = console.warn;
+      console.warn = (message) => warnings.push(String(message));
+      let result;
+      try {
+        result = await prerenderStaticRoutes({
           ssgDir: tempDir(),
-          routes: [{ path, render: 'static', staticPaths, component: async () => ({ default: () => null }) }],
+          routes: [
+            { path, render: 'static', staticPaths, component: async () => ({ default: () => null }) },
+            { path: '/about', render: 'static', component: async () => ({ default: () => null }) },
+          ],
           fetch: okResponse,
-        }),
-        expected,
-        `"${path}" should be rejected`,
-      );
+        });
+      } finally {
+        console.warn = warn;
+      }
+
+      assert.deepEqual(result.skipped, [path], `"${path}" should be skipped`);
+      assert.deepEqual(result.written, ['/about'], 'and the routes around it still prerender');
+      assert.match(warnings.join('\n'), expected, `"${path}" should say why`);
+      assert.match(warnings.join('\n'), /will SSR per request/i, 'and what happens instead');
     }
   });
 
-  test('percent-encodes a param value so it stays one path segment', async () => {
+  // The round trip, not `interpolatePath` in isolation — testing the halves separately is exactly what let
+  // a page be built under a name no request ever resolves to.
+  test('a param value needing percent-encoding is served back for the path the browser asks for', async () => {
+    const ssgDir = tempDir();
     const requested = [];
-    await prerenderStaticRoutes({
-      ssgDir: tempDir(),
+    const result = await prerenderStaticRoutes({
+      ssgDir,
       routes: [
         {
           path: '/docs/:slug',
           render: 'static',
           component: async () => ({ default: () => null }),
-          staticPaths: async () => [{ slug: 'a b/c' }],
+          staticPaths: async () => [{ slug: 'café' }, { slug: 'a b' }],
         },
       ],
       fetch: (request) => {
@@ -476,7 +1100,40 @@ describe('prerenderStaticRoutes', () => {
         return okResponse(request);
       },
     });
-    assert.deepEqual(requested, ['/docs/a%20b%2Fc', '/docs/a%20b%2Fc'], 'once per representation');
+
+    assert.deepEqual(result.written, ['/docs/caf%C3%A9', '/docs/a%20b']);
+    assert.deepEqual(
+      requested.toSorted(),
+      ['/docs/a%20b', '/docs/a%20b', '/docs/caf%C3%A9', '/docs/caf%C3%A9'],
+      'the page is fetched at the URL a browser would use, once per representation',
+    );
+
+    // …and read back at `c.req.path`, which is what Hono hands the handler: `decodeURI` has already run.
+    for (const requestPath of ['/docs/café', '/docs/a b']) {
+      assert.ok(await readPrerendered(ssgDir, requestPath), `${requestPath} must be served from the build`);
+      assert.ok(await readPrerendered(ssgDir, requestPath, 'flight'), `${requestPath} must soft-navigate from the build`);
+    }
+  });
+
+  test('fails the build for a value it cannot store as one file, rather than writing a page nothing serves', async () => {
+    for (const slug of ['a b/c', 'a:b', '..']) {
+      await assert.rejects(
+        prerenderStaticRoutes({
+          ssgDir: tempDir(),
+          routes: [
+            {
+              path: '/docs/:slug',
+              render: 'static',
+              component: async () => ({ default: () => null }),
+              staticPaths: async () => [{ slug }],
+            },
+          ],
+          fetch: okResponse,
+        }),
+        /Cannot prerender .* for route "\/docs\/:slug"/,
+        `"${slug}" should be rejected`,
+      );
+    }
   });
 });
 
@@ -860,6 +1517,164 @@ describe('server bundle externals', () => {
   });
 });
 
+describe('parseRenderRequest', () => {
+  const BASE = 'https://app.test/page';
+  const parse = (init) => parseRenderRequest(new Request(BASE, init));
+
+  test('classifies a GET by the RSC header alone', () => {
+    assert.deepEqual(parse({}), { kind: 'document' });
+    assert.deepEqual(parse({ headers: { RSC: '1' } }), { kind: 'rsc' });
+    // Exactly two states — that is what makes `Vary: RSC` cheap enough to put on a cacheable response.
+    assert.deepEqual(parse({ headers: { RSC: '0' } }), { kind: 'document' });
+    assert.deepEqual(parse({ headers: { RSC: 'true' } }), { kind: 'document' });
+    // An action id on a GET is not a shape the union can hold, and a GET must never run one.
+    assert.deepEqual(parse({ headers: { 'x-rsc-action': 'abc' } }), { kind: 'document' });
+  });
+
+  test("a POST is a client-initiated action exactly when it carries 'x-rsc-action'", () => {
+    // Which branch a POST takes is a security boundary, not just dispatch. `x-rsc-action` is not a
+    // CORS-safelisted header, so a page on another origin cannot send one without a preflight the framework
+    // never answers — which is why this branch carries no origin check of its own. If the classification
+    // ever moved to something a cross-origin form *can* send, that defence would be gone with no test
+    // failing anywhere else. See `SECURITY.md` and `refusesCrossSiteForm`.
+    assert.deepEqual(parse({ method: 'POST', headers: { 'x-rsc-action': 'abc' }, body: '[]' }), { kind: 'rsc-action', actionId: 'abc' });
+    // The header decides even when the body is form-shaped: a client-initiated call is not forgeable
+    // whatever it is encoded as.
+    assert.deepEqual(parse({ method: 'POST', headers: { 'x-rsc-action': 'abc', 'content-type': 'multipart/form-data; boundary=x' }, body: '' }), {
+      kind: 'rsc-action',
+      actionId: 'abc',
+    });
+    assert.deepEqual(parse({ method: 'POST', headers: { 'x-rsc-action': '' }, body: '[]' }), { kind: 'document' }, 'an empty id names nothing');
+  });
+
+  test('a POST is a form action exactly for the content types a browser can send cross-origin', () => {
+    // These two need no preflight, which is what makes this the forgeable shape and the one
+    // `refusesCrossSiteForm` stands in front of.
+    for (const contentType of ['application/x-www-form-urlencoded', 'multipart/form-data; boundary=----x', 'MULTIPART/FORM-DATA; boundary=y']) {
+      assert.deepEqual(parse({ method: 'POST', headers: { 'content-type': contentType }, body: 'x=1' }), { kind: 'form-action' }, contentType);
+    }
+    // Matched as a prefix, so the `; charset=UTF-8` a browser appends does not fall out of the branch — and
+    // erring wide is the safe direction here: an over-matched POST lands on the guarded branch and decodes to
+    // nothing, where an under-matched one would land on a branch with no origin check.
+    assert.deepEqual(parse({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencodedX' }, body: 'x=1' }), {
+      kind: 'form-action',
+    });
+    // Anything else is not an action at all — it renders the page and runs nothing, so a `text/plain` POST
+    // without the header cannot reach an action however it is aimed.
+    for (const contentType of ['application/json', 'text/plain', 'text/html', 'application/xml']) {
+      assert.deepEqual(parse({ method: 'POST', headers: { 'content-type': contentType }, body: '{}' }), { kind: 'document' }, contentType);
+    }
+    assert.deepEqual(parse({ method: 'POST', body: 'x=1' }), { kind: 'document' }, 'no content-type at all');
+  });
+
+  test('what each shape means downstream', () => {
+    const shapes = {
+      document: parse({}),
+      rsc: parse({ headers: { RSC: '1' } }),
+      'form-action': parse({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'x=1' }),
+      'rsc-action': parse({ method: 'POST', headers: { 'x-rsc-action': 'abc' }, body: '[]' }),
+    };
+    assert.deepEqual(Object.fromEntries(Object.entries(shapes).map(([name, shape]) => [name, [wantsRsc(shape), isActionRequest(shape)]])), {
+      document: [false, false],
+      rsc: [true, false],
+      // A no-JS form post answers with a document; a client-initiated call answers with a payload.
+      'form-action': [false, true],
+      'rsc-action': [true, true],
+    });
+  });
+
+  test('asksForRsc reads the same header without parsing the rest', () => {
+    // The prerendered-page path takes it on every GET, so it never builds a `RenderRequest` it would drop.
+    assert.equal(asksForRsc(new Request(BASE, { headers: { RSC: '1' } })), true);
+    assert.equal(asksForRsc(new Request(BASE)), false);
+    assert.equal(asksForRsc(new Request(BASE, { method: 'POST', headers: { 'x-rsc-action': 'abc' }, body: '[]' })), false, 'RSC, not the action id');
+  });
+
+  test('createRscRequest round-trips through the parser it is read by', () => {
+    // `location` is the browser global the client runtime resolves a relative href against.
+    const location = globalThis.location;
+    globalThis.location = { origin: 'https://app.test' };
+    try {
+      const navigation = createRscRequest('/docs?q=1');
+      assert.equal(navigation.method, 'GET');
+      assert.equal(navigation.url, 'https://app.test/docs?q=1');
+      assert.deepEqual(parseRenderRequest(navigation), { kind: 'rsc' });
+
+      const action = createRscRequest('/docs', { id: 'abc123', body: '[]' });
+      assert.equal(action.method, 'POST');
+      assert.deepEqual(parseRenderRequest(action), { kind: 'rsc-action', actionId: 'abc123' });
+      // The header the whole cross-origin argument rests on has to be the one actually sent.
+      assert.equal(action.headers.get('x-rsc-action'), 'abc123');
+      assert.equal(action.headers.get('rsc'), '1');
+    } finally {
+      if (location === undefined) delete globalThis.location;
+      else globalThis.location = location;
+    }
+  });
+});
+
+describe('the security-middleware build warning', () => {
+  /**
+   * The minimal app somewhere disposable, plus whatever `src/server.ts` the case wants.
+   *
+   * No `node_modules`: `createConfigs` builds config objects and scans `src/`, and resolves packages from
+   * the *framework's* tree rather than the app's, so nothing here reads one. It used to borrow the
+   * fixture's through a junction, which was both unnecessary and a Windows reparse point for no reason.
+   */
+  function appWithServer(serverSource) {
+    const dir = mkdtempSync(join(tmpdir(), 'rshono-warn-'));
+    cpSync(join(MINIMAL_APP_DIR, 'package.json'), join(dir, 'package.json'));
+    cpSync(join(MINIMAL_APP_DIR, 'src'), join(dir, 'src'), { recursive: true });
+    if (serverSource !== null) writeFileSync(join(dir, 'src', 'server.ts'), serverSource);
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    return dir;
+  }
+
+  /** What `createConfigs` warns about for `rootDir`, as one string. Builds only — `dev` says nothing. */
+  function warningsFor(rootDir, { isDev = false } = {}) {
+    const warn = console.warn;
+    const lines = [];
+    console.warn = (...args) => lines.push(args.join(' '));
+    try {
+      createConfigs({ rootDir, isDev, config: {}, preset: NODE_PRESET });
+    } finally {
+      console.warn = warn;
+    }
+    return lines.join('\n');
+  }
+
+  test('an app with no src/server.ts is told it has neither control', () => {
+    assert.match(warningsFor(MINIMAL_APP_DIR), /No src\/server\.ts/);
+  });
+
+  test('an app whose src/server.ts never registers bodyLimit is told about the body cap', () => {
+    // Having a src/server.ts is not the same as having the cap in it, and this half used to be warned
+    // about nowhere: the first check only ever asked whether the file existed. Every `'use server'`
+    // export is a public POST endpoint, and the action path buffers the whole body before it can decide
+    // anything about it.
+    const dir = appWithServer("import { Hono } from 'hono';\nexport default new Hono();\n");
+    const warnings = warningsFor(dir);
+    assert.match(warnings, /No bodyLimit\(\) anywhere in src\//);
+    assert.doesNotMatch(warnings, /No src\/server\.ts/, 'the file is there — only the cap is missing');
+  });
+
+  test('the scan is the whole of src/, so a cap registered from a helper module counts', () => {
+    // A textual scan of one file would call this app unprotected. The failure mode of getting it wrong is
+    // a warning nobody needed, so it reads wide rather than narrow.
+    const dir = appWithServer("import { Hono } from 'hono';\nimport { security } from './security';\nexport default new Hono().use(security());\n");
+    writeFileSync(
+      join(dir, 'src', 'security.ts'),
+      "import { bodyLimit } from 'hono/body-limit';\nexport const security = () => bodyLimit({ maxSize: 1024 });\n",
+    );
+    assert.equal(warningsFor(dir), '', 'a registered cap must not be reported as missing');
+  });
+
+  test('the testbed, which registers both, is warned about nothing — and dev is never warned at all', () => {
+    assert.equal(warningsFor(TESTBED_DIR), '');
+    assert.equal(warningsFor(MINIMAL_APP_DIR, { isDev: true }), '', 'a rebuild would print it every time');
+  });
+});
+
 describe('the env-shadow prelude', () => {
   /** The prelude the builder actually generates, read off the rule that carries it. */
   function generatedPrelude() {
@@ -896,10 +1711,22 @@ describe('the env-shadow prelude', () => {
 describe('env-shadow-loader', () => {
   const envShadowLoader = createRequire(import.meta.url)('../dist/builder/env-shadow-loader.cjs');
   const PRELUDE = 'const process = { env: {} }; ';
+  const APP_SRC = join(tmpdir(), 'rshono-app', 'src');
 
-  /** The slice of Rspack's loader context this loader reads. `layer` is the layer the *module* is in. */
-  const run = (source, { layer = 'ssr' } = {}) =>
-    envShadowLoader.call({ getOptions: () => ({ prelude: PRELUDE, layer: 'ssr' }), _module: { layer } }, source);
+  /**
+   * The slice of Rspack's loader context this loader reads. `layer` is the layer the *module* is in, and
+   * `resourcePath` decides whether a module counts as the app's own source for the warning below.
+   */
+  const run = (source, { layer = 'ssr', resourcePath = join(APP_SRC, 'component.tsx'), warnings } = {}) =>
+    envShadowLoader.call(
+      {
+        getOptions: () => ({ prelude: PRELUDE, layer: 'ssr', appSrcPrefix: APP_SRC + sep }),
+        _module: { layer },
+        resourcePath,
+        emitWarning: (warning) => warnings?.push(warning.message),
+      },
+      source,
+    );
 
   test('shadows env only in the layer it was configured for', () => {
     const source = 'export const x = process.env.SECRET;';
@@ -908,11 +1735,68 @@ describe('env-shadow-loader', () => {
     assert.equal(run(source, { layer: null }), source);
   });
 
-  test('leaves a module that never mentions process.env untouched', () => {
+  test('leaves a module that never mentions process untouched', () => {
     // The fast path: every module in the bundle now reaches this loader, so the common case has to be one
     // string scan and out.
-    const source = 'export const x = 1;';
-    assert.equal(run(source), source);
+    assert.equal(run('export const x = 1;'), 'export const x = 1;');
+    // And a word that merely contains it is not a mention. Being wrong here only costs bytes, but
+    // `child_process` and `preprocess` are common enough to be worth not paying for.
+    for (const source of ['export const x = preprocess(1);', 'export const x = processEnv;', "import cp from 'node:child_process';"]) {
+      assert.equal(run(source), source, `"${source}" must not drag the prelude in`);
+    }
+  });
+
+  test('shadows every shape that reads the env through the process binding, not just the literal process.env', () => {
+    // A gate on the substring `process.env` saw one shape out of six. The prelude replaces the whole
+    // binding, so all of them are covered once it is emitted — `process?.env` above all, which is how env
+    // access is written in code meant to run in a browser *and* on a server, i.e. in a `'use client'`
+    // component. Every miss rendered the real value into the SSR'd HTML while the browser bundle saw the
+    // `PUBLIC_`-only view: a leaked secret, and a hydration mismatch besides.
+    for (const source of [
+      'export const x = process.env.DATABASE_URL;',
+      'const { DATABASE_URL } = process.env;',
+      'export const x = process?.env.DATABASE_URL;',
+      "export const x = process['env'].DATABASE_URL;",
+      'const { env } = process;',
+      'const p = process; export const x = p.env.DATABASE_URL;',
+      "export const x = typeof process !== 'undefined' ? process.env.DATABASE_URL : '';",
+    ]) {
+      assert.equal(run(source), PRELUDE + source, `"${source}" must be shadowed`);
+    }
+  });
+
+  test('warns when the app reads process through the global object, which no binding can shadow', () => {
+    // `globalThis.process` is the real `process` however the module names it, so the prelude cannot reach
+    // it — the read has to be found by a person. Only the app's own source is worth saying it about: a
+    // library feature-detecting `globalThis.process?.env?.NODE_ENV` is doing nothing wrong and has no app
+    // secret to read.
+    for (const source of [
+      'export const x = globalThis.process.env.DATABASE_URL;',
+      'export const x = globalThis?.process?.env?.DATABASE_URL;',
+      "export const x = global['process'].env.DATABASE_URL;",
+      "export const x = globalThis?.['process']?.env?.DATABASE_URL;",
+      'export const x = self.process.env.DATABASE_URL;',
+    ]) {
+      const warnings = [];
+      assert.equal(run(source, { warnings }), PRELUDE + source, 'the prelude is still emitted');
+      assert.equal(warnings.length, 1, `"${source}" must be reported`);
+      assert.match(warnings[0], /reads `process` through the global object/);
+    }
+
+    const fromLibrary = [];
+    run('export const x = globalThis.process.env.NODE_ENV;', {
+      resourcePath: join(tmpdir(), 'rshono-app', 'node_modules', 'ui', 'index.js'),
+      warnings: fromLibrary,
+    });
+    assert.deepEqual(fromLibrary, [], 'a dependency is not the app author to tell');
+
+    const rsc = [];
+    run('export const x = globalThis.process.env.DATABASE_URL;', { layer: 'rsc', warnings: rsc });
+    assert.deepEqual(rsc, [], 'a server component is meant to read the real env');
+
+    const shadowed = [];
+    run('export const x = process.env.DATABASE_URL;', { warnings: shadowed });
+    assert.deepEqual(shadowed, [], 'the shape the shadow does cover says nothing');
   });
 
   test('inserts the prelude after the whole directive prologue, not after the first directive', () => {
@@ -1047,5 +1931,124 @@ describe('walkHotUpdates', () => {
     target = 'c';
     assert.equal(await done, null);
     assert.equal(state.hash, 'c');
+  });
+});
+
+describe('validateRoutesModule', () => {
+  // The app's own `src/routes.ts`, checked before anything is built on it. Everything below either
+  // crashed somewhere unrelated (`nN is not iterable`, from a minified bundle) or did nothing at all.
+  const page = { path: '/', component: () => Promise.resolve({ default: () => null }) };
+  const endpoint = { type: 'endpoint', path: '/api/x', server: () => Promise.resolve({ handler: () => null }) };
+  const rejects = (exported, expected) => assert.throws(() => validateRoutesModule(exported), expected);
+
+  test('accepts both shapes the docs present, so leaving off defineRoutes is not a trap', () => {
+    assert.deepEqual(validateRoutesModule([page]), { routes: [page] });
+    const config = { routes: [page], notFound: { component: page.component } };
+    assert.equal(validateRoutesModule(config), config, 'a config is returned as it came');
+  });
+
+  test('names src/routes.ts when the export is not a route table at all', () => {
+    for (const exported of [undefined, null, 42, {}, { routes: 'nope' }]) {
+      rejects(exported, /\[rshono\] src\/routes\.ts must export `routes`/);
+    }
+  });
+
+  test('names the entry that is wrong, by position and by path', () => {
+    rejects([page, null], /routes\[1\] is null, not a route object/);
+    rejects([page, { component: page.component }], /routes\[1\] needs a `path` starting with "\/"/);
+    rejects([{ path: 'docs', component: page.component }], /routes\[0\] \("docs"\) needs a `path` starting with "\/"/);
+    rejects([{ path: '/x' }], /routes\[0\] \("\/x"\) needs `component`/);
+    rejects([{ type: 'page', path: '/x', component: page.component }], /the only `type` is 'endpoint'/);
+    rejects([{ type: 'endpoint', path: '/api/x' }], /is an endpoint, so it needs `server`/);
+  });
+
+  // Excess-property checking against a union accepts any key present in *some* member, so these
+  // type-check today and are then silently ignored — which looks exactly like a feature not working.
+  test('refuses a key that belongs to the other kind of route', () => {
+    rejects([{ ...endpoint, render: 'static' }], /has `render`, which only a page route has/);
+    rejects([{ ...endpoint, staticPaths: async () => [] }], /has `staticPaths`, which only a page route has/);
+    rejects([{ ...page, method: 'get' }], /has `method`, which only an endpoint route has/);
+    rejects([{ ...page, server: endpoint.server }], /has `server`, which only an endpoint route has/);
+  });
+
+  test('refuses a staticPaths the build would never call', () => {
+    rejects([{ ...page, path: '/docs/:slug', staticPaths: async () => [{ slug: 'a' }] }], /is not `render: 'static'`/);
+    rejects([{ ...page, render: 'static', staticPaths: 'nope' }], /`staticPaths` that is not a function/);
+    rejects([{ ...page, render: 'lazy' }], /has render "lazy" — it is 'static' or 'dynamic'/);
+  });
+
+  test("refuses a method the router cannot match, and points 'head' at 'get'", () => {
+    rejects([{ ...endpoint, method: 'HEAD' }], /has method "HEAD", which is not one of get, post/);
+    rejects([{ ...endpoint, method: 'head' }], /A HEAD is dispatched as a GET, so use 'get'/);
+  });
+
+  test('takes a list of methods, and refuses the lists that are mistakes', () => {
+    assert.deepEqual(validateRoutesModule([{ ...endpoint, method: ['get', 'delete'] }]).routes[0].method, ['get', 'delete']);
+    // Named member by member, so the message points at the bad one rather than printing the array.
+    rejects([{ ...endpoint, method: ['get', 'HEAD'] }], /has method "HEAD", which is not one of get, post/);
+    rejects([{ ...endpoint, method: [] }], /has an empty `method` list/);
+    rejects([{ ...endpoint, method: ['get', 'all'] }], /has 'all' inside a `method` list/);
+  });
+
+  // The one that built cleanly, exited 0 and said nothing: Hono matches in registration order.
+  test('refuses a route every method of which the table already answers', () => {
+    rejects(
+      [page, { ...page, component: page.component }],
+      /routes\[1\] \("\/"\) would never run — routes\[0\] \("\/"\) already answers GET, POST \//,
+    );
+    rejects([endpoint, { ...endpoint, method: 'get' }], /already answers GET \/api\/x/, 'an `all` endpoint claims every method');
+    rejects(
+      [
+        { ...endpoint, method: ['get', 'post'] },
+        { ...endpoint, method: 'post' },
+      ],
+      /already answers POST \/api\/x/,
+      'a listed method is claimed like any other',
+    );
+    rejects([{ ...endpoint, path: '/' }, page], /already answers GET, POST \//, 'an endpoint shadows a page at the same path too');
+  });
+
+  test('leaves a route that still answers something alone', () => {
+    for (const table of [
+      // One path split across two methods — an ordinary thing to write.
+      [
+        { ...endpoint, method: 'get' },
+        { ...endpoint, method: 'post' },
+        { ...page, path: '/other' },
+      ],
+      // A catch-all behind a route claiming one method of the path: it still answers PUT, DELETE, …
+      [{ ...endpoint, method: 'post' }, endpoint],
+      // And behind one claiming two of them.
+      [{ ...endpoint, method: ['get', 'post'] }, endpoint],
+      // Overlapping *patterns* are the router's business, and specific-before-generic is the point.
+      [
+        { ...page, path: '/docs/getting-started' },
+        { ...page, path: '/docs/:slug' },
+      ],
+    ]) {
+      assert.deepEqual(validateRoutesModule(table).routes, table);
+    }
+  });
+
+  test('checks the two framework-owned pages as well', () => {
+    rejects({ routes: [page], notFound: {} }, /`notFound` must be a page/);
+    rejects({ routes: [page], error: () => null }, /`error` must be a page/);
+  });
+});
+
+describe('validateServerApp', () => {
+  test('takes the Hono app, or nothing where the app has no src/server.ts', () => {
+    // What the empty fallback module the alias resolves to default-exports.
+    assert.equal(validateServerApp({ default: null }), null);
+    assert.equal(validateServerApp({}), null);
+    assert.equal(validateServerApp(null), null);
+    const app = { fetch: () => null, routes: [] };
+    assert.equal(validateServerApp({ default: app }), app);
+  });
+
+  test('names src/server.ts rather than letting Hono throw from inside app.route()', () => {
+    for (const value of [{ notAHono: true }, 'nope', 42, { fetch: () => null }]) {
+      assert.throws(() => validateServerApp({ default: value }), /\[rshono\] src\/server\.ts must `export default` a Hono app/);
+    }
   });
 });

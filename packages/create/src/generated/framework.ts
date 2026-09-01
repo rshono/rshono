@@ -18,7 +18,7 @@ export const FRAMEWORK_DEPS = {
   react: '19.2.8',
   'react-dom': '19.2.8',
   typescript: '^7.0.2',
-  '@types/node': '^26.2.0',
+  '@types/node': '^26.4.0',
   '@types/react': '^19.2.18',
 } as const;
 

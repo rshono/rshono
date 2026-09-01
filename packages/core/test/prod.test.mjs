@@ -109,6 +109,29 @@ test('getRequestContext() exposes url/pathname, headers, cookies and env in an a
   assert.ok(html.includes(APP_ENV.PUBLIC_API_ENDPOINT), 'ctx.env did not expose the PUBLIC_ variable');
 });
 
+// The request context is one of the four boundaries SECURITY.md owns, and every other test of it is
+// sequential — so nothing proved that two in-flight requests do not see each other's. `/whoami` is the
+// page for it: it awaits before reading the context, so the `AsyncLocalStorage` store has to survive a
+// real suspension, and it echoes a request header back into the document.
+test('two concurrent requests keep separate request contexts', async () => {
+  const marks = Array.from({ length: 8 }, (_, index) => `concurrent-${index}`);
+  const documents = await Promise.all(
+    marks.map(async (mark) => {
+      const res = await fetch(`${base}/whoami`, { headers: { 'x-test': mark, cookie: `visitor=${mark}-cookie` } });
+      assert.equal(res.status, 200);
+      return { mark, html: await res.text() };
+    }),
+  );
+
+  for (const { mark, html } of documents) {
+    assert.match(html, new RegExp(mark), `${mark}: the response must carry its own header value`);
+    assert.match(html, new RegExp(`${mark}-cookie`), `${mark}: …and its own cookie`);
+    for (const other of marks.filter((m) => m !== mark)) {
+      assert.doesNotMatch(html, new RegExp(`\\b${other}\\b`), `${mark}: another request's context leaked into it (${other})`);
+    }
+  }
+});
+
 test('the ctx page prop is the request context, without importing getRequestContext()', async () => {
   const res = await fetch(`${base}/`, { headers: { cookie: 'visitor=Ada%20Lovelace' } });
   assert.equal(res.status, 200);
@@ -138,13 +161,16 @@ test('redirect() in a server component: an HTTP 3xx on hard navigation, a digest
   assert.match(await soft.text(), /RSHONO_REDIRECT/, 'the client needs the digest to follow the redirect itself');
 });
 
-test('redirect() from inside a bare Suspense, after the shell has already resolved', async () => {
-  // `/dashboard` above redirects from the page component, so the signal arrives before there is a response to
-  // abandon. This is the other window: a bare `<Suspense>` has no `CatchBoundary` to re-throw the signal, so
-  // React SSR renders the fallback, the shell resolves, and the HTML response is live and being pumped by the
-  // time the RSC render records the redirect. The framework has to drop that half-built response and answer
-  // with the redirect — which it does by aborting the render, cancelling the stream it will not serve, and
-  // re-throwing. Nothing exercised this path before.
+test('redirect() from a bare Suspense that settles just before the shell is ready is still a real 3xx', async () => {
+  // `/dashboard` above redirects from the page component, so the signal arrives before there is anything to
+  // abandon at all. This is the narrow window after that: a bare `<Suspense>` has no `CatchBoundary` to
+  // re-throw the signal, so React SSR renders the fallback and the shell resolves — but the section awaits
+  // only `Promise.resolve()`, so the signal is recorded before `renderHTML` hands its stream back and the
+  // response head is still the framework's to write. It drops the half-built response by aborting the render,
+  // cancelling the stream it will not serve, and re-throwing.
+  //
+  // The window *past* this one — a boundary that resolves later — cannot answer 3xx at all; that is
+  // `/late-signal` below.
   const hard = await fetch(`${base}/suspense-redirect`, { redirect: 'manual' });
   assert.equal(hard.status, 303, 'a hard load must still get a real redirect, not a half-rendered document');
   assert.match(hard.headers.get('location') ?? '', /\/login$/);
@@ -154,6 +180,39 @@ test('redirect() from inside a bare Suspense, after the shell has already resolv
   assert.equal(soft.status, 200, 'a flight fetch never reaches the SSR half, so the signal rides the payload');
   assert.match(await soft.text(), /RSHONO_REDIRECT/);
 });
+
+// The documented limitation, and the two things the framework still owes a request that hits it: the digest
+// has to survive, because it is the client's only way back, and the render nobody will read has to stop.
+// `/late-signal` waits 50ms before signalling — long past shell-ready — beside a second boundary that takes
+// 2s, which is what makes "the render was wound down" observable from outside.
+for (const { signal, digest, name } of [
+  { signal: null, digest: /RSHONO_REDIRECT;303;%2Flogin/, name: 'redirect()' },
+  { signal: 'notfound', digest: /RSHONO_NOT_FOUND/, name: 'notFound()' },
+]) {
+  test(`${name} from a boundary that resolves after the shell degrades to a 200 carrying the digest`, async () => {
+    const logsBefore = getOutput().length;
+    const started = Date.now();
+    const res = await fetch(`${base}/late-signal${signal ? `?signal=${signal}` : ''}`, { redirect: 'manual' });
+    const html = await res.text();
+    const elapsed = Date.now() - started;
+
+    assert.equal(res.status, 200, 'the head went out with the shell, and HTTP has no take-backs');
+    assert.match(res.headers.get('content-type'), /text\/html/);
+    assert.match(html, digest, 'the digest is the client’s only way back — aborting must not cut React off before it');
+    assert.match(html, /\$RX/, 'the pending boundaries are client-render instructions, not a truncated document');
+    assert.ok(html.trimEnd().endsWith('</body></html>'), 'and the document is closed properly');
+    assert.match(html, /data-section="loading"/, 'a visitor without JavaScript is left on the fallback — the limitation, documented in the README');
+
+    // The wind-down, from outside: the second boundary needs 2s, and neither its content nor that wait is here.
+    assert.doesNotMatch(html, /the slow section rendered anyway/, 'the render for a page nobody will read must stop');
+    assert.ok(elapsed < 1500, `the doomed render should be aborted, not waited out (took ${elapsed}ms)`);
+
+    // The warning that goes with this is for whoever is writing the page, and dev is where they are. It is
+    // asserted in dev.test.mjs; here the point is that production says nothing.
+    await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+    assert.doesNotMatch(getOutput().slice(logsBefore), /resolved after the page shell/);
+  });
+}
 
 test('a client-initiated action that redirects answers with a flight payload the runtime navigates on', async () => {
   // The other redirect shape, and the only one that reaches the RSC branch of `respondToControlSignal`.
@@ -201,6 +260,14 @@ test('notFound() in a server component renders the 404 page', async () => {
   const res = await fetch(`${base}/profile/9999`, { headers: { Accept: 'text/html' } });
   assert.equal(res.status, 404);
   assert.match(await res.text(), /404 — nothing here/);
+
+  // A flight fetch is the other shape, and it is not a 404: `renderComponent` hands the payload stream back
+  // before the render can throw, so a `notFound()` from inside a component rides that payload as a digest —
+  // the response was committed the moment it was returned. The client runtime turns the digest into a real
+  // load, which is the 404 above. Same signal, same page, two ways of getting there.
+  const flight = await fetch(`${base}/profile/9999`, { headers: { RSC: '1' } });
+  assert.equal(flight.status, 200);
+  assert.match(await flight.text(), /RSHONO_NOT_FOUND/, 'the digest is what reaches the client, not a 404 payload');
 });
 
 test('an unmatched path renders the notFound page from routes.ts, as a document and as flight', async () => {
@@ -213,13 +280,51 @@ test('an unmatched path renders the notFound page from routes.ts, as a document 
   const flight = await fetch(`${base}/definitely-not-a-page`, { headers: { RSC: '1' } });
   assert.equal(flight.status, 404);
   assert.match(flight.headers.get('content-type'), /text\/x-component/);
-  assert.match(await flight.text(), /nothing here/, 'a soft navigation swaps the 404 page in instead of reloading');
+  const payload = await flight.text();
+  assert.match(payload, /nothing here/, 'a soft navigation swaps the 404 page in instead of reloading');
+  // The same page for the same status as the `notFound()` path below, so it has to say the same thing about
+  // itself: a client cannot tell the 404 page from the page it asked for by looking at the tree.
+  assert.match(payload, /"notFound":true/, 'the payload has to declare itself the not-found page');
 });
 
-test('non-HTML clients get plain-text 404s', async () => {
+// A `notFound` page that throws is the one failure with nowhere to escalate to: it renders from `onError`
+// as well as from the page handler, and Hono calls `onError` inside its own catch — so a throw from there
+// used to reject `app.fetch` and be answered by the host with a bodiless 500 that nothing logged.
+// `?boom=` makes the testbed's 404 page fail on demand; see components/404.tsx.
+test('a notFound page that throws notFound() answers a 404 with a body, and says so in the log', async () => {
+  for (const path of ['/definitely-not-a-page', '/profile/9999']) {
+    const logsBefore = getOutput().length;
+    const res = await fetch(`${base}${path}?boom=notfound`, { headers: { Accept: 'text/html' } });
+
+    assert.equal(res.status, 404, `${path}: still a 404, just without the app's page`);
+    assert.equal(await res.text(), 'Not Found', `${path}: a body, not the host's empty 500`);
+
+    await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+    assert.match(getOutput().slice(logsBefore), /the notFound page failed to render/, `${path}: and it is reported`);
+  }
+});
+
+test('a notFound page that redirects is honoured from both places a 404 is rendered', async () => {
+  // Not a failure at all: nothing is committed when the signal arrives, and `app.notFound` has always
+  // answered it this way — so the path through the page handler has to agree rather than degrade.
+  for (const path of ['/definitely-not-a-page', '/profile/9999']) {
+    const res = await fetch(`${base}${path}?boom=redirect`, { headers: { Accept: 'text/html' }, redirect: 'manual' });
+    assert.equal(res.status, 303, path);
+    assert.match(res.headers.get('location') ?? '', /\/users$/, path);
+  }
+});
+
+test('non-HTML clients get plain-text 404s, private like the rendered one', async () => {
   const res = await fetch(`${base}/api/definitely-not-an-endpoint`);
   assert.equal(res.status, 404);
   assert.equal(await res.text(), 'Not Found');
+  // `text/plain`, so the default the framework applies to page content types does not reach it — and a 404
+  // is heuristically cacheable, so a shared cache is free to store one that says nothing.
+  assert.equal(res.headers.get('cache-control'), 'private, no-cache');
+
+  const rendered = await fetch(`${base}/definitely-not-a-page`, { headers: { Accept: 'text/html' } });
+  await rendered.text();
+  assert.equal(rendered.headers.get('cache-control'), res.headers.get('cache-control'), 'the two 404s must agree');
 });
 
 test('useNavigation() gives a client island server-computed pathname/params/searchParams during SSR (no flicker)', async () => {
@@ -313,6 +418,101 @@ test('endpoint route and Hono sub-app respond with JSON', async () => {
   assert.ok(Array.isArray(users.users) && users.users.length >= 3);
 });
 
+// The documented choice, pinned so it stays one: a page answers GET, POST and the HEAD that rides the GET,
+// and every other method is the notFound page rather than a 405 with an `Allow` header. An endpoint route is
+// how an app answers those — see the README's "Requirements & limitations".
+test('a method a page route does not answer is a 404, not a 405', async () => {
+  for (const method of ['PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+    // With the app's own Origin: the testbed registers `csrf()`, which refuses an unsafe method with a
+    // foreign one long before the router is reached — a 403 that would say nothing about routing.
+    const res = await fetch(`${base}/`, { method, headers: { Accept: 'text/html', Origin: base } });
+    await res.text();
+    assert.equal(res.status, 404, `${method} on a page`);
+    assert.equal(res.headers.get('allow'), null, 'no Allow header is promised, because no 405 is');
+  }
+
+  // The way out, and the reason 404 is defensible: an endpoint route answers whatever it registers, and
+  // `method` defaults to `all`. `/api/boom` throws by design, so its 500 *is* the proof that it ran.
+  const options = await fetch(`${base}/api/boom`, { method: 'OPTIONS', headers: { Origin: base } });
+  await options.text();
+  assert.equal(options.status, 500, 'an endpoint route with no method of its own answers every one of them');
+
+  // And it can name that method rather than taking every one: `method: 'options'` is how an app answers
+  // the CORS preflight a cross-origin action needs, which no page route ever will.
+  const preflight = await fetch(`${base}/api/preflight`, { method: 'OPTIONS', headers: { Origin: 'https://admin.example' } });
+  await preflight.text();
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-methods'), 'POST, OPTIONS');
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://admin.example');
+
+  // …and only that method: the same path asked for as a page is the notFound page.
+  const asPage = await fetch(`${base}/api/preflight`, { headers: { Accept: 'text/html' } });
+  await asPage.text();
+  assert.equal(asPage.status, 404, 'an endpoint that names one method answers only that one');
+});
+
+// A HEAD promises the headers its GET would send, so it takes the same path — including the prerendered
+// bytes, which is the difference between reading a file and rendering a page it then throws away.
+test('a HEAD on a page route answers with the GET head and no body', async () => {
+  for (const path of ['/', '/docs/getting-started']) {
+    const head = await fetch(`${base}${path}`, { method: 'HEAD' });
+    const get = await fetch(`${base}${path}`);
+    const body = await get.text();
+
+    assert.equal(head.status, get.status, path);
+    assert.equal(await head.text(), '', `${path}: a HEAD carries no body`);
+    for (const header of ['content-type', 'cache-control', 'vary', 'etag', 'content-length']) {
+      assert.equal(head.headers.get(header), get.headers.get(header), `${path}: ${header} must be what the GET would send`);
+    }
+    assert.ok(body.length > 0, `${path}: the GET this mirrors is not empty`);
+  }
+});
+
+// The prerendered half of the same rule, asserted on its own because it is the one that used to render:
+// a static route answering a HEAD by rendering it carries no ETag, so a conditional HEAD could never 304.
+test('a HEAD on a prerendered route is served from the store, ETag and all', async () => {
+  const head = await fetch(`${base}/docs/getting-started`, { method: 'HEAD' });
+  assert.match(head.headers.get('cache-control'), /public, max-age=/, 'the prerendered cache policy, not the rendered one');
+  const etag = head.headers.get('etag');
+  assert.ok(etag, 'a prerendered answer carries its validator');
+
+  const revalidated = await fetch(`${base}/docs/getting-started`, { method: 'HEAD', headers: { 'if-none-match': etag } });
+  assert.equal(revalidated.status, 304, 'and that validator has to work');
+});
+
+test('an endpoint route answers every method it lists, and nothing else', async () => {
+  // `Origin`, because the testbed registers `csrf()`: it refuses an unsafe method with a foreign origin
+  // long before the router is reached, and a 403 would say nothing about routing.
+  for (const method of ['GET', 'DELETE']) {
+    const res = await fetch(`${base}/api/session`, { method, headers: { Origin: base } });
+    assert.equal(res.status, 200, `${method} is listed, so it must reach the handler`);
+    assert.deepEqual(await res.json(), { method }, 'one handler answers both');
+  }
+  for (const method of ['POST', 'PUT']) {
+    const res = await fetch(`${base}/api/session`, { method, headers: { Accept: 'text/html', Origin: base } });
+    await res.text();
+    assert.equal(res.status, 404, `${method} is not listed, so it must not reach the handler`);
+  }
+});
+
+test("a HEAD on a method: 'get' endpoint is answered by that handler, bodiless", async () => {
+  // Why `HTTPMethod` has no `'head'`: Hono dispatches a HEAD as a GET and strips the body, so `'get'`
+  // answers both — and a route registered for HEAD alone answers neither, not even the GET.
+  const res = await fetch(`${base}/api/quick-health`, { method: 'HEAD' });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/json/);
+  assert.equal(await res.text(), '', 'a HEAD carries the headers and no body');
+
+  // The framework's own mounts have to hold the same way, now that they register `GET` alone.
+  const html = await (await fetch(`${base}/`)).text();
+  const chunk = html.match(/src="(\/_static\/chunks\/main\.[0-9a-f]+\.js)"/)[1];
+  for (const path of ['/robots.txt', chunk]) {
+    const asset = await fetch(`${base}${path}`, { method: 'HEAD' });
+    assert.equal(asset.status, 200, `${path} must answer a HEAD`);
+    assert.equal(await asset.text(), '', `${path}: a HEAD carries no body`);
+  }
+});
+
 test('a thrown endpoint renders the error page from routes.ts, redacted, in both representations', async () => {
   for (const { name, headers, contentType } of REPRESENTATIONS) {
     const res = await fetch(`${base}/api/boom`, { headers: { Accept: 'text/html', ...headers } });
@@ -362,7 +562,7 @@ test('a no-JS (progressive-enhancement) action that throws renders the error pag
   // The two action paths have to agree about what happened. This one is re-thrown so the error page can
   // render, which also carries it into the top-level handler — where, without the reporter de-duplicating,
   // the same fault would arrive a second time as a `request`.
-  assert.match(logged, /\[error-reporter\] action \/crash: Intentional server-action failure/, 'a thrown PE action is an action');
+  assert.match(logged, /\[error-reporter\] action \/crash #[^:]+: Intentional server-action failure/, 'a thrown PE action is an action');
   assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'and one fault is reported once, whatever stages it crosses');
 });
 
@@ -382,6 +582,40 @@ test('a thrown server action is redacted in the payload, but logged in full serv
   assert.match(logged, /A name and a valid email are required/, 'the real error message must reach the server log — it is the only signal left');
 });
 
+// An action and the page it answers with are one response, so a render that fails *after* the action ran
+// takes the action's reply with it unless the result is carried across. `/unloadable` is a page whose module
+// throws as it evaluates — a chunk that went missing between deploys, from the runtime's side.
+test('an action whose page then fails to load still gets its result back', async () => {
+  const res = await fetch(`${base}/unloadable`, {
+    method: 'POST',
+    headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
+    body: JSON.stringify([{ name: 'Drift Dana', email: 'dana@example.com' }]),
+  });
+
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/x-component/, 'the client is holding a live tree, so the reply is still a payload');
+  const payload = await res.text();
+  assert.match(payload, /"returnValue":\{"ok":true/, 'the action ran and its result is the caller’s, error page or not');
+  assert.match(payload, /Drift Dana/, 'including the value it returned');
+  assert.match(payload, /Something went wrong/, 'and the page it comes with is the app’s error page');
+});
+
+test('an action request that fails before the action runs answers with a payload carrying no result', async () => {
+  // The other half: nothing ran, so there is nothing to carry. What matters is that the reply is still a
+  // payload the client can decode — it is what lets the runtime say so, instead of reading `.ok` off it.
+  const res = await fetch(`${base}/users`, {
+    method: 'POST',
+    headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
+    body: 'not-a-flight-reply',
+  });
+
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/x-component/);
+  const payload = await res.text();
+  assert.doesNotMatch(payload, /"returnValue":\{/, 'the action never ran, so no result may be invented for it');
+  assert.match(payload, /Something went wrong/);
+});
+
 test('onServerError sees the errors the framework catches, tagged by source, without replacing the log', async () => {
   const logsBefore = getOutput().length;
 
@@ -392,9 +626,14 @@ test('onServerError sees the errors the framework catches, tagged by source, wit
   await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
 
   const logged = getOutput().slice(logsBefore);
-  assert.match(logged, /\[error-reporter\] request \/api\/boom: Intentional endpoint failure/, 'a thrown endpoint must be reported');
+  assert.match(logged, /\[error-reporter\] request \/api\/boom #[^:]+: Intentional endpoint failure/, 'a thrown endpoint must be reported');
   assert.match(logged, /\[error-reporter\] (?:render|ssr) \/crash/, 'a failed render must be reported');
   assert.match(logged, /\[rshono\] request error:/, 'stderr stays the fallback signal even with a reporter wired up');
+  // The handler logs from inside `waitUntil` and reads `hono.var.requestId`, so both assertions above also
+  // prove the two reach a handler at all — and the `request` one proves it for the source reported outside
+  // the ambient context, where `getRequestContext()` throws. That was the whole gap: reporting is what this
+  // hook exists for, and on a serverless target a report with nothing holding the invocation open is cut off.
+  assert.doesNotMatch(logged, /#undefined/, 'the Hono context must carry the middleware variables, not an empty one');
 });
 
 test('<AsyncBoundary> renders its children on the happy path', async () => {
@@ -428,6 +667,22 @@ test('the build writes both representations of a static route', () => {
   const dir = join(TESTBED_DIST, 'ssg', 'docs', 'getting-started');
   assert.match(readFileSync(join(dir, 'index.html'), 'utf8'), /pre-rendered at build time/);
   assert.match(readFileSync(join(dir, 'index.rsc'), 'utf8'), /Getting Started/);
+});
+
+test('a slug that has to be percent-encoded is written where the request for it resolves', async () => {
+  // The half that used to be missing. The build interpolated the value with `encodeURIComponent` and wrote
+  // `docs/caf%C3%A9/`, while Hono hands the handler a `c.req.path` it has already run `decodeURI` over — so
+  // the page was reported as prerendered and every request for it silently fell back to SSR, forever.
+  const dir = join(TESTBED_DIST, 'ssg', 'docs', 'café');
+  assert.match(readFileSync(join(dir, 'index.html'), 'utf8'), /pre-rendered at build time/, 'stored under the decoded name');
+
+  for (const { name, headers } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/docs/caf%C3%A9`, { headers });
+    assert.equal(res.status, 200);
+    assert.ok(res.headers.get('etag'), `${name}: served from the build, not re-rendered per request`);
+    assert.match(res.headers.get('cache-control') ?? '', /public/, `${name}: a prerendered page is publicly cacheable`);
+    assert.match(await res.text(), /Café/);
+  }
 });
 
 test('a prerendered route is served from disk in both representations, publicly cacheable and revalidatable', async () => {
@@ -543,6 +798,9 @@ test('baseline security headers are set on every response', async () => {
 
 test('secrets never reach the browser — not in the HTML, the flight payload, or a client chunk', async () => {
   const html = await (await fetch(`${base}/`)).text();
+  // `leak-helper.ts` reaches the env three ways and never once by the dotted spelling the shadow used to be
+  // gated on — `process?.env`, `process['env']` and an alias. Each of them rendered the real value here while
+  // the browser bundle saw the `PUBLIC_`-only view; the loader unit tests hold the whole table.
   assert.match(html, /Using leak helper:\s*(?:<!--\s*-->)?\(no secret\)/, 'no-directive helper leaked a real secret into SSR HTML');
   assert.ok(!html.includes(APP_ENV.DATABASE_URL), 'DATABASE_URL value must not appear in SSR HTML');
   assert.ok(html.includes(APP_ENV.PUBLIC_API_ENDPOINT), 'the PUBLIC_ variable should be inlined');

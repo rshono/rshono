@@ -44,6 +44,13 @@ export default function Dashboard({ ctx }: PageProps<'/dashboard', AppEnv>) {
 }
 ```
 
+`ctx` is **non-enumerable**, which is the one place these props break a JavaScript expectation: a
+`<Child {...props} />` spread hands the child `ctx: undefined` — silently, since a spread copies
+enumerables only, and the type still says `ctx` is there. It has to be that way; an enumerable `ctx`
+would put `ctx.hono.env`, every binding and secret, into React's dev-only serialization of a server
+component's props. Don't spread page props: nested server components are meant to ask for the context
+themselves.
+
 Nested server components and `'use server'` actions get no props — they call `getRequestContext()` from
 `@rshono/core/server` for the same object. There, `ctx.params` stands in for the `params` prop and
 `ctx.req` for the parsed request:
@@ -82,7 +89,9 @@ than fixing it.
 - Passing it explicitly (`<Counter ctx={ctx} />`) fails the render with React's _"Only plain objects …
   can be passed to Client Components"_.
 - Spreading page props (`<Counter {...props} />`) drops it silently — a spread copies enumerables only.
-  That spread still fails, on `url`, which is enumerable and just as unserializable.
+  That spread still fails, on `url`, which is enumerable and just as unserializable. Into a **server**
+  child the same spread fails at nothing: `ctx` is simply `undefined` there. Call `getRequestContext()`
+  in the child.
 
 Read what you need on the server and pass plain values down: `url.href`, not `url`.
 
@@ -175,6 +184,10 @@ That is the RSC model, not an rshono choice: the client is handed an id for each
 with whatever arguments it likes. A [CSRF check](/docs/configuration#security-middleware) proves a
 request came from your own site; it says nothing about _who_ sent it. Authenticate, authorize and validate
 arguments inside the action, exactly as in a route handler.
+
+An action's arguments are decoded from the request body, which means the body is buffered before your code
+sees any of it. Register [`bodyLimit()`](/docs/configuration#security-middleware) so there is a size past
+which that never happens — `rshono build` warns when nothing under `src/` registers one.
 
 ### Errors
 

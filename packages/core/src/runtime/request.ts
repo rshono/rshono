@@ -1,3 +1,13 @@
+/**
+ * The header that names the server action a client-initiated call wants to run, and so the header that
+ * decides which of the two action branches a POST takes.
+ *
+ * That choice is a security boundary, not just a dispatch detail. It is deliberately *not* a CORS-safelisted
+ * header: a page on another origin cannot send one without a successful preflight, and the framework answers
+ * no preflight, so the `rsc-action` branch is unreachable cross-origin and carries no origin check of its
+ * own. The `form-action` branch is the forgeable one — a form post needs no preflight — and that is the one
+ * `refusesCrossSiteForm` stands in front of. See `SECURITY.md`.
+ */
 const HEADER_ACTION_ID = 'x-rsc-action';
 
 /**

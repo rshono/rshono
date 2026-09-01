@@ -56,21 +56,22 @@
     "dev": "tsc -p tsconfig.build.json --watch",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "test:coverage": "npm run build && node --experimental-test-coverage --test-coverage-include=\"dist/**\" --test-coverage-lines=82 --test-coverage-branches=90 --test-coverage-functions=75 --test --test-concurrency=1 \"test/*.test.mjs\"",
     "test:browser": "npm run build && playwright test",
     "prepack": "npm run build"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
-    "@rspack/core": "2.2.0",
+    "@rspack/core": "2.2.1",
     "@rspack/plugin-react-refresh": "2.0.2",
     "react-refresh": "0.18.0",
     "react-server-dom-rspack": "0.1.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react-dom": "^19.2.5",
     "hono": "^4.13.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",

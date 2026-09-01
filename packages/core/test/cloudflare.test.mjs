@@ -153,6 +153,17 @@ describe('serving from a Worker', () => {
     assert.match(res.headers.get('etag') ?? '', /^W\//, 'weak: something in front may re-encode the bytes without changing the representation');
   });
 
+  test('serves a percent-encoded slug out of the store the filesystem targets read by name', async () => {
+    // One build, one on-disk name, every target: the store is addressed by URL here and by file name
+    // elsewhere, and the two used to resolve a non-ASCII slug differently — a hit on Workers and a
+    // permanent miss on node, vercel and aws-lambda, from the same `dist/`.
+    const res = await fetchWorker('/docs/caf%C3%A9');
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=300', 'served from the build, not re-rendered');
+    assert.match(body, /Café/);
+  });
+
   test('answers the same URL with the prerendered flight payload when asked for one', async () => {
     const res = await fetchWorker('/docs/getting-started', { headers: { RSC: '1' } });
     const body = await res.text();
@@ -169,6 +180,24 @@ describe('serving from a Worker', () => {
     const second = await fetchWorker('/docs/getting-started', { headers: { 'if-none-match': etag } });
     assert.equal(second.status, 304);
     assert.equal(await second.text(), '');
+  });
+
+  test('does not ask the store for a page the build never prerendered', async () => {
+    // Every miss here is a subrequest, and misses are deliberately not cached — so a static route the
+    // build wrote nothing for would spend one on every request, forever. The build's manifest is what
+    // answers instead; it is fetched once per isolate, which is why it is allowed in the list below.
+    const asked = [];
+    const counting = { fetch: (request) => (asked.push(new URL(request.url).pathname), ASSETS.fetch(request)) };
+    const res = await worker.fetch(new Request(`${ORIGIN}/docs/never-prerendered`), { ASSETS: counting, ...APP_ENV }, {
+      waitUntil() {},
+      passThroughOnException() {},
+    });
+    await res.text();
+
+    assert.equal(res.status, 200, 'the route still renders per request');
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'rendered, not served from the store');
+    const pageReads = asked.filter((p) => p.startsWith('/__ssg/') && !p.endsWith('/manifest.json'));
+    assert.deepEqual(pageReads, [], 'the index already says there is no page under that path');
   });
 
   test('serves a public/ file through the binding', async () => {

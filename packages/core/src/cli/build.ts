@@ -18,6 +18,27 @@ interface BuildOptions {
   preset: DeployPreset;
 }
 
+/**
+ * Loads the built server bundle, which the prerender pass renders through.
+ *
+ * Its module scope is where `src/routes.ts` and `src/server.ts` are validated, so a throw from here is
+ * usually a message written for whoever is running the build — printed as one, rather than as a stack
+ * through the minified frames of a bundle they did not write.
+ */
+async function importServerBundle(distDir: string): Promise<{ app: Hono; routes: readonly Route[] }> {
+  try {
+    return (await import(pathToFileURL(join(distDir, 'server', 'main.mjs')).href)) as {
+      app: Hono;
+      routes: readonly Route[];
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith('[rshono]')) throw error;
+    console.error(`\n  ✗ ${message}\n`);
+    process.exit(1);
+  }
+}
+
 export async function buildCommand(options: BuildOptions): Promise<void> {
   const { rootDir, config, preset } = options;
   const distDir = join(rootDir, BUILD_OUT_DIR);
@@ -39,6 +60,9 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
     console.error(stats.toString({ preset: 'errors-warnings', colors: true }));
     process.exit(1);
   }
+  // Printed rather than left to the summary below, which counts warnings without saying what they are —
+  // and one of them is the env shadow reporting a read it cannot cover. See `env-shadow-loader.cjs`.
+  if (stats.hasWarnings()) console.warn(stats.toString({ preset: 'errors-warnings', colors: true }));
   console.log(stats.toString({ preset: 'summary', colors: true }));
 
   const publicDir = join(rootDir, 'public');
@@ -52,10 +76,7 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   const ssgDir = join(distDir, 'ssg');
   await rm(ssgDir, { recursive: true, force: true });
   process.env.RSHONO_PRERENDER = '1';
-  const bundle = (await import(pathToFileURL(join(distDir, 'server', 'main.mjs')).href)) as {
-    app: Hono;
-    routes: readonly Route[];
-  };
+  const bundle = await importServerBundle(distDir);
   const { written, skipped } = await prerenderStaticRoutes({
     routes: bundle.routes,
     fetch: (request) => bundle.app.fetch(request),

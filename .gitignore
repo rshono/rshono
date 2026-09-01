@@ -8,3 +8,6 @@ dist/
 .env*
 test-results/
 playwright-report/
+# Throwaway app copies the minimal-app suite builds inside the fixture — see `appWithRoutes`. Removed
+# when the run ends; ignored so a killed run cannot leave one staged.
+packages/core/test/fixtures/minimal-app/throwaway-*/

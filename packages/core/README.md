@@ -17,10 +17,11 @@ prerendering, and hard env/secret safety.
 
 > **Release candidate.** The framework itself is covered end to end (see [Testing](#testing)) and its API is
 > settled. What is not settled underneath it: Rspack's RSC support is an experimental API
-> (`rspack.experiments.rsc`) and `react-server-dom-rspack` is still `0.0.x`. Both are pinned to exact
-> versions — in the manifests and in workspace overrides — and a release of rshono is what moves them, so an
-> upstream change reaches you as a tested release rather than as a broken install. That is the whole of the
-> caveat, and it is the reason to read the [changelog](../../CHANGELOG.md) before upgrading.
+> (`rspack.experiments.rsc`) and `react-server-dom-rspack` has not reached 1.0, so its own minor bumps are
+> breaking by convention. Both are pinned to exact versions — in the manifests and in workspace overrides —
+> and a release of rshono is what moves them, so an upstream change reaches you as a tested release rather
+> than as a broken install. That is the whole of the caveat, and it is the reason to read the
+> [changelog](../../CHANGELOG.md) before upgrading.
 
 **Full documentation: [rshono.com/docs](https://www.rshono.com/docs).**
 
@@ -286,6 +287,9 @@ Every target streams, which is the bar a new one has to clear.
 - **Node ≥ 22.18** (worker threads, `process.loadEnvFile`, `Promise.withResolvers`, `URL.parse`, and native
   TypeScript stripping, so a `.ts` config needs no loader) and **React ≥ 19.1** (the floor
   `react-server-dom-rspack` requires).
+- **ESM only.** The package declares `import` and `types` conditions and no `require` one, so
+  `require('@rshono/core')` is `ERR_PACKAGE_PATH_NOT_EXPORTED` rather than a working call — deliberately,
+  since the framework's own graph is ESM throughout. Use `import`, or `await import()` from CommonJS.
 - No response compression, no base path (`siteUrl` is a bare origin), and wildcard, optional and regex
   params cannot be prerendered.
 - **No link prefetching**, by choice: a link is one fetch at click time and nothing before it. Speculative
@@ -298,6 +302,22 @@ Every target streams, which is the bar a new one has to clear.
   January 2026. Where it is missing there is no interception at all and every link is a real browser load,
   which a server-rendered app answers correctly; only the soft part is gone. Scroll restoration, the fragment
   jump and the post-navigation focus reset are all the browser's.
+- **`redirect()` and `notFound()` must be reached before the page shell is sent.** A page streams: the status
+  line and the first bytes go out as soon as the shell is ready, and HTTP has no take-backs after that. Called
+  from a `<Suspense>` boundary that resolves later, the signal can no longer be a 3xx or a 404 — the response
+  is already committed as `200 text/html`. A browser with JavaScript still follows it (the signal rides the
+  payload as a digest, and the client runtime navigates), but a visitor without JavaScript is left on the
+  fallback under a 200, and a crawler indexes that 200 as a soft 404. The fix is app-side: decide in Hono
+  middleware, or in the page component body above the boundary. `rshono dev` warns when it happens.
+- **A page route answers `GET`, `POST` and `HEAD`.** Every other method is a 404 rather than a 405: the
+  `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
+  path for a distinction nothing acts on differently here. An endpoint route is the way to answer a `PUT`,
+  `PATCH`, `DELETE` or `OPTIONS`.
+- **A page's `ctx` prop is non-enumerable**, so `<Child {...props} />` hands a _server_ child
+  `ctx: undefined` — silently, since a spread copies enumerables only, and the type still says it is there.
+  It cannot be otherwise: an enumerable `ctx` would put `ctx.hono.env`, every binding and secret, into
+  React's dev-only serialization of a server component's props. Nested server components are meant to call
+  `getRequestContext()` rather than be handed the context.
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
   production ships no client source maps).

@@ -19,6 +19,10 @@ you need on the server and pass it down as props.
 These three are the whole public surface — the package's `exports` map lists only them, so there is no
 deeper path to import. Everything else is framework plumbing.
 
+All three are **ESM only**: the map declares `import` and `types` conditions and no `require` one, so
+`require('@rshono/core')` is `ERR_PACKAGE_PATH_NOT_EXPORTED`. Use `import`, or `await import()` from
+CommonJS.
+
 ## `@rshono/core`
 
 ### Functions
@@ -38,14 +42,14 @@ See [Routing](/docs/routing) and [Configuration](/docs/configuration).
 | `PageComponent<P>`     | A page: a server component returning `ReactNode` or `Promise<ReactNode>`.                                       |
 | `PathParams<P>`        | The `params` record a path pattern implies — `'/users/:id'` → `{ id: string }`. `PageProps` applies it for you. |
 | `PageRoute`            | A path rendered by a server component: `path`, `component`, and optional `render` / `staticPaths`.              |
-| `EndpointRoute`        | A path served by a Hono handler: `type: 'endpoint'`, `path`, `server`, optional `method`.                       |
+| `EndpointRoute`        | A path served by a Hono handler: `type: 'endpoint'`, `path`, `server`, optional `method` (one or a list).       |
 | `EndpointServerModule` | What an endpoint's module must export — a single named `handler`.                                               |
 | `Route`                | `PageRoute \| EndpointRoute`.                                                                                   |
 | `RouteConfig<TRoutes>` | The object `defineRoutes` takes: `routes`, plus optional `notFound` and `error`.                                |
 | `FallbackPage`         | The `notFound` / `error` page shape — a `component` with no path of its own.                                    |
 | `ErrorPageProps<E>`    | `PageProps` plus `error`, for the page declared as `error`.                                                     |
-| `ErrorPageInfo`        | `{ message, stack? }`. Redacted in production: a generic message, no stack.                                     |
-| `HTTPMethod`           | `'get'` \| `'post'` \| `'put'` \| `'patch'` \| `'delete'` \| `'head'` \| `'options'` \| `'all'`.                |
+| `ErrorPageInfo`        | `{ message, stack? }`. Redacted in production: a generic message, and `stack` is `undefined`.                   |
+| `HTTPMethod`           | `'get'` \| `'post'` \| `'put'` \| `'patch'` \| `'delete'` \| `'options'` \| `'all'`. A `HEAD` reaches `'get'`.  |
 | `RshonoConfig`         | Every field of `rshono.config.ts`. All optional.                                                                |
 | `RspackHookContext`    | `{ isServer, isDev }`, handed to the `rspack` config hook.                                                      |
 | `DeployTarget`         | `'node'` \| `'cloudflare'` \| `'vercel'` \| `'aws-lambda'`.                                                     |
@@ -71,6 +75,13 @@ In a server component or an action, `getRequestContext().url` is the same value,
 
 `redirect` and `notFound` never return, so TypeScript narrows away the code after them and you don't
 need to `return` the call. Don't wrap either in a `try/catch` that swallows the signal.
+
+Both have to be reached **before the page shell is sent**. A page streams, so the status line goes out as
+soon as the shell is ready and HTTP has no take-backs after that: called from a `<Suspense>` boundary that
+resolves later, neither can still be a 3xx or a 404. The response is committed as `200 text/html`, a browser
+with JavaScript follows the signal through the payload, and a visitor without it stays on the fallback.
+Decide in middleware or in the page component body, above the boundary — `rshono dev` warns when a signal
+arrives too late.
 
 ```tsx
 import { getRequestContext, redirect } from '@rshono/core/server';
@@ -110,7 +121,8 @@ work. The long tail — `executionCtx.waitUntil()` and whatever Hono adds next �
 Hono's response builders (`redirect`, `notFound`, `json`, `text`, `html`, `body`, `status`, `header`)
 are present as stubs that throw and name the right API, because a page returns JSX and the framework
 builds the response from it — reaching them through `ctx.hono` bypasses the error without making them
-work.
+work. They are permanent: the strike-through your editor draws over them comes from a `@deprecated` tag
+put there for the strike-through, not because they are going away.
 
 `ctx` cannot be handed to a `'use client'` component — it wraps the live request. Reading it on a
 [`render: 'static'`](/docs/routing#static-rendering) page throws, because there is no request at build
@@ -164,11 +176,16 @@ server.use('/blog/*', async (c, next) => {
 | `EnvVars<E>`         | What `ctx.env` resolves to: `Bindings` merged with `Record<string, string \| undefined>`. |
 | `RedirectStatus`     | `301 \| 302 \| 303 \| 307 \| 308`.                                                        |
 | `ServerErrorHandler` | `(error, context) => void` — what `onServerError` takes.                                  |
-| `ServerErrorContext` | `{ source, request }`, the second argument to that handler.                               |
+| `ServerErrorContext` | `{ source, request, hono, waitUntil }`, the second argument to that handler.              |
 | `ServerErrorSource`  | `'action' \| 'render' \| 'ssr' \| 'request'` — which stage produced the error.            |
 
 An `'action'` error is the one worth wiring up: React sends the client an opaque marker with no message
 in production, so a handler is the only place the real error is visible.
+
+`hono` is the request's Hono context, for `hono.var` and `hono.env` — handed over because
+`getRequestContext()` is not reachable from the handler. `waitUntil` holds a serverless invocation open
+until the report has been sent; see [error reporting](/docs/hono#error-reporting) for what it does per
+target.
 
 ## `@rshono/core/client`
 

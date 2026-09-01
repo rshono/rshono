@@ -52,9 +52,37 @@ export const routes = defineRoutes({
       component: () => import('./components/boundary-demo'),
     },
     {
+      path: '/late-signal',
+      component: () => import('./components/late-signal'),
+    },
+    {
+      // Deliberately broken, and linked from nowhere: its module throws as it evaluates. See the component.
+      path: '/unloadable',
+      component: () => import('./components/unloadable'),
+    },
+    {
       type: 'endpoint',
       path: '/api/quick-health',
+      // `'get'` and not `'head'`, which the union no longer offers: Hono dispatches a HEAD as a GET, so
+      // this one registration answers both — and a HEAD-only route would answer neither.
+      method: 'get',
       server: () => import('./health'),
+    },
+    {
+      type: 'endpoint',
+      path: '/api/preflight',
+      // The one method a page route never answers and a cross-origin action needs answered: a CORS
+      // preflight is an OPTIONS.
+      method: 'options',
+      server: () => import('./preflight'),
+    },
+    {
+      type: 'endpoint',
+      path: '/api/session',
+      // Two methods, one handler. The alternative is `'all'` plus a hand-rolled check, which would also
+      // answer every method nobody asked it to.
+      method: ['get', 'delete'],
+      server: () => import('./session'),
     },
     {
       type: 'endpoint',

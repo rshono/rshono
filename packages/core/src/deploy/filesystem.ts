@@ -44,7 +44,8 @@ export const fileSystemRuntime: Omit<DeployRuntime, 'serveApp'> = {
 
   mountPublicFallback(app: Hono): void {
     if (!existsSync(publicDir)) return;
-    app.on(['GET', 'HEAD'], '/*', createPublicFallback({ root: publicDir, isDev }));
+    // `GET` covers `HEAD` — Hono dispatches one as the other. See `HTTPMethod`.
+    app.get('/*', createPublicFallback({ root: publicDir, isDev }));
   },
 
   readPrerendered(c, variant) {

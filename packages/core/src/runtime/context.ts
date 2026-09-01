@@ -174,6 +174,14 @@ export type EnvVars<E extends Env> = E['Bindings'] & Record<string, string | und
  * Never construct it yourself. One instance is reused for the whole request, so its lazy getters
  * ({@link RequestContext.url}, {@link RequestContext.env}) are computed at most once.
  *
+ * The eight members that only throw — `redirect`, `notFound`, `json`, `text`, `html`, `body`, `status`,
+ * `header` — are **permanent, and exist to throw**. Every one of them is a silent no-op when reached through
+ * {@link RequestContext.hono} from a page, so a stub that names the thing that does work is the difference
+ * between a message and a page that renders while quietly ignoring half of what it was asked for. They carry
+ * `@deprecated` for the strike-through an editor draws with it, not because they are on the way out: nothing
+ * will un-deprecate or remove them, and dropping them would leave `ctx.redirect('/x')` as
+ * "property does not exist", which says what is wrong and not what to do.
+ *
  * @typeParam E - The Hono {@link Env} describing this app's `Bindings` and `Variables`, so
  *   {@link RequestContext.var} and {@link RequestContext.env} stay typed.
  *
@@ -394,8 +402,9 @@ export class RequestContext<E extends Env = Env> {
   }
 
   // Hono's response builders, restated as errors naming what to use instead — through `ctx.hono` every
-  // one of them is a silent no-op from a page. `@deprecated` strikes them through in autocomplete; the
-  // unread `..._args` is so `ctx.redirect('/x')` reaches the thrown message rather than an arity error.
+  // one of them is a silent no-op from a page. Permanent, deliberately: see the class doc. `@deprecated`
+  // strikes them through in autocomplete; the unread `..._args` is so `ctx.redirect('/x')` reaches the
+  // thrown message rather than an arity error.
 
   /** @deprecated Not available on a page's context — use `redirect()` from `@rshono/core/server`. */
   redirect(..._args: unknown[]): never {
@@ -551,18 +560,64 @@ export function notFound(): never {
  */
 export type ServerErrorSource = 'action' | 'render' | 'ssr' | 'request';
 
-/** What an {@link ServerErrorHandler} is told about an error, beyond the error itself. */
-export interface ServerErrorContext {
+/**
+ * What an {@link ServerErrorHandler} is told about an error, beyond the error itself.
+ *
+ * @typeParam E - The app's Hono {@link Env}, to type {@link ServerErrorContext.hono}'s `var` and `env`.
+ */
+export interface ServerErrorContext<E extends Env = Env> {
   /** The stage that produced it — see {@link ServerErrorSource}. */
   source: ServerErrorSource;
   /** The request being served, for the URL, method and headers. */
   request: Request;
+  /**
+   * The Hono {@link Context} for this request — `hono.var` for whatever middleware put there, such as a
+   * request id to correlate the report on, and `hono.env` for a platform that passes bindings.
+   *
+   * Handed over rather than left to {@link getRequestContext}, which a handler cannot reach: an error with
+   * `source: 'request'` is reported from the top-level handler, which runs outside the ambient context.
+   */
+  hono: Context<E>;
+  /**
+   * Holds the invocation open until `promise` settles, where the platform has something to ask.
+   *
+   * Reporting is what this hook exists for, and on a serverless platform a report started here is cut off
+   * the moment the response ends unless something keeps the invocation alive. On Cloudflare Workers that is
+   * `executionCtx.waitUntil`, which this calls. On the `node` and `vercel` targets there is nothing to hold
+   * open — the process outlives the response — so it is a no-op and the report finishes on its own. On
+   * `aws-lambda` it is a no-op as well, because `hono/aws-lambda`'s streaming handler exposes no execution
+   * context to ask; a slow report there is best-effort, so prefer a tracker that batches over one that
+   * round-trips per error.
+   *
+   * A rejection is logged rather than propagated: reporting can never fail a request.
+   */
+  waitUntil: (promise: Promise<unknown>) => void;
 }
 
 /** Handler registered with {@link onServerError}. Called for the side effect; its return value is ignored. */
-export type ServerErrorHandler = (error: unknown, context: ServerErrorContext) => void;
+export type ServerErrorHandler<E extends Env = Env> = (error: unknown, context: ServerErrorContext<E>) => void;
 
 let errorHandler: ServerErrorHandler | undefined;
+
+/**
+ * The platform's "keep this invocation alive" hook, or a no-op where there is none.
+ *
+ * `c.executionCtx` *throws* rather than answering `undefined` where a platform has no execution context, so
+ * a handler that reached for it itself would have its report swallowed by the guard in
+ * {@link reportServerError} — on exactly the platforms where nothing needed holding open.
+ */
+function keepAlive(c: Context, promise: Promise<unknown>): void {
+  // Caught here rather than left to the platform: under `--unhandled-rejections=strict` a rejected report
+  // would end the process, and a failed report must never be worse than no report.
+  const settled = Promise.resolve(promise).catch((error) => {
+    console.error('[rshono] a promise passed to the onServerError waitUntil rejected:', error);
+  });
+  try {
+    c.executionCtx.waitUntil(settled);
+  } catch {
+    // No execution context: nothing here cuts the work off, so there is nothing to hold open.
+  }
+}
 
 /**
  * Errors already forwarded, so one fault is reported once however many stages it crosses.
@@ -581,21 +636,29 @@ const alreadyReported = new WeakSet<object>();
  * Registering again replaces the previous handler. Errors still go to `stderr` either way, and a
  * handler that throws is caught and logged — reporting can never fail a request.
  *
+ * @typeParam E - The app's Hono {@link Env}, to type the `hono` context the handler is given.
+ *
  * @example
  * ```ts
  * // src/server.ts
  * import * as Sentry from '@sentry/node';
  * import { onServerError } from '@rshono/core/server';
  *
- * onServerError((error, { source, request }) => {
- *   Sentry.captureException(error, { tags: { source }, extra: { url: request.url } });
+ * onServerError((error, { source, request, hono, waitUntil }) => {
+ *   // `waitUntil` so a serverless invocation is not frozen before the report is sent.
+ *   waitUntil(
+ *     Sentry.captureException(error, {
+ *       tags: { source, requestId: hono.var.requestId },
+ *       extra: { url: request.url },
+ *     }),
+ *   );
  * });
  * ```
  *
  * @see {@link https://www.rshono.com/docs/hono#error-reporting | Docs — error reporting}
  */
-export function onServerError(handler: ServerErrorHandler): void {
-  errorHandler = handler;
+export function onServerError<E extends Env = Env>(handler: ServerErrorHandler<E>): void {
+  errorHandler = handler as unknown as ServerErrorHandler;
 }
 
 /**
@@ -604,7 +667,7 @@ export function onServerError(handler: ServerErrorHandler): void {
  *
  * @internal
  */
-export function reportServerError(error: unknown, info: ServerErrorContext & { message: string }): void {
+export function reportServerError(error: unknown, info: { source: ServerErrorSource; hono: Context; message: string }): void {
   // The first stage to recognise it wins, since that is the one that knows what it was. A primitive throw
   // cannot be tracked and is reported wherever it is caught.
   if (typeof error === 'object' && error !== null) {
@@ -614,7 +677,14 @@ export function reportServerError(error: unknown, info: ServerErrorContext & { m
   console.error(info.message, error);
   if (!errorHandler) return;
   try {
-    errorHandler(error, { source: info.source, request: info.request });
+    errorHandler(error, {
+      source: info.source,
+      request: info.hono.req.raw,
+      // The handler was registered for the app's own `Env`, which `onServerError` erased to store it; this
+      // puts the context back in the shape it was registered with. Same trade as {@link getRequestContext}.
+      hono: info.hono as Context<Env>,
+      waitUntil: (promise) => keepAlive(info.hono, promise),
+    });
   } catch (handlerError) {
     console.error('[rshono] the onServerError handler threw:', handlerError);
   }

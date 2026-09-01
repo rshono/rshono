@@ -51,6 +51,19 @@ const docs: Doc[] = [
       { id: 'targets', title: 'Targets' },
     ],
   },
+  {
+    // A slug that has to be percent-encoded to travel in a URL, and so has to survive the round trip from
+    // `staticPaths` to the file on disk to `c.req.path`. Every deploy target is asserted against this one:
+    // when the writer and the reader disagreed about encoding, a page like this was built and never served.
+    slug: 'café',
+    title: 'Café',
+    body: 'A page whose slug is not ASCII, so prerendering it proves the encoding round trip.',
+    sections: [
+      { id: 'encoding', title: 'Encoding' },
+      { id: 'on-disk', title: 'On disk' },
+      { id: 'serving', title: 'Serving' },
+    ],
+  },
 ];
 
 export const fakeDB = {

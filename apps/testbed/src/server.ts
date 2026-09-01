@@ -42,9 +42,18 @@ const allowedOrigins = (process.env.TESTBED_ALLOWED_ORIGINS ?? '').split(',').fi
 // Where an error tracker goes. Registered at module load — src/server.ts is imported as the server
 // starts — so every error the framework catches (a thrown action, a failed render, SSR falling
 // over) reaches one place. A real app would call Sentry.captureException here instead of logging.
-onServerError((error, { source, request }) => {
+//
+// `hono` and `waitUntil` are used deliberately rather than for the demonstration. `hono.var` is the only
+// way to reach a request id from here — a `source: 'request'` error is reported from the top-level
+// handler, outside the ambient context `getRequestContext()` needs — and `waitUntil` is what keeps a
+// serverless invocation alive until an asynchronous report has actually been sent.
+onServerError<AppEnv>((error, { source, request, hono, waitUntil }) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.log(`[error-reporter] ${source} ${new URL(request.url).pathname}: ${message}`);
+  waitUntil(
+    Promise.resolve().then(() => {
+      console.log(`[error-reporter] ${source} ${new URL(request.url).pathname} #${hono.var.requestId}: ${message}`);
+    }),
+  );
 });
 
 server.use(trimTrailingSlash({ alwaysRedirect: true }));
@@ -113,6 +122,24 @@ server.use('*', async (c, next) => {
   const end = performance.now();
   c.res.headers.set('X-Response-Time', `${(end - start).toFixed(2)} ms`);
 });
+
+/**
+ * The documented way to change what a prerendered page promises about caching: the framework's
+ * `public, max-age=300` is a per-response header, not a config field, so middleware is the interface.
+ *
+ * **After `await next()`.** The line before it is kept on purpose — it is what a reader tries first, and
+ * prod-config.test.mjs asserts that it does not survive: the SSG path builds its response with
+ * `cache-control` in the bag it hands `c.body(...)`, which replaces a prepared header.
+ *
+ * Env-gated so the rest of the suite still sees the framework's own default; a real app would just set it.
+ */
+if (process.env.TESTBED_SSG_CACHE === '1') {
+  server.use('/docs/*', async (c, next) => {
+    c.header('cache-control', 'public, max-age=1');
+    await next();
+    c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  });
+}
 
 /** Reads a value out of a real `node_modules` dependency — see the import at the top of this file. */
 server.get('/api/external-dep', (c) => c.text(EXTERNAL_DEP_MARKER));

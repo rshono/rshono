@@ -151,7 +151,9 @@ middleware needs the public origin, give it `publicUrl(c)` from `@rshono/core/se
 
 Leave it off on [`vercel`](/docs/deployment#vercels-request-handoff), where the request already arrives with the scheme
 and host the browser used — that platform's edge sets them, and the function cannot be reached around
-it. The setting is for a proxy you put in front yourself, which the framework cannot vouch for.
+it. To be precise about that target: the **scheme** is taken from `X-Forwarded-Proto` whether or not
+`trustProxy` is set, because there it is not client-supplied. The `Host` header is not part of the
+exception. The setting is for a proxy you put in front yourself, which the framework cannot vouch for.
 
 ## Response headers and caching
 
@@ -172,6 +174,23 @@ A **dynamic page** is answered `Cache-Control: private, no-cache` — a page is 
 default, and with no directives a shared cache is free to store one user's page and serve it to the
 next. Set your own value from middleware and it is left alone. **Prerendered pages** keep
 `public, max-age=300` and a weak `ETag`.
+
+Those two values are not config fields: a cache policy is a per-response header, and `rshono.config.ts`
+is compiled into the bundle, so a value you cannot change without a rebuild would be the wrong shape.
+Middleware is the interface — and for a **prerendered** page it has to run **after `await next()`**:
+
+```ts
+// src/server.ts — a documentation site's prerendered tree, cached for a day
+server.use('/docs/*', async (c, next) => {
+  await next();
+  c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+});
+```
+
+After, because the prerendered response is built with `cache-control` in the header bag, which replaces
+anything `c.header(...)` prepared before the handler ran. A dynamic page is the easier case: its default
+is applied only if nothing else set one, so `c.header(...)` before `await next()` works there. Editing
+`c.res.headers` after works for both, leaves the `ETag` alone, and so keeps revalidation at a 304.
 
 Every page response carries `Vary: RSC`, because one URL answers with either an HTML document or a flight
 payload depending on that request header — the client runtime sends `RSC: 1` to ask for a payload. A header

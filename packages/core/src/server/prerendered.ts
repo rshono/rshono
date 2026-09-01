@@ -22,26 +22,87 @@ export const VARIANTS = {
 } as const satisfies Record<PrerenderVariant, { file: string; headers: Record<string, string>; contentType: string }>;
 
 /**
- * Where a route's prerendered output lives, relative to the output root — or `null` for a path that cannot be
- * prerendered at all, one with a param or a wildcard left in it.
+ * The index the build leaves beside the pages, naming every file it wrote — one `files` array of
+ * {@link ssgFilePath} names.
  *
- * Always `/`-separated: the same string addresses a file on a filesystem, which accepts forward slashes on
- * Windows too, and a key in an asset store, where a backslash would be the wrong character.
+ * It exists so a reader can tell "this store has no page for that path" without asking the store, which is
+ * the difference between a `Map` lookup and a failed `readFile` (or, without a filesystem, a failed store
+ * fetch) on **every** request to a static route the build could not prerender — misses are deliberately not
+ * cached, so that one never warms up. Absent is not an error: a build from an older rshono has none, and a
+ * reader that finds none looks the way it always did.
  */
-export function ssgFilePath(routePath: string, variant: PrerenderVariant = 'html'): string | null {
-  if (/[:*]/.test(routePath)) return null;
-  const trimmed = routePath.replace(/^\/+|\/+$/g, '');
-  const file = VARIANTS[variant].file;
-  return trimmed === '' ? file : `${trimmed}/${file}`;
+export const SSG_MANIFEST_FILE = 'manifest.json';
+
+/**
+ * What a decoded path segment may not hold if it is to be one portable file name. `\ / : * ? " < > |` are
+ * refused by Windows and `/` by every host, so a `staticPaths` value containing one fails the build rather
+ * than writing a page on one machine and not on another — and a route pattern, whose params and wildcards are
+ * spelled with `:` and `*`, falls out of the same rule.
+ */
+const UNPORTABLE_SEGMENT = /[\\/:*?"<>|]/;
+
+/**
+ * Decodes one path segment the way a URL does, treating a malformed escape as the literal text it is:
+ * `decodeURIComponent('%')` throws, and a request path is whatever the client chose to send.
+ */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 /**
- * {@link ssgFilePath} for a path that came off a request, so traversal is a miss rather than a lookup. A store
- * addressed by key has no `resolve()` to fall back on, so `..` is refused here or not at all.
+ * Whether one decoded segment can be a directory in the prerender tree: not empty, not a relative-path
+ * marker, and made only of characters a file name can hold — {@link UNPORTABLE_SEGMENT}, plus the control
+ * characters, which a percent-escape is free to carry into a path and no filesystem wants in a name.
  */
-export function prerenderedRelPath(requestPath: string, variant: PrerenderVariant): string | null {
-  if (/(^|\/)\.\.?(\/|$)/.test(requestPath)) return null;
-  return ssgFilePath(requestPath, variant);
+function isStorableSegment(segment: string): boolean {
+  if (segment === '' || segment === '.' || segment === '..') return false;
+  return !UNPORTABLE_SEGMENT.test(segment) && ![...segment].some((char) => char < ' ');
+}
+
+/**
+ * Where a path's prerendered output lives, relative to the output root — or `null` for a path no single file
+ * can answer.
+ *
+ * **The one canonical form**, shared by the build that writes the file and by every deploy target that reads
+ * it back, because the two drifting apart is invisible: the build reports the page as prerendered and every
+ * request afterwards falls through to SSR, forever. Each segment is stored *decoded*, so `/docs/café` is
+ * `docs/café` whether the caller holds the path percent-encoded — the build, which interpolates `staticPaths`
+ * values into a URL — or already decoded, as Hono's `c.req.path` is: it runs `decodeURI` over any path
+ * containing a `%`. Decoded is also the form every other static file server addresses, so the tree stays
+ * servable by something that is not this framework.
+ *
+ * Always `/`-separated: the same string addresses a file on a filesystem, which accepts forward slashes on
+ * Windows too, and a key in an asset store, where a backslash would be the wrong character.
+ *
+ * `null` is everything that is not one file: a `.` or `..` segment — so traversal is a miss rather than a
+ * lookup, which a store addressed by key, with no `resolve()` to fall back on, depends on — an empty segment,
+ * and any segment holding a character a file name cannot.
+ */
+export function ssgFilePath(path: string, variant: PrerenderVariant = 'html'): string | null {
+  const file = VARIANTS[variant].file;
+  const trimmed = path.replace(/^\/+|\/+$/g, '');
+  if (trimmed === '') return file;
+
+  const segments: string[] = [];
+  for (const encoded of trimmed.split('/')) {
+    const segment = decodeSegment(encoded);
+    if (!isStorableSegment(segment)) return null;
+    segments.push(segment);
+  }
+  return `${segments.join('/')}/${file}`;
+}
+
+/**
+ * {@link ssgFilePath} as a URL path, for a store addressed by one rather than by key. Every segment is escaped
+ * on the way out and the store decodes it back, so a page reached through a URL lands on the same file a
+ * filesystem target opens by name.
+ */
+export function ssgAssetPath(relPath: string): string {
+  return relPath.split('/').map(encodeURIComponent).join('/');
 }
 
 /** The default cache budget: enough for a large documentation site's working set, small enough to be ignorable. */

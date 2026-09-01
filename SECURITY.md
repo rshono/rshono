@@ -27,11 +27,14 @@ The framework owns four boundaries, and a defect in any of them is a vulnerabili
 
 - **The env split.** A `PUBLIC_`-prefixed variable is meant to be the only thing that can reach the browser,
   in the client bundle and in SSR'd output alike. Anything that gets a non-prefixed variable into either is
-  in scope.
+  in scope. The one route the framework cannot cover is a read through the global object —
+  `globalThis.process.env`, `global.process.env` — because the SSR-side shadow replaces the `process`
+  _binding_, which `globalThis.process` goes around. The build warns when a module under `src/` does that;
+  read `process.env` directly and the shadow applies.
 - **Server action dispatch.** Every `'use server'` export is a public HTTP endpoint by design — that is
   documented, and authenticating inside the action is the app's job. What is _not_ by design: running an
-  action the request did not name, running one from a cross-site form post, or leaking a thrown action's
-  message to the client in production.
+  action the request did not name, running one from a form post made by another origin, or leaking a thrown
+  action's message to the client in production.
 - **The request context.** `getRequestContext()` resolves per request through `AsyncLocalStorage`. Anything
   that makes one request see another's context, cookies or env is in scope.
 - **Prerendered page serving and the response defaults.** Path traversal into the prerender store, a `Vary`
@@ -42,8 +45,17 @@ The framework owns four boundaries, and a defect in any of them is a vulnerabili
 
 - **An app's own middleware, or its absence.** Per-request security is Hono middleware in `src/server.ts` —
   `csrf()`, `bodyLimit()`, `secureHeaders()` — and `create-rshono` scaffolds it. An app that removed it is
-  not a framework vulnerability. (The one exception the framework does enforce is a cross-site form post to a
-  server action, which it refuses whether or not `csrf()` is registered.)
+  not a framework vulnerability. (The one exception the framework does enforce is a form post to a server
+  action from another origin — a sibling subdomain included, since `Sec-Fetch-Site: same-site` is what a
+  browser labels that — which it refuses whether or not `csrf()` is registered.)
+
+  The _other_ action shape has no such rule and needs none, which is worth writing down because it is
+  load-bearing: a client-initiated action call is selected by the `x-rsc-action` request header, and that is
+  not a CORS-safelisted header. A page on another origin cannot send one without a successful preflight, and
+  the framework answers no preflight, so that shape cannot be forged from a browser at all. An app that adds
+  `cors()` middleware permissive enough to allow `x-rsc-action` from another origin has taken that defence
+  away and is asking for exactly what it asked for; `csrf()` is what should still be standing behind it.
+
 - **Anything reachable only with `trustProxy: true` and no proxy stripping the headers.** That setting is
   documented as "only behind a proxy you control".
 - **Dev-server behaviour.** `rshono dev` binds `127.0.0.1`, serves unminified source and widens `script-src`

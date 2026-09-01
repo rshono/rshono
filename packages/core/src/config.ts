@@ -62,6 +62,16 @@ export interface RshonoConfig {
    * Middleware in `src/server.ts` reads Hono's `c.req.url` — the *internal* address — whatever this
    * says, so give `csrf()` the public origin explicitly.
    *
+   * **Compiled into the server bundle**, not read at runtime, so it takes a rebuild to change and there is
+   * no environment variable for it: one artifact cannot be promoted from a direct-exposure staging box to a
+   * proxied production one.
+   *
+   * **The `vercel` target is the exception, for the scheme only.** TLS terminates at that platform's edge
+   * and the function is reached over plain HTTP, so the request is rebuilt from `X-Forwarded-Proto`
+   * whatever this says — the function is reachable only through the edge, which sets the header on every
+   * request, so it is not client-supplied there. The `Host` header is not part of the exception, and is no
+   * more trusted on that target than on any other.
+   *
    * @example
    * ```ts
    * export default defineConfig({ trustProxy: true });

@@ -1,5 +1,5 @@
 import type { Context, Hono } from 'hono';
-import { createPageCache, prerenderedRelPath, toPrerenderedPage, type PrerenderedPage } from '../../server/prerendered.js';
+import { createPageCache, ssgAssetPath, ssgFilePath, SSG_MANIFEST_FILE, toPrerenderedPage, type PrerenderedPage } from '../../server/prerendered.js';
 import type { DeployRuntime } from '../contract.js';
 
 /**
@@ -48,6 +48,27 @@ function serveAsset(asset: Response): Response {
 /** Prerendered pages, keyed by the path that produced them. Per isolate rather than per process. */
 const pageCache = createPageCache();
 
+/** The store's own index of itself, fetched once per isolate — see {@link SSG_MANIFEST_FILE}. */
+let storeIndex: Promise<ReadonlySet<string> | null> | undefined;
+
+/**
+ * What the store holds, or `null` where there is no manifest to read — an older build, or a deployment with
+ * no assets binding at all. `null` gates nothing, which is how it behaved before there was an index.
+ *
+ * Worth one fetch per isolate: without it every request for a path the build did not prerender spends a
+ * subrequest asking the binding for a file that is not there, and misses are deliberately not cached.
+ */
+function knownFiles(c: Context): Promise<ReadonlySet<string> | null> {
+  storeIndex ??= assetResponse(c, `${SSG_PREFIX}/${SSG_MANIFEST_FILE}`)
+    .then(async (asset) => {
+      if (!asset || asset.status !== 200) return null;
+      const manifest = (await asset.json()) as { files?: string[] };
+      return new Set(manifest.files ?? []);
+    })
+    .catch(() => null);
+  return storeIndex;
+}
+
 /**
  * Cloudflare Workers: the host owns the process, so there is nothing to listen on, and there is no filesystem,
  * so `.env` files are out. What is left is the assets binding, which every read here goes through.
@@ -61,14 +82,15 @@ export const runtime: DeployRuntime = {
   mountStaticAssets(app: Hono): void {
     // Normally dead — the CDN answers `/_static/*` before the worker is invoked — but keeps the deployment
     // correct, if slower, under an assets configuration that routes everything to the worker first.
-    app.on(['GET', 'HEAD'], '/_static/*', async (c, next) => {
+    // `GET` covers `HEAD` — Hono dispatches one as the other. See `HTTPMethod`.
+    app.get('/_static/*', async (c, next) => {
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);
       return asset && asset.status !== 404 ? serveAsset(asset) : next();
     });
   },
 
   mountPublicFallback(app: Hono): void {
-    app.on(['GET', 'HEAD'], '/*', async (c, next) => {
+    app.get('/*', async (c, next) => {
       // The prerender tree lives in the same store, but the app only serves it through `readPrerendered`.
       if (c.req.path.startsWith(`${SSG_PREFIX}/`)) return next();
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);
@@ -77,14 +99,19 @@ export const runtime: DeployRuntime = {
   },
 
   async readPrerendered(c: Context, variant): Promise<PrerenderedPage | null> {
-    const relPath = prerenderedRelPath(c.req.path, variant);
+    const relPath = ssgFilePath(c.req.path, variant);
     if (relPath === null) return null;
 
     const key = `${variant}\0${relPath}`;
     const cached = pageCache.get(key);
     if (cached) return cached;
 
-    const asset = await assetResponse(c, `${SSG_PREFIX}/${relPath}`);
+    const index = await knownFiles(c);
+    if (index && !index.has(relPath)) return null;
+
+    // Escaped on the way into the URL and decoded again by the store, so this lands on the file the build
+    // wrote under exactly `relPath` — a page whose slug holds a `#` or a `?` included.
+    const asset = await assetResponse(c, `${SSG_PREFIX}/${ssgAssetPath(relPath)}`);
     if (!asset || asset.status !== 200) return null;
 
     // The store's own validator where it has one — it already describes these exact bytes.

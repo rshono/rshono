@@ -205,6 +205,9 @@ export async function devCommand(options: DevOptions): Promise<void> {
       return;
     }
     if (multiStats && !multiStats.hasErrors()) {
+      // Errors print themselves through the per-compiler `done` hooks; a warning has nowhere else to go, and
+      // the env shadow reports what it cannot cover that way. See `env-shadow-loader.cjs`.
+      if (multiStats.hasWarnings()) console.warn(multiStats.toString({ preset: 'errors-warnings', colors: true }));
       const seconds = Math.max(...multiStats.stats.map((s) => (s.endTime ?? 0) - (s.startTime ?? 0))) / 1000;
       console.log(`  ${firstBuild ? '✓ built' : '✓ rebuilt'} in ${seconds.toFixed(1)}s`);
       firstBuild = false;

@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { parentPort, workerData } from 'node:worker_threads';
-import { SERVER_DEFAULTS } from '../../server/server-config.js';
+import { parsePort, SERVER_DEFAULTS } from '../../server/server-config.js';
 import { onShutdown } from '../../server/shutdown.js';
 import type { DeployRuntime } from '../contract.js';
 import { fileSystemRuntime } from '../filesystem.js';
@@ -12,12 +12,11 @@ const WILDCARD_HOST = '0.0.0.0';
 /**
  * The address to listen on: an explicit override (the dev server, which picks the port for its worker) beats
  * `PORT` / `HOST`, which beat the built-in default. `??` rather than `||`, so an explicit `PORT=0` — "any free
- * port" — is honoured.
+ * port" — is honoured, and so that {@link parsePort} is never consulted for a port the override already won.
  */
 function listenAddress(overrides?: { port?: number; hostname?: string }): { port: number; hostname: string } {
-  const envPort = process.env.PORT !== undefined ? Number(process.env.PORT) : undefined;
   return {
-    port: overrides?.port ?? envPort ?? SERVER_DEFAULTS.port,
+    port: overrides?.port ?? parsePort(process.env.PORT, 'PORT') ?? SERVER_DEFAULTS.port,
     hostname: overrides?.hostname ?? process.env.HOST ?? SERVER_DEFAULTS.host,
   };
 }

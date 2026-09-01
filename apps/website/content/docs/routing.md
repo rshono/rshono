@@ -72,6 +72,11 @@ hit a database or the filesystem:
 staticPaths: async () => (await db.docs.all()).map((d) => ({ slug: d.slug })),
 ```
 
+`defineRoutes` checks the param sets against the route's own path, the same way it checks a page's props:
+a set that does not carry every `:param` of the path is a type error where the route is declared, not a
+build-time throw. Keys only — a `staticPaths` typed as returning `Record<string, string>` has none to
+check, so it is accepted and the build reports the mismatch instead.
+
 Rules worth knowing:
 
 - **Reading `ctx` throws.** There is no request at build time. Use `params` and `url`, or make the route
@@ -84,14 +89,27 @@ Rules worth knowing:
 - **Under a [nonce-based CSP](/docs/configuration#csp)** the document is rendered per request — a
   prerendered file cannot carry a per-request nonce. The flight payload is still served from the
   prerender, and a policy with no nonce in it keeps its prerendered documents too.
+- **`Cache-Control: public, max-age=300`**, with a weak `ETag`. To promise more — a longer `max-age`, a
+  `stale-while-revalidate` — set it from middleware [after `await next()`](/docs/configuration#response-headers-and-caching).
 
 ## Endpoint routes
 
 An endpoint route is served by a raw Hono handler instead of a component — JSON APIs, webhooks,
-redirects, feeds. `method` defaults to `'all'`.
+redirects, feeds. `method` defaults to `'all'`, takes one method or a list of them, and there is no
+`'head'`: Hono dispatches a `HEAD` as a `GET` and strips the body off the response, so `'get'` already
+answers both.
+
+It is also how you answer a method a page does not. A page route is registered for `GET` and `POST` — plus
+the `HEAD` that rides the `GET` — and anything else is a 404 rather than a 405, deliberately: the `Allow`
+header a 405 owes the client would mean tracking the methods registered per path, for a distinction no client
+here acts on differently.
 
 ```ts
 { type: 'endpoint', path: '/api/health', method: 'get', server: () => import('./health') }
+
+// Two methods, one handler. Without the list this would be `'all'` plus a hand-rolled method check,
+// which also answers every method you did not mean to. `'all'` inside a list is refused.
+{ type: 'endpoint', path: '/api/session', method: ['get', 'delete'], server: () => import('./session') }
 ```
 
 ```ts
@@ -109,7 +127,20 @@ Both are optional, and both are real server components with a page's contract mi
 
 - **`notFound`** — rendered with a 404 for unmatched paths and for `notFound()` calls.
 - **`error`** — rendered with a 500 when a request throws, and given an extra `error` prop: message-only
-  in production, message plus stack in dev.
+  in production, message plus stack in dev. `error.stack` is `undefined` in every build and
+  `error.message` is the generic `'Internal Server Error'`, so render the stack behind a check on the
+  stack itself — there is no mode flag to check:
+
+  ```tsx
+  export default function ServerError({ error }: ErrorPageProps) {
+    return (
+      <Layout>
+        <p>{error.message}</p>
+        {error.stack && <pre>{error.stack}</pre>}
+      </Layout>
+    );
+  }
+  ```
 
 See [Configuration & security](/docs/configuration#no-blank-screens) for what happens when a failure is
 bad enough that the `error` page itself cannot be reached.

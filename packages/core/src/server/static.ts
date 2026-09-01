@@ -27,7 +27,9 @@ export function createStaticAssetsApp(options: StaticOptions): Hono {
   const { root, isDev } = options;
   const app = new Hono();
 
-  app.on(['GET', 'HEAD'], '/*', cacheControl(isDev), serveStatic({ root, rewriteRequestPath: (path) => path.replace(/^\/_static/, '') }), (c) =>
+  // `GET` alone: Hono dispatches a `HEAD` as a `GET` and strips the body, so a `HEAD` registration beside it
+  // is never reached — see `HTTPMethod`.
+  app.get('/*', cacheControl(isDev), serveStatic({ root, rewriteRequestPath: (path) => path.replace(/^\/_static/, '') }), (c) =>
     c.text('Not Found', 404),
   );
 

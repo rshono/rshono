@@ -3,8 +3,10 @@
  * your pages and endpoints are written against. Nothing here pulls in runtime machinery.
  *
  * Two companion entry points are runtime-only:
- * - `@rshono/core/server` — request context, `redirect`, `notFound`, `onServerError`.
+ * - `@rshono/core/server` — request context, `redirect`, `notFound`, `onServerError`, `publicUrl`.
  * - `@rshono/core/client` — `useNavigation`, `AsyncBoundary`, `CatchBoundary`.
+ *
+ * ESM only: the `exports` map declares `types` and `import` conditions and no `require` one.
  *
  * @example
  * ```ts

@@ -5,13 +5,16 @@
 // produce. Packages released this way show on npm without their verified-build link.
 //
 // Because no CI job stands between a mistake and the registry, every gate is applied here before anything is
-// uploaded — clean tree, the two manifests agreeing, an annotated tag at HEAD, the version not already
-// published, and the whole suite green. npm's two-factor prompt is handled by letting pnpm own the terminal:
-// it asks for the one-time code itself when the registry demands one.
+// uploaded — clean tree, the two manifests agreeing, the exact pins agreeing with the workspace overrides and
+// the lockfile, an annotated tag at HEAD, the version not already published, and the whole suite green. npm's
+// two-factor prompt is handled by letting pnpm own the terminal: it asks for the one-time code itself when the
+// registry demands one.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { checkPinnedDeps } from './check-pinned-deps.mjs';
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 // The only two manifests that are not `private`. Kept explicit rather than discovered so that a new package
@@ -131,6 +134,21 @@ if (manifests.some((manifest) => manifest.version !== version)) {
   );
 }
 ok(`both packages are ${version}`);
+
+// A manifest pin is what a consumer resolves; a `pnpm-workspace.yaml` override is what this repo resolves.
+// Drifted, the suite below is green against a resolution nobody can install, which is how 2.2.0/0.1.0 sat
+// untested in the manifests for a month. Checked in this step rather than among the gates so that
+// `--skip-tests` cannot skip it: it is a property of the files being uploaded, not of a test run.
+const { overrides, problems } = checkPinnedDeps();
+if (problems.length > 0) {
+  fail(
+    'the exactly-pinned dependencies disagree',
+    ...problems,
+    '',
+    'move the manifests, the overrides and the lockfile together, then re-run the suite — a bump to this set is a release',
+  );
+}
+ok(`${overrides.size} exact pins agree across the manifests, the overrides and the lockfile`);
 
 // The tag stays the record of what was released even though it is no longer what triggers the release, so a
 // local publish refuses to run ahead of one. Annotated, because `git push --follow-tags` ignores lightweight

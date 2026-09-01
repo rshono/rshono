@@ -30,6 +30,32 @@ export const SERVER_DEFAULTS = {
   host: '0.0.0.0',
 } as const;
 
+/** The highest port a TCP listener can bind. `0` is the lowest, and means "any free port". */
+const MAX_PORT = 65535;
+
+/**
+ * Reads a port out of `--port` or `PORT`, so both are read the same way wherever the address is resolved.
+ *
+ * A blank value is `undefined` — "unset", falling through to {@link SERVER_DEFAULTS}. An empty `PORT` is
+ * common in CI images and container templates, and the other reading of it is a silent failure: `Number('')`
+ * is `0`, which binds a random free port and then reports success.
+ *
+ * @param source how to name the value in the error — the flag or the variable it came from.
+ * @throws RangeError for anything present that is not a port, rather than letting `NaN` reach Node as a raw
+ *   `ERR_SOCKET_BAD_PORT` with a bundler frame in the stack.
+ */
+export function parsePort(value: string | undefined, source: string): number | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  // Digits only: `Number` alone would also accept `0x50`, `1e3`, `+80` and `3.0`, none of which anyone
+  // typed meaning the port they would get.
+  const port = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (Number.isNaN(port) || port > MAX_PORT) {
+    throw new RangeError(`invalid ${source} ${JSON.stringify(value)} — expected an integer between 0 and ${MAX_PORT}.`);
+  }
+  return port;
+}
+
 /**
  * Resolves the user's config into the {@link ServerConfig} baked into the bundle. `isDev` is a build-time input
  * rather than a config field because it decides one thing the user should not have to: `trustProxy` is forced on

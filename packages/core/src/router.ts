@@ -72,6 +72,13 @@ export interface PageProps<Path extends string = string, E extends Env = Env> {
    * serialized. Passing it to a `'use client'` component fails the render, because it wraps the live
    * request — read what you need here and pass plain values down.
    *
+   * Non-enumerable is the one place this API breaks a JavaScript expectation, and it is unavoidable: an
+   * enumerable `ctx` would put `ctx.hono.env` — every binding and secret — into React's dev-only
+   * serialization of a server component's props, which walks own enumerable properties. So `<Child
+   * {...props} />` hands a **server** child `ctx: undefined` with no error, while the type says otherwise.
+   * Nested server components are meant to call `getRequestContext()` for the same object rather than
+   * receive it, which is also the fix if a spread has already cost you an afternoon.
+   *
    * Reading it on a `render: 'static'` route throws: a prerendered page has no per-request context.
    * Mark the route `render: 'dynamic'`, or use the `url` / `params` props.
    *
@@ -210,14 +217,32 @@ export interface EndpointRoute {
    * @see {@link https://hono.dev/docs/api/routing | Hono — routing}
    */
   path: string;
-  /** HTTP method to match. Defaults to `'all'` — every method. */
-  method?: HTTPMethod;
+  /**
+   * HTTP method to match, or a list of them. Defaults to `'all'` — every method.
+   *
+   * There is no `'head'`: Hono dispatches a `HEAD` as a `GET` and strips the body off the response, so a
+   * `HEAD` is already answered by the `'get'` handler (and by `'all'`), and a route registered for `HEAD`
+   * alone would never be reached.
+   *
+   * A list is how a two-method endpoint says so; `'all'` inside one is refused, since it is either the
+   * whole thing or a mistake. A method the route does not name gets Hono's 404 rather than the handler.
+   *
+   * @example
+   * ```ts
+   * { type: 'endpoint', path: '/api/session', method: ['get', 'delete'], server: () => import('./session') }
+   * ```
+   */
+  method?: HTTPMethod | readonly HTTPMethod[];
   /** Dynamic import of the {@link EndpointServerModule} exporting `handler`. */
   server: () => Promise<EndpointServerModule>;
 }
 
-/** HTTP methods an {@link EndpointRoute} can match. `'all'` matches every method. */
-export type HTTPMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' | 'all';
+/**
+ * HTTP methods an {@link EndpointRoute} can match. `'all'` matches every method.
+ *
+ * No `'head'`, deliberately — see {@link EndpointRoute.method}. A `HEAD` reaches the `'get'` handler.
+ */
+export type HTTPMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'options' | 'all';
 
 /** Any entry in the `routes` array: a {@link PageRoute} or an {@link EndpointRoute}. */
 export type Route = PageRoute | EndpointRoute;
@@ -248,13 +273,19 @@ export interface FallbackPage {
 export interface ErrorPageInfo {
   /** The thrown error's message in dev; `'Internal Server Error'` in production. */
   message: string;
-  /** The stack trace. Present in dev only. */
+  /**
+   * The stack trace — **dev only**, and `undefined` in every build. Optional for that reason rather than
+   * because some errors lack one, so a page that renders it should guard on it, not on a mode flag.
+   */
   stack?: string;
 }
 
 /**
  * Props for the `error` page declared in {@link RouteConfig.error} — the usual {@link PageProps} plus
  * the redaction-aware {@link ErrorPageInfo}.
+ *
+ * In a build `error.message` is the generic `'Internal Server Error'` and `error.stack` is `undefined`, so
+ * the page below guards on the stack rather than on a mode flag — there is no mode flag to guard on.
  *
  * @typeParam E - The app's Hono {@link Env}, forwarded to {@link PageProps.ctx}.
  *
@@ -263,7 +294,15 @@ export interface ErrorPageInfo {
  * import type { ErrorPageProps } from '@rshono/core';
  *
  * export default function ServerError({ error }: ErrorPageProps) {
- *   return <html><body><h1>Something went wrong</h1><p>{error.message}</p></body></html>;
+ *   return (
+ *     <html>
+ *       <body>
+ *         <h1>Something went wrong</h1>
+ *         <p>{error.message}</p>
+ *         {error.stack && <pre>{error.stack}</pre>}
+ *       </body>
+ *     </html>
+ *   );
  * }
  * ```
  */
@@ -290,6 +329,26 @@ export interface RouteConfig<TRoutes extends readonly Route[] = readonly Route[]
   error?: FallbackPage;
 }
 
+/**
+ * The same check for `staticPaths`, whose param sets have to fill the route's own path: a key that does not
+ * is otherwise a build-time throw from `interpolatePath` rather than a type error.
+ *
+ * Keys only, not full assignability, because the declared field type is `Record<string, string>` and a
+ * `staticPaths` annotated as returning exactly that has to stay accepted — an index signature carries no
+ * key to check, so it passes. Skipped where the path has no params, because `staticPaths` is not called for
+ * such a route at all and an error there would be about the wrong thing.
+ */
+type ValidateStaticPaths<R, P extends string> =
+  ParamKeys<P> extends never
+    ? R
+    : R extends { staticPaths: () => infer Sets }
+      ? Awaited<Sets> extends ReadonlyArray<infer Set>
+        ? [keyof PathParams<P>] extends [keyof Set]
+          ? R
+          : R & { staticPaths: `every param set staticPaths returns needs the params of '${P}'` }
+        : R
+      : R;
+
 // `PageProps<P, any>`, not `PageProps<P>`: only the *path* is being checked, and pinning the Env would
 // fail every page that declares its own (`PageProps<'/x', MyEnv>`, to type `ctx.var`).
 type ValidateRoute<R> = R extends {
@@ -298,7 +357,7 @@ type ValidateRoute<R> = R extends {
 }
   ? // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Env is deliberately unpinned; see above.
     [PageProps<P, any>] extends [CP]
-    ? R
+    ? ValidateStaticPaths<R, P>
     : R & { component: `component props are not satisfied by PageProps<'${P}'>` }
   : R;
 

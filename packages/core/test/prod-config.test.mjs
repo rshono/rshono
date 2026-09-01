@@ -64,6 +64,25 @@ describe('a hardened server.ts', () => {
     assert.match(header, /script-src [^;]*'nonce-/);
   });
 
+  test("the app's own middleware reaches /_static, so an asset carries HSTS and the app's policy", async () => {
+    // The hashed bundle used to be mounted *ahead* of src/server.ts, and it is a terminal handler — so
+    // `/_static/*` was answered by something none of the app's middleware ever saw. HSTS is the one that
+    // materially matters: it is per-response, and a `/_static` request over http is exactly where a
+    // downgrade lands. CSP and COOP are moot for a .js file, but their absence is not what an operator
+    // reading their own `secureHeaders()` call expects.
+    const html = await (await fetch(`${app.base}/`)).text();
+    const asset = html.match(/src="(\/_static\/chunks\/main\.[0-9a-f]+\.js)"/)[1];
+    const res = await fetch(app.base + asset);
+    await res.text();
+    assert.equal(res.status, 200);
+    assert.ok(res.headers.get('strict-transport-security'), 'an asset response is missing HSTS');
+    assert.ok(res.headers.get('content-security-policy'), "…and the app's policy");
+    assert.ok(res.headers.get('x-response-time'), "the app's own middleware did not run for the asset");
+    // And the asset's own cache policy still wins: this is the app's middleware wrapping the handler,
+    // not replacing it.
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+  });
+
   test('the prerendered flight payload is still served from disk — only the document needs a nonce', async () => {
     // A flight payload never carries a nonce (that only goes on the HTML bootstrap), so there is
     // nothing per-request about it and no reason for CSP to cost soft navigations their prerender.
@@ -187,5 +206,36 @@ describe('a server.ts with no csrf()', () => {
     });
     await res.text();
     assert.notEqual(res.status, 403, 'with no csrf() middleware, a cross-origin action must not be rejected');
+  });
+});
+
+// `SSG_CACHE_CONTROL` is `public, max-age=300` and has no config field, deliberately — it is a
+// per-response header and `rshono.config.ts` is compiled into the bundle. Middleware is the interface,
+// and the one thing a reader has to be told is *where* in the middleware it goes.
+describe('a server.ts that overrides the prerendered cache policy', () => {
+  const app = serve({ TESTBED_SSG_CACHE: '1' });
+
+  test('a header set after `await next()` replaces the framework default; one set before it does not', async () => {
+    const res = await fetch(`${app.base}/docs/getting-started`);
+    await res.text();
+    assert.equal(res.status, 200);
+    // The middleware sets `public, max-age=1` before `await next()` and the real value after it. Only the
+    // second lands: the SSG path builds its response with `cache-control` in the bag it hands `c.body(...)`,
+    // which replaces a header prepared with `c.header(...)`. That is why the recipe has to say "after".
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=86400, stale-while-revalidate=604800');
+    assert.ok(res.headers.get('etag'), 'a header edit, not a re-render — the prerendered ETag is untouched');
+    assert.equal(res.headers.get('vary'), 'RSC', 'and so is the Vary that makes one URL two answers');
+  });
+
+  test('the flight payload of the same page is overridden too, since both come off the same path', async () => {
+    const res = await fetch(`${app.base}/docs/getting-started`, { headers: { RSC: '1' } });
+    await res.text();
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=86400, stale-while-revalidate=604800');
+  });
+
+  test('a dynamic page outside the middleware keeps `private, no-cache`', async () => {
+    const res = await fetch(`${app.base}/`);
+    await res.text();
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'the default must not be widened for everything');
   });
 });
