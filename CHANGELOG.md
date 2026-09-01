@@ -11,27 +11,11 @@ those.
 
 ## [Unreleased]
 
-A production-readiness pass over `@rshono/core` ahead of 1.0.0. Two independent reviews of the package were
-consolidated, re-verified against the tree, and worked through: four blockers, the security boundaries
-`SECURITY.md` commits to, ten correctness bugs, the robustness of the streaming path, the parts of the public
-surface that cannot change after 1.0.0 without a major, and the test gaps under all of it. The suite went from
-192 tests over 30 suites to 281 over 42, and coverage now has a floor.
-
-**If you are upgrading**, the two entries that can require a change are the `@rspack/core` /
-`react-server-dom-rspack` pair below and `HTTPMethod` losing `'head'`.
-
 ### Changed
 
 - **`@rspack/core` 2.1.7 → 2.2.1 and `react-server-dom-rspack` 0.0.3 → 0.1.0.** The two move as a pair —
   `react-server-dom-rspack@0.1.0` declares a `@rspack/core: ^2.2.0-0` peer — and `0.1.0` is a minor on a
   pre-1.0 package, so treat it as a breaking upstream change and read this entry before upgrading.
-
-  The manifests had already declared 2.2.0 / 0.1.0 since `6d8e3e4`, but the `pnpm-workspace.yaml` overrides
-  and the lockfile were left on 2.1.7 / 0.0.3. Because a manifest pin is what a consumer resolves and an
-  override is what this repo resolves, **the published versions had never been tested**: the suite, CI and
-  every fixture ran against the old pair while `npm i @rshono/core` installed the new one. The overrides and
-  the lockfile now name the same pair as the manifests, and the whole suite — including the scaffold job,
-  which installs a generated app from a registry with no overrides in play — is green against it.
 
   `react-server-dom-rspack` stays at **0.1.0**, which is its `latest`. There is a `19.3.0` on npm, but it is
   tagged `canary` and peers `react: ^19.3.0` / `react-dom: ^19.3.0` — versions that exist only as React
