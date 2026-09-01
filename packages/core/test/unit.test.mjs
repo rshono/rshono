@@ -30,7 +30,7 @@ import {
   runWithContext,
 } from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
-import { validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
+import { assertRouteModules, validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
 import { MINIMAL_APP_DIR, TESTBED_DIR } from './helpers.mjs';
 
 const tempDirs = [];
@@ -1044,14 +1044,61 @@ describe('prerenderStaticRoutes', () => {
     assert.deepEqual(result.skipped, ['/docs/:slug']);
   });
 
-  test('skips a path that did not render 200 HTML at build time', async () => {
-    const result = await prerenderStaticRoutes({
-      ssgDir: tempDir(),
-      routes: [{ path: '/boom', render: 'static', component: async () => ({ default: () => null }) }],
-      fetch: () => new Response('nope', { status: 500 }),
-    });
-    assert.deepEqual(result.written, []);
-    assert.deepEqual(result.skipped, ['/boom']);
+  // A 5xx means the app threw, and this pass renders a page exactly as a request does — so the route will
+  // throw again per request, forever. It used to be warned about as "will SSR per request" and skipped,
+  // which is true of every *other* skip reason and false of this one; the build then exited 0.
+  test('fails the build for a page that rendered 5xx, rather than calling it a skip', async () => {
+    await assert.rejects(
+      prerenderStaticRoutes({
+        ssgDir: tempDir(),
+        routes: [{ path: '/boom', render: 'static', component: async () => ({ default: () => null }) }],
+        fetch: () => new Response('nope', { status: 500 }),
+      }),
+      (error) => {
+        assert.match(error.message, /\[rshono\] 1 page failed to render while prerendering/);
+        assert.match(error.message, /"\/boom" rendered 500/);
+        assert.doesNotMatch(error.message, /will SSR per request/, 'because it will not — it will 500 per request');
+        return true;
+      },
+    );
+  });
+
+  // The other side of the split: a page the pass cannot store but the server can still render is skipped,
+  // which is what the warning has always said. `notFound()` from a static page is the ordinary case.
+  test('still skips a page that answered something unprerenderable but servable', async () => {
+    for (const status of [404, 302]) {
+      const warnings = [];
+      const warn = console.warn;
+      console.warn = (message) => warnings.push(String(message));
+      let result;
+      try {
+        result = await prerenderStaticRoutes({
+          ssgDir: tempDir(),
+          routes: [{ path: '/gone', render: 'static', component: async () => ({ default: () => null }) }],
+          fetch: () => new Response('gone', { status }),
+        });
+      } finally {
+        console.warn = warn;
+      }
+      assert.deepEqual(result.written, [], `${status} must not be stored`);
+      assert.deepEqual(result.skipped, ['/gone'], `${status} must be skipped, not fatal`);
+      assert.match(warnings.join('\n'), /will SSR per request/);
+    }
+  });
+
+  test('names every failing page at once, in route order', async () => {
+    await assert.rejects(
+      prerenderStaticRoutes({
+        ssgDir: tempDir(),
+        routes: ['/a', '/b'].map((path) => ({ path, render: 'static', component: async () => ({ default: () => null }) })),
+        fetch: () => new Response('nope', { status: 500 }),
+      }),
+      (error) => {
+        assert.match(error.message, /2 pages failed to render/);
+        assert.ok(error.message.indexOf('"/a"') < error.message.indexOf('"/b"'), 'reported in route order, not completion order');
+        return true;
+      },
+    );
   });
 
   // A route whose paths cannot be computed is unprerenderable, not unservable — the same answer as a
@@ -2059,5 +2106,105 @@ describe('validateServerApp', () => {
     for (const value of [{ notAHono: true }, 'nope', 42, { fetch: () => null }]) {
       assert.throws(() => validateServerApp({ default: value }), /\[rshono\] src\/server\.ts must `export default` a Hono app/);
     }
+  });
+});
+/*
+ * The checks a route's *own* module gets. `rshono build` runs these against every route once the bundle
+ * exists; before that they only ran on first request, so a page module that could never render — a
+ * `'use client'` page, a missing default export — shipped behind a green build and answered 500 for the life
+ * of the deployment. The endpoint half had no check at all: it destructured `handler` and called it, which
+ * turns a method-named export into `TypeError: r is not a function` from a minified frame.
+ */
+describe('assertRouteModules', () => {
+  /** What a `'use server-entry'` page module's default export looks like: the client-asset list is on it. */
+  const serverPage = Object.assign(() => null, { entryJsFiles: ['/_static/chunks/main.js'] });
+  /** And what a `'use client'` one looks like — a reference with no assets recorded against it. */
+  const clientPage = () => null;
+
+  const page = (path, mod) => ({ path, component: () => Promise.resolve(mod) });
+  const endpoint = (path, mod) => ({ path, type: 'endpoint', server: () => Promise.resolve(mod) });
+
+  test('accepts a table whose every module is what it claims to be', async () => {
+    await assertRouteModules({
+      routes: [page('/', { default: serverPage }), endpoint('/api/health', { handler: () => null })],
+      notFound: { component: () => Promise.resolve({ default: serverPage }) },
+      error: { component: () => Promise.resolve({ default: serverPage }) },
+    });
+  });
+
+  test('refuses a page module with no default export', async () => {
+    await assert.rejects(
+      assertRouteModules({ routes: [page('/noexport', { Page: serverPage })] }),
+      /\[rshono\] The page module for "\/noexport" must default-export a server component\./,
+    );
+  });
+
+  test("refuses a 'use client' page, which has no client assets recorded against it", async () => {
+    await assert.rejects(
+      assertRouteModules({ routes: [page('/clientpage', { default: clientPage })] }),
+      /\[rshono\] The page component for "\/clientpage" is missing its client-asset info/,
+    );
+  });
+
+  test('refuses an endpoint module that exports anything but `handler`', async () => {
+    await assert.rejects(assertRouteModules({ routes: [endpoint('/api/bad', { GET: () => null })] }), (error) => {
+      assert.match(error.message, /\[rshono\] The endpoint module for "\/api\/bad" must export `handler`/);
+      assert.match(error.message, /a method-named export \(`GET`, `POST`\) is never read/, 'the mistake people actually make');
+      return true;
+    });
+  });
+
+  test('checks the notFound and error pages too, which the request path only reaches once something failed', async () => {
+    await assert.rejects(
+      assertRouteModules({ routes: [], notFound: { component: () => Promise.resolve({ default: clientPage }) } }),
+      /The page component for the notFound page is missing/,
+    );
+    await assert.rejects(
+      assertRouteModules({ routes: [], error: { component: () => Promise.resolve({}) } }),
+      /The page module for the error page must default-export/,
+    );
+  });
+
+  test('names every broken route at once, so fixing four of them costs one build', async () => {
+    await assert.rejects(
+      assertRouteModules({
+        routes: [page('/ok', { default: serverPage }), page('/clientpage', { default: clientPage }), page('/noexport', {})],
+      }),
+      (error) => {
+        assert.match(error.message, /\[rshono\] 2 route modules cannot serve a request:/);
+        assert.match(error.message, /• The page component for "\/clientpage"/);
+        assert.match(error.message, /• The page module for "\/noexport"/);
+        assert.doesNotMatch(error.message, /"\/ok"/, 'a route that is fine must not be listed');
+        return true;
+      },
+    );
+  });
+
+  test('warns rather than failing when a module cannot be imported, and checks every other route anyway', async () => {
+    // Checking a module's shape means importing it, and an import that throws is a fact about the build
+    // environment as much as about the module: a page whose module scope reads a secret or opens a
+    // connection fails here and serves per request. A `render: 'static'` route is the one that cannot get
+    // away with it, and the prerender pass is what says so.
+    const warnings = [];
+    const warn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    try {
+      await assertRouteModules({
+        routes: [
+          { path: '/side-effect', component: () => Promise.reject(new Error('DATABASE_URL is not set')) },
+          page('/ok', { default: serverPage }),
+        ],
+      });
+      await assert.rejects(
+        assertRouteModules({
+          routes: [{ path: '/side-effect', component: () => Promise.reject(new Error('nope')) }, page('/clientpage', { default: clientPage })],
+        }),
+        /The page component for "\/clientpage" is missing/,
+        'a route it could not load must not stop it checking the rest',
+      );
+    } finally {
+      console.warn = warn;
+    }
+    assert.match(warnings.join('\n'), /"\/side-effect" could not be loaded at build time, so its module was not checked — DATABASE_URL is not set/);
   });
 });

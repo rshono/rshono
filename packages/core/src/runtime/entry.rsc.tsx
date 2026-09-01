@@ -36,7 +36,7 @@ import { renderHTML } from './entry.ssr.js';
 import type { CancellableTransformer } from './flight-inject.js';
 import { RouterProvider } from './navigation.js';
 import { asksForRsc, isActionRequest, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
-import { validateRoutesModule, validateServerApp } from './validate-entries.js';
+import { assertEndpointModule, assertPageModule, assertRouteModules, validateRoutesModule, validateServerApp } from './validate-entries.js';
 
 const serverApp = validateServerApp(serverAppModule);
 
@@ -156,23 +156,6 @@ function refusesCrossSiteForm(c: Context): boolean {
   const site = c.req.header('sec-fetch-site');
   if (site !== 'cross-site' && site !== 'same-site') return false;
   return c.req.header('origin') !== publicUrl(c).origin;
-}
-
-async function loadPageModule(load: () => Promise<{ default: PageComponent }>, label: string): Promise<ServerEntry<PageComponent>> {
-  const mod = await load();
-  const Page = mod.default as ServerEntry<PageComponent> | undefined;
-  if (typeof Page !== 'function') {
-    throw new Error(`[rshono] The page module for ${label} must default-export a server component.`);
-  }
-  if (!Page.entryJsFiles) {
-    throw new Error(
-      `[rshono] The page component for ${label} is missing its client-asset info ('use server-entry'). ` +
-        "The directive is added automatically for inline `component: () => import('…')` thunks in routes.ts. " +
-        "If this page is wired up another way, put 'use server-entry' on the first line of the page module yourself — " +
-        "and make sure the page is a server component (a 'use client' page must be wrapped by a server component instead).",
-    );
-  }
-  return Page;
 }
 
 /** A browser navigation or a crawler, as opposed to a fetch that would rather have plain text. */
@@ -516,7 +499,7 @@ function buildApp(): Hono {
 
   runtime.mountStaticAssets(app);
 
-  const memoizePage = (page: FallbackPage, label: string) => once(() => loadPageModule(page.component, label));
+  const memoizePage = (page: FallbackPage, label: string) => once(async () => assertPageModule(await page.component(), label));
   const loadNotFoundPage = routeConfig.notFound ? memoizePage(routeConfig.notFound, 'the notFound page') : null;
 
   /** Turns a thrown `redirect()` / `notFound()` into the response it stands for. */
@@ -555,7 +538,7 @@ function buildApp(): Hono {
     if (isPageRoute(route)) {
       // Both fixed for the life of the process, so resolved once rather than per request.
       const servesPrerendered = !isDev && route.render === 'static';
-      const loadPage = once(() => loadPageModule(route.component, `"${route.path}"`));
+      const loadPage = once(async () => assertPageModule(await route.component(), `"${route.path}"`));
 
       /** Everything the route answers, before a HEAD has its body taken off it. */
       const respond = async (c: Context): Promise<Response> => {
@@ -608,9 +591,11 @@ function buildApp(): Hono {
       };
       app.on(['GET', 'POST'], route.path, handler);
     } else {
-      const loadEndpoint = once(() => route.server());
+      // Checked on the way out of the thunk rather than at the call site, so `once`'s cache holds a handler
+      // that has already been proven to be one — and a rejection clears, so the message repeats per request.
+      const loadEndpoint = once(async () => assertEndpointModule(await route.server(), `"${route.path}"`));
       const handler: Handler = async (c, next) => {
-        const { handler: endpointHandler } = await loadEndpoint();
+        const endpointHandler = await loadEndpoint();
         // Hono's `Handler` leaves its return parameter defaulted to `any`, so this hands back exactly what
         // the app's own handler is declared to return — there is nothing narrower to assert here.
         // eslint-disable-next-line @typescript-eslint/no-unsafe-return
@@ -679,6 +664,14 @@ function buildApp(): Hono {
 
   return app;
 }
+
+/**
+ * Resolves and checks every route's own module — page and endpoint alike, `notFound` and `error` included.
+ * Called by `rshono build` once this bundle is imported for the prerender pass, so a route that could never
+ * serve a request fails the build rather than answering 500 in production. Exported from here rather than
+ * driven from the CLI because the fallback pages are on `routeConfig`, which does not leave this module.
+ */
+export const checkRouteModules = (): Promise<void> => assertRouteModules(routeConfig);
 
 export const app = buildApp();
 

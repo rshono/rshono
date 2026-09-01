@@ -193,3 +193,56 @@ test('a src/server.ts that does not default-export a Hono app fails the build, n
   assert.match(output, /\[rshono\] src\/server\.ts must `export default` a Hono app/);
   assert.doesNotMatch(output, /Cannot read properties of undefined/, "Hono's own failure names nothing the developer wrote");
 });
+
+/*
+ * The other half of the same claim, one level down: the route *table* is checked at load, and until now the
+ * modules it points at were only checked on first request. A build could not tell a page that renders from
+ * one that can never render, so all four of these exited 0 and then answered 500 in production forever.
+ *
+ * One build for all four, because the check names every broken route rather than stopping at the first.
+ */
+test('four route modules that can never serve a request fail the build, naming all four', () => {
+  const dir = appWithRoutes(
+    `import { defineRoutes } from '@rshono/core';
+export const routes = defineRoutes([
+  { path: '/', component: () => import('./pages/home') },
+  { path: '/clientpage', component: () => import('./pages/clientpage') },
+  { path: '/noexport', component: () => import('./pages/noexport') },
+  { path: '/static-broken', render: 'static', component: () => import('./pages/noexport') },
+  { path: '/api/bad', type: 'endpoint', server: () => import('./api-bad') },
+]);
+`,
+  );
+  writeFileSync(join(dir, 'src', 'pages', 'clientpage.tsx'), "'use client';\nexport default function ClientPage() {\n  return <p>nope</p>;\n}\n");
+  writeFileSync(join(dir, 'src', 'pages', 'noexport.tsx'), 'export function Page() {\n  return <p>nope</p>;\n}\n');
+  writeFileSync(join(dir, 'src', 'api-bad.ts'), "export const GET = () => new Response('nope');\n");
+
+  const { status, output } = runCli(dir, ['build']);
+  assert.equal(status, 1, `the build must not exit 0:\n${output}`);
+  assert.match(output, /\[rshono\] 4 route modules cannot serve a request:/);
+  assert.match(output, /• The page component for "\/clientpage" is missing its client-asset info/);
+  assert.match(output, /• The page module for "\/noexport" must default-export a server component\./);
+  assert.match(output, /• The page module for "\/static-broken" must default-export a server component\./);
+  assert.match(output, /• The endpoint module for "\/api\/bad" must export `handler`/);
+  // The endpoint half had no check at all, and this is what it used to say instead.
+  assert.doesNotMatch(output, /is not a function/, 'not a TypeError out of a minified frame');
+  assert.doesNotMatch(output, /will SSR per request|build complete/, 'and nothing that reads as the build having worked');
+});
+
+/*
+ * A `render: 'static'` route whose page throws. The structural checks above cannot see this one — the module
+ * is shaped correctly and the page only fails when it runs — so the prerender pass is what catches it. It
+ * used to be warned about as "will SSR per request", which is true of a 404, a 3xx and a route with no
+ * `staticPaths`, and false of a 5xx: that route 500s per request, forever, behind `✓ build complete` and
+ * exit 0.
+ */
+test('a static page that throws at build time fails the build, rather than being called a skip', () => {
+  const dir = appWithRoutes(HOME_AND("  { path: '/boom', render: 'static', component: () => import('./pages/boom') },\n"));
+  const { status, output } = runCli(dir, ['build']);
+  assert.equal(status, 1, `the build must not exit 0:\n${output}`);
+  assert.match(output, /\[rshono\] 1 page failed to render while prerendering:/);
+  assert.match(output, /• "\/boom" rendered 500/);
+  assert.match(output, /minimal app blew up on purpose/, "the page's own error is in the log, from the render that threw");
+  assert.doesNotMatch(output, /will SSR per request/, 'because it will not — it will 500 per request');
+  assert.doesNotMatch(output, /build complete/);
+});

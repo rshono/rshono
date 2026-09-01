@@ -9,12 +9,15 @@
  * The mistakes that produced no error at all were worse: a duplicated `path` whose second entry silently
  * never ran, a `staticPaths` on a route that renders per request.
  *
- * Everything here runs once, at module load — during `rshono build`, which imports the server bundle for the
- * prerender pass; at `rshono dev` startup; and when a deployed server boots.
+ * The route *table* is checked at module load — during `rshono build`, which imports the server bundle for
+ * the prerender pass; at `rshono dev` startup; and when a deployed server boots. The modules the table points
+ * *at* cannot be, because they load lazily: {@link assertPageModule} and {@link assertEndpointModule} run on
+ * first request, and {@link assertRouteModules} runs both against every route during `rshono build`.
  */
 
-import type { Hono } from 'hono';
-import { isPageRoute, type Route, type RouteConfig } from '../router.js';
+import type { Handler, Hono } from 'hono';
+import type { ServerEntry } from 'react-server-dom-rspack/server';
+import { isPageRoute, type PageComponent, type Route, type RouteConfig } from '../router.js';
 
 /** Every method an endpoint route can name, `'all'` aside — which is also what `'all'` is expanded to below. */
 const CONCRETE_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'options'];
@@ -198,4 +201,123 @@ export function validateServerApp(exported: unknown): Hono | null {
     fail('src/server.ts must `export default` a Hono app — `const server = new Hono(); … export default server;`.');
   }
   return app as Hono;
+}
+
+/**
+ * The server component a page module must default-export, checked rather than cast.
+ *
+ * Two structural mistakes land here, and neither can serve *any* request, which is why they are also checked
+ * at build time by {@link assertRouteModules}:
+ *
+ * - no default export at all — a named `export function Page`, or a file that exports its layout instead;
+ * - a `'use client'` page. That module's default export is a client reference, so it carries no
+ *   `entryJsFiles` — the list of scripts the document has to boot, recorded only for a *server* entry.
+ *   Rendering it anyway would produce a page with no client runtime, which is worse than a message.
+ */
+export function assertPageModule(mod: { default?: unknown }, label: string): ServerEntry<PageComponent> {
+  const Page = mod.default as ServerEntry<PageComponent> | undefined;
+  if (typeof Page !== 'function') {
+    fail(`The page module for ${label} must default-export a server component.`);
+  }
+  if (!Page.entryJsFiles) {
+    fail(
+      `The page component for ${label} is missing its client-asset info ('use server-entry'). ` +
+        "The directive is added automatically for inline `component: () => import('…')` thunks in routes.ts. " +
+        "If this page is wired up another way, put 'use server-entry' on the first line of the page module yourself — " +
+        "and make sure the page is a server component (a 'use client' page must be wrapped by a server component instead).",
+    );
+  }
+  return Page;
+}
+
+/**
+ * The Hono handler an endpoint module must export as `handler`.
+ *
+ * The page half of this fork has been checked since it existed; this half used to destructure and call, which
+ * turns the one mistake people actually make — a method-named export, the shape other frameworks ask for —
+ * into `TypeError: r is not a function` from a minified frame. That is verbatim the failure mode this file's
+ * header names as the reason it exists.
+ */
+export function assertEndpointModule(mod: { handler?: unknown }, label: string): Handler {
+  const handler = mod.handler;
+  if (typeof handler !== 'function') {
+    fail(
+      `The endpoint module for ${label} must export \`handler\` — \`export const handler: Handler = (c) => c.json({ ok: true });\`. ` +
+        'One `handler` answers every method the route declares, so a method-named export (`GET`, `POST`) is never read.',
+    );
+  }
+  return handler as Handler;
+}
+
+/**
+ * Resolves every route's own module once and runs the two checks above against it — what `rshono build` does
+ * once the bundle exists, so a route that cannot serve *any* request fails the build instead of exiting 0 and
+ * answering 500 in production for the life of the deployment.
+ *
+ * Every route is checked, not just the first that fails: these are all fixed by editing a file, and a build
+ * that names one of four broken routes costs three more builds to get through.
+ *
+ * A module that throws while *evaluating* is warned about rather than raised. Checking a module's shape means
+ * importing it, and whether an import succeeds is a question about the environment, not about the module: a
+ * page whose module scope reads a secret, opens a connection or touches a file that only exists in production
+ * fails here and works per request. Failing the build on that would make "every route module must be
+ * importable during the build" a new requirement on apps, to catch a mistake this cannot tell from a
+ * deliberate one. A `render: 'static'` route is the exception, and needs nothing here: it promised to render
+ * at build time, so the prerender pass demands the import and fails the build when it throws.
+ */
+export async function assertRouteModules(config: RouteConfig): Promise<void> {
+  const failures: string[] = [];
+
+  /**
+   * Loads one route's module, or reports why it could not be checked. `null` — never a silent skip: the
+   * whole point of running at build time is saying what was and was not looked at.
+   */
+  const load = async <T>(thunk: () => Promise<T>, label: string): Promise<T | null> => {
+    try {
+      return await thunk();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`  ⚠ ${label} could not be loaded at build time, so its module was not checked — ${reason}`);
+      return null;
+    }
+  };
+
+  /** Keeps a check's message instead of raising it, so every broken route is named rather than the first. */
+  const check = (assert: () => void): void => {
+    try {
+      assert();
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  for (const route of config.routes) {
+    const label = `"${route.path}"`;
+    if (isPageRoute(route)) {
+      const mod = await load(route.component, label);
+      if (mod) check(() => assertPageModule(mod, label));
+    } else {
+      const mod = await load(route.server, label);
+      if (mod) check(() => assertEndpointModule(mod, label));
+    }
+  }
+  for (const [page, label] of [
+    [config.notFound, 'the notFound page'],
+    [config.error, 'the error page'],
+  ] as const) {
+    if (!page) continue;
+    const mod = await load(page.component, label);
+    if (mod) check(() => assertPageModule(mod, label));
+  }
+
+  // One failure — overwhelmingly the common case — is raised as itself, so the message reads the way it
+  // does on the request path. Several are gathered under a count, each stripped of the prefix the whole
+  // list now carries once.
+  if (failures.length === 1) throw new Error(failures[0]);
+  if (failures.length > 1) {
+    fail(
+      `${failures.length} route modules cannot serve a request:\n` +
+        failures.map((message) => `      • ${message.replace(/^\[rshono\] /, '')}`).join('\n'),
+    );
+  }
 }

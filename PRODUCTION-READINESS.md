@@ -79,7 +79,7 @@ the cheapest correct fix is another one: have `resolveServerConfig` record wheth
 supplies bindings, and merge `c.env` only when it does. Filtering by value type is not equivalent —
 Workers bindings (KV, D1, R2) are objects on purpose.
 
-### H2 — a route module that can never work fails at request time, not at build time
+### H2 — ~~a route module that can never work fails at request time, not at build time~~
 
 `packages/core/src/runtime/entry.rsc.tsx:161` and `:611-617`, `packages/core/src/server/ssg.ts:178,271`
 

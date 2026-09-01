@@ -318,6 +318,11 @@ Every target streams, which is the bar a new one has to clear.
   It cannot be otherwise: an enumerable `ctx` would put `ctx.hono.env`, every binding and secret, into
   React's dev-only serialization of a server component's props. Nested server components are meant to call
   `getRequestContext()` rather than be handed the context.
+- **`rshono build` does not type-check.** swc strips types and `tsc` is never invoked, so the build is as fast
+  as it is and no faster because it skipped something. Several of the framework's guarantees are types alone —
+  the `handler` an endpoint module owes, and `defineRoutes`' path ↔ props and `staticPaths` ↔ path checks — so
+  run `tsc --noEmit` (`npm run typecheck` in a scaffolded app) in CI beside the build. The mistakes that make
+  a route unservable are checked at build time whether or not you do.
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
   production ships no client source maps).
