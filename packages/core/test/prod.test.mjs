@@ -109,6 +109,29 @@ test('getRequestContext() exposes url/pathname, headers, cookies and env in an a
   assert.ok(html.includes(APP_ENV.PUBLIC_API_ENDPOINT), 'ctx.env did not expose the PUBLIC_ variable');
 });
 
+// The request context is one of the four boundaries SECURITY.md owns, and every other test of it is
+// sequential — so nothing proved that two in-flight requests do not see each other's. `/whoami` is the
+// page for it: it awaits before reading the context, so the `AsyncLocalStorage` store has to survive a
+// real suspension, and it echoes a request header back into the document.
+test('two concurrent requests keep separate request contexts', async () => {
+  const marks = Array.from({ length: 8 }, (_, index) => `concurrent-${index}`);
+  const documents = await Promise.all(
+    marks.map(async (mark) => {
+      const res = await fetch(`${base}/whoami`, { headers: { 'x-test': mark, cookie: `visitor=${mark}-cookie` } });
+      assert.equal(res.status, 200);
+      return { mark, html: await res.text() };
+    }),
+  );
+
+  for (const { mark, html } of documents) {
+    assert.match(html, new RegExp(mark), `${mark}: the response must carry its own header value`);
+    assert.match(html, new RegExp(`${mark}-cookie`), `${mark}: …and its own cookie`);
+    for (const other of marks.filter((m) => m !== mark)) {
+      assert.doesNotMatch(html, new RegExp(`\\b${other}\\b`), `${mark}: another request's context leaked into it (${other})`);
+    }
+  }
+});
+
 test('the ctx page prop is the request context, without importing getRequestContext()', async () => {
   const res = await fetch(`${base}/`, { headers: { cookie: 'visitor=Ada%20Lovelace' } });
   assert.equal(res.status, 200);

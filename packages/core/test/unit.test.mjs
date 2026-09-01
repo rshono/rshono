@@ -20,7 +20,7 @@ import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../di
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
-import { beginPageRender, onServerError, publicUrl, reportServerError, RequestContext } from '../dist/runtime/context.js';
+import { beginPageRender, getRequestContext, onServerError, publicUrl, reportServerError, RequestContext, runWithContext } from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
 import { validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
 import { MINIMAL_APP_DIR, TESTBED_DIR } from './helpers.mjs';
@@ -304,6 +304,45 @@ describe('injectFlightPayload', () => {
 // Two fields, because only two things here are decided by the build. The CSRF check, the CSP and the
 // body cap used to live alongside them and are now Hono middleware an app registers in src/server.ts
 // — see prod-config.test.mjs, which exercises them over HTTP rather than through a resolver.
+// The ambient context, which every `getRequestContext()` call in an app resolves through. Sequential tests
+// cannot see the failure that matters here: one request reading another's context.
+describe('runWithContext', () => {
+  const contextFor = (path) => ({ req: { url: `http://example.test${path}`, param: () => ({}) }, env: {} });
+
+  test('keeps one context per flow across suspensions', async () => {
+    const seen = [];
+    /** Reads the ambient context either side of an await, so what is asserted is that the store survives one. */
+    const flow = (path, delay) =>
+      runWithContext(contextFor(path), async () => {
+        const before = getRequestContext().url.pathname;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        const after = getRequestContext().url.pathname;
+        seen.push({ path, before, after });
+      });
+
+    // Interleaved deliberately: the longest-running flow starts first and finishes last, so every other
+    // flow enters and leaves inside it.
+    await Promise.all([flow('/a', 30), flow('/b', 5), flow('/c', 15), flow('/d', 0)]);
+
+    assert.equal(seen.length, 4);
+    for (const { path, before, after } of seen) {
+      assert.equal(before, path, `${path} read the wrong context before its await`);
+      assert.equal(after, path, `${path} read the wrong context after its await — another flow's store leaked in`);
+    }
+  });
+
+  test('throws outside a flow rather than resolving to the last one that ran', () => {
+    assert.throws(() => getRequestContext(), /outside a request/);
+  });
+
+  test('hands back the same wrapper for the same request, and a different one for another', () => {
+    const c = contextFor('/a');
+    const [first, second] = runWithContext(c, () => [getRequestContext(), getRequestContext()]);
+    assert.equal(first, second, 'memoised per request, so repeated calls are one object');
+    assert.notEqual(runWithContext(contextFor('/a'), getRequestContext), first, 'and never shared between requests');
+  });
+});
+
 // The single funnel every caught server-side error goes through. `prod.test.mjs` covers the happy path over
 // HTTP; these are the parts an app only meets when something else has already gone wrong.
 describe('reportServerError', () => {
