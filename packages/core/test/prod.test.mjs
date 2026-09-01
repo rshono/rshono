@@ -156,6 +156,11 @@ test('redirect() in a server component: an HTTP 3xx on hard navigation, a digest
   const hard = await fetch(`${base}/dashboard`, { redirect: 'manual' });
   assert.equal(hard.status, 303);
   assert.match(hard.headers.get('location') ?? '', /\/login$/);
+  // The page defaults, on a response the header middleware cannot decorate: `c.redirect` is bodiless and has
+  // no content type, so it fails that gate. `/dashboard` is the reason it matters — the redirect is decided by
+  // a cookie, and a shared cache may store a 301/308 with no `Cache-Control` and replay it to another visitor.
+  assert.match(hard.headers.get('vary') ?? '', /RSC/, 'one URL, two representations — the redirect varies too');
+  assert.equal(hard.headers.get('cache-control'), 'private, no-cache', 'a request-dependent redirect is not shared-cacheable');
 
   const soft = await fetch(`${base}/dashboard`, { headers: { RSC: '1' } });
   assert.match(await soft.text(), /RSHONO_REDIRECT/, 'the client needs the digest to follow the redirect itself');
