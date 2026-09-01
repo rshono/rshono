@@ -444,3 +444,30 @@ test('a directory name becomes a package name npm will accept', () => {
   assert.ok(!isValidPackageName('My-App'));
   assert.ok(!isValidPackageName('.hidden'));
 });
+
+/*
+ * `dist/` is what `rshono build` writes and `.rshono/` is what `rshono dev` writes, and both hold generated
+ * bundles: a linter that reads them reports on code nobody wrote, and `format` rewrites it. Prettier, oxfmt
+ * and oxlint all honour `.gitignore`, which every scaffold carries — Biome does not, unless `vcs.enabled` and
+ * `vcs.useIgnoreFile` are both set, and neither is. So its own config has to list them, and `.rshono` was
+ * missing from it: after anyone ran `pnpm dev`, that app's `format:check` and `lint` failed.
+ */
+test('the generated output directories are out of every quality preset’s reach', () => {
+  for (const combination of matrix()) {
+    const label = `${combination.deploy}/${combination.styling}/${combination.preset}`;
+    const result = plan(answers(combination), pm);
+
+    // The one every tool but Biome reads.
+    const gitignore = result.files.get('.gitignore');
+    for (const dir of ['dist/', '.rshono/']) {
+      assert.ok(gitignore.split('\n').includes(dir), `${label}: .gitignore should list ${dir}`);
+    }
+
+    const biome = result.files.get('biome.json');
+    if (!biome) continue;
+    const { includes } = JSON.parse(biome).files;
+    for (const dir of ['dist', '.rshono']) {
+      assert.ok(includes.includes(`!${dir}`), `${label}: biome.json does not read .gitignore, so it must exclude ${dir} itself`);
+    }
+  }
+});

@@ -277,7 +277,7 @@ against it often enough to suggest people make it. A client-compiler `resolve.al
 `node:async_hooks` pointing at a stub that throws with a real message, or a small plugin that recognises
 the request and reports the issuer, would bring it in line.
 
-### M4 — the Biome templates do not exclude `.rshono/`
+### M4 — ~~the Biome templates do not exclude `.rshono/`~~
 
 `packages/create/templates/biome/biome.json`, `packages/create/templates/biome-tailwind/biome.json`
 
