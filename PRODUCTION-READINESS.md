@@ -137,12 +137,21 @@ list either way.
 
 `packages/core/src/runtime/entry.client.tsx:214`, `packages/core/src/runtime/entry.rsc.tsx:245`
 
-> **Resolved.** The reload is now bounded — one attempt per URL per tab, then a "Page not found" panel —
-> and the browser suite has a case for each direction of the digest path. Link 2 is still not *executed*
-> here: no browser launches in this sandbox, so `test/browser/client-runtime.spec.mjs` runs in CI only. What
-> was added locally: the flight payload for the reproduction demonstrably carries `3:E{"digest":"RSHONO_NOT_FOUND"}`,
-> a React error row, which is the shape those hooks are handed — so the middle link now rests on the wire
-> rather than on the framework's own code.
+> **Resolved — and the symptom was not the one described below.** Running the new browser test in CI turned
+> up the actual cause: `window.location.reload()` fires a `navigate` event, and the framework's own router
+> intercepts a `reload` on purpose (that is `router.refresh()`). So the recovery reload never became a
+> document load at all — it became a payload fetch rendering into the React root that had just been torn
+> down. A late `notFound()` did not loop; it left the tab on its Suspense fallback with nothing coming.
+> The same interception hit the *other* direction, which is why the redirect looked fine: `location.assign`
+> was intercepted too, the URL committed before the handler ran, and the destination then failed to render —
+> the address bar moved to a page the document never showed.
+>
+> The fix is a one-shot bypass for the framework's own recovery loads, so they reach the browser instead of
+> its router; the reload bound (one attempt per URL per tab, then a "Page not found" panel) sits on top of it.
+> A reload that does not happen for any *other* reason now paints the same panel after two seconds rather than
+> hanging. Both browser tests assert the destination is on screen, not merely that the address bar moved.
+>
+> Still not executed here — no browser launches in this sandbox — so the browser suite remains CI-only.
 >
 > **Verification status (original).** Two of the three links are reproduced below. The middle one — React handing a
 > payload error row to `onCaughtError`/`onUncaughtError` during hydration — needs a real browser, and

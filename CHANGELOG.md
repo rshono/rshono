@@ -68,15 +68,24 @@ entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5
   connection works per request. A `render: 'static'` route is the exception and needs no special case — it
   promised to render at build time, so the prerender pass demands the import.
 
+- **The client's own recovery loads reach the browser instead of the framework's router.**
+  `window.location.reload()` and `location.assign()` fire a `navigate` event like any other navigation, and
+  the router intercepts a `reload` on purpose — that is what `router.refresh()` is. Both of the client's
+  escape hatches from a torn-down React root went through it, so neither escaped: a late `notFound()` left
+  the tab on its Suspense fallback with no second document ever arriving, and a late `redirect()` moved the
+  address bar to a page it then failed to render into the root that had just been unmounted. The framework's
+  own recovery loads now bypass its listener for exactly one navigation.
+
 - **A late `notFound()` reloads once instead of forever.** `redirect()` and `notFound()` raised after the page
   shell has been sent both degrade to a 200 carrying a digest, and the client's recovery differs: a redirect
-  has somewhere to navigate, a `notFound()` does not, so it reloaded — which recovers where the lateness was
-  incidental and loops until the visitor leaves where it is structural, since the reload gets a byte-identical
-  response. The warning that explains this is `isDev`-only, so production was silent.
+  has somewhere to navigate, a `notFound()` does not, so it asks for the page again — which recovers where
+  the lateness was incidental and cannot where it is structural, since the response is byte-identical. The
+  attempt is now spent once per URL per tab and the second arrival paints "Page not found", with the
+  diagnostic in dev only and no reload button in either. A reload that does not replace the document within
+  two seconds paints the same panel rather than leaving the visitor on a fallback.
 
-  The reload is now spent once per URL per tab and the second arrival paints "Page not found", with the
-  diagnostic in dev only and no reload button in either. Browser coverage added for both directions of the
-  digest path, which had none.
+  Browser coverage added for both directions of the digest path, which had none — each asserting the
+  destination is on screen rather than that the address bar moved.
 
 - **A browser module importing `@rshono/core/server` is named.** The build failed correctly and said only
   `ERROR in node:async_hooks × Reading from "node:async_hooks" is not handled by plugins` — no file path, no

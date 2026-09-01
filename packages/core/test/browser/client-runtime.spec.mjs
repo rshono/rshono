@@ -432,11 +432,22 @@ test.describe('no blank screens', () => {
  * cannot be a 3xx or a 404 — the response is committed as `200 text/html`. The framework's answer is to let
  * React write the signal into the payload as an error row and act on it here, which is code that only ever
  * runs in a browser. `/late-signal` signals 50ms in, long past shell-ready, so both cases are deterministic.
+ *
+ * Both recoveries are full document loads, and both were being swallowed by the framework's own router: a
+ * `navigate` event fires for `location.reload()` and `location.assign()` like any other navigation, and
+ * `listenNavigation` intercepts a reload on purpose — that is `router.refresh()`. Intercepted, the escape
+ * hatch became a payload fetch rendering into the React root that had just been torn down. So each test
+ * below asserts the *destination is on screen*, not merely that the address bar moved: the address bar moved
+ * while this was broken.
  */
 test.describe('late control signals', () => {
-  test('a late redirect() navigates, since there is somewhere to go', async ({ page }) => {
+  test('a late redirect() lands on the target page, not just its URL', async ({ page }) => {
     await page.goto('/late-signal');
+
     await expect(page).toHaveURL('/login');
+    // The URL commits before an intercepted handler runs, so it moves whether or not anything rendered.
+    await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
+    await expect(page.locator('[data-section="loading"]')).toHaveCount(0, 'the page it left must be gone');
   });
 
   /*

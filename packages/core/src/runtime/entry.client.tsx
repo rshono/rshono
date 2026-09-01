@@ -122,7 +122,7 @@ function showFatal(error: unknown, componentStack?: string | null): void {
     reload.textContent = 'Reload page';
     reload.style.cssText =
       'margin-top:1.25rem;padding:0.5rem 1rem;font:inherit;color:#18181b;background:#f4f4f5;border:0;border-radius:4px;cursor:pointer';
-    reload.addEventListener('click', () => window.location.reload());
+    reload.addEventListener('click', () => loadOutsideRouter(() => window.location.reload()));
     box.appendChild(reload);
   });
 }
@@ -207,6 +207,29 @@ function settle(result: NavigationResult): void {
   void result.finished?.catch(ignore);
 }
 
+/** Set by {@link loadOutsideRouter}, read and cleared by the `navigate` listener. */
+let bypassRouter = false;
+
+/**
+ * Performs a navigation the router below must **not** intercept, and returns having asked for it.
+ *
+ * `location.reload()` and `location.assign()` fire a `navigate` event like any other navigation, and
+ * `listenNavigation` intercepts a `reload` on purpose — that is what `router.refresh()` is. Every caller here
+ * is reaching for a *new document* precisely because the current one cannot be repaired: the React root a
+ * soft load would render into is the thing that just failed, or is about to be torn down. Intercepted, the
+ * escape hatch becomes a payload fetch that lands nowhere — which is how a late `notFound()` left the tab on
+ * its Suspense fallback with no second document ever arriving, and how a late `redirect()` moved the address
+ * bar to a page it then failed to render.
+ *
+ * One-shot: the listener clears the flag on the next event it sees. If that event never comes — a navigation
+ * the browser refuses — the cost is that the *next* navigation is a full load rather than a soft one, on a
+ * document that was on its way out anyway.
+ */
+function loadOutsideRouter(navigate: () => void): void {
+  bypassRouter = true;
+  navigate();
+}
+
 // The imperative actions behind `useNavigation().router`. Each one only *asks*: the browser turns it into a
 // `navigate` event, which is where `listenNavigation` answers it — so a `router.push` and a link click reach
 // the same code by the same route, and inherit the same fetch, scroll and `pending` flag.
@@ -239,6 +262,9 @@ function refresh(): void {
   else window.location.reload();
 }
 
+/** How long the recovery reload is given to replace this document before the panel is painted instead. */
+const RELOAD_GRACE_MS = 2000;
+
 /**
  * Spends the one reload a late `notFound()` gets, or paints if it has already been spent for this URL.
  *
@@ -266,8 +292,20 @@ function reloadOnceForLateNotFound(): void {
     // worse outcome than a reload loop only by a lot less.
     spent = true;
   }
-  if (spent) showLateNotFound();
-  else window.location.reload();
+  if (spent) {
+    showLateNotFound();
+    return;
+  }
+
+  loadOutsideRouter(() => window.location.reload());
+
+  // The reload wins this race whenever it happens at all: the document goes away and takes the timer with
+  // it. What this covers is a reload that does not happen — swallowed by an interceptor, refused by the
+  // browser, held by a `beforeunload` — which used to leave the visitor on a Suspense fallback with nothing
+  // coming and nothing said. The panel is the honest answer in that case too.
+  setTimeout(() => {
+    if (!document.querySelector('[data-rshono-fatal]')) showLateNotFound();
+  }, RELOAD_GRACE_MS);
 }
 
 /**
@@ -284,7 +322,7 @@ function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean 
   if (!redirect) {
     reloadOnceForLateNotFound();
   } else if (hard) {
-    window.location.assign(new URL(redirect.location, window.location.href).href);
+    loadOutsideRouter(() => window.location.assign(new URL(redirect.location, window.location.href).href));
   } else {
     push(redirect.location);
   }
@@ -377,6 +415,12 @@ function listenNavigation(): () => void {
   if (!canSoftNavigate) return () => {};
 
   const onNavigate = (event: NavigateEvent) => {
+    // Cleared as it is consumed, whatever this event turns out to be: the flag names one navigation, and the
+    // one it named is the one that just arrived.
+    if (bypassRouter) {
+      bypassRouter = false;
+      return;
+    }
     if (!event.canIntercept || leaveToBrowser(event)) return;
 
     // A push or a traversal lands on a new page, so the browser resets the scroll offset — or restores the
@@ -390,7 +434,7 @@ function listenNavigation(): () => void {
       focusReset: inPlace ? 'manual' : 'after-transition',
       // The URL commits before the handler runs, so a failure leaves the address bar describing a page the
       // document is not showing. A real load is the only way back to agreement.
-      handler: () => loadPayload(event.destination.url, event.signal).catch(() => window.location.reload()),
+      handler: () => loadPayload(event.destination.url, event.signal).catch(() => loadOutsideRouter(() => window.location.reload())),
     });
   };
 
@@ -519,7 +563,7 @@ function initDevRefresh() {
 
   function reload(reason: string, error?: unknown): void {
     console.warn(`[rshono] ${reason} — reloading`, ...(error === undefined ? [] : [error]));
-    window.location.reload();
+    loadOutsideRouter(() => window.location.reload());
   }
 
   async function applyClientUpdate(): Promise<void> {
@@ -537,7 +581,7 @@ function initDevRefresh() {
         targetHash = message.hash ?? targetHash;
         if (connectedOnce) {
           await applyClientUpdate();
-          await loadPayload(window.location.href).catch(() => window.location.reload());
+          await loadPayload(window.location.href).catch(() => loadOutsideRouter(() => window.location.reload()));
         }
         connectedOnce = true;
         break;
@@ -547,7 +591,7 @@ function initDevRefresh() {
         break;
       case 'rsc-update':
         console.log('[rshono] server components updated');
-        await loadPayload(window.location.href).catch(() => window.location.reload());
+        await loadPayload(window.location.href).catch(() => loadOutsideRouter(() => window.location.reload()));
         break;
     }
   }
