@@ -28,12 +28,19 @@ export interface CatchBoundaryProps {
    * here.
    */
   fallback?: ErrorFallback;
-  /** Called with the caught error, for logging or reporting. */
+  /**
+   * Called with the caught error, for logging or reporting.
+   *
+   * A function prop, so — like {@link ErrorFallback}'s function form — it can only be passed from a
+   * `'use client'` component. React refuses one from a server component by name: "Event handlers cannot be
+   * passed to Client Component props".
+   */
   onError?: (error: Error) => void;
   /**
    * Clears the error automatically when any value in this array changes while the fallback is showing.
-   * Pass the current pathname to recover when the user navigates away:
-   * `resetKeys={[useNavigation().url.pathname]}`.
+   * Pass the current pathname to recover when the user navigates away — `resetKeys={[url.pathname]}` from a
+   * page's `url` prop, which is the form that works from the server component rendering this boundary, or
+   * `resetKeys={[useNavigation().url.pathname]}` inside a `'use client'` component.
    */
   resetKeys?: readonly unknown[];
   /** The subtree this boundary protects. */
@@ -118,7 +125,7 @@ export interface AsyncBoundaryProps {
   loading: ReactNode;
   /** Error fallback, shown if a child throws. See {@link ErrorFallback}. */
   error?: ErrorFallback;
-  /** Called with the caught error. */
+  /** Called with the caught error. From a `'use client'` component only — see {@link CatchBoundaryProps.onError}. */
   onError?: (error: Error) => void;
   /** Clears the error fallback when any value changes — see {@link CatchBoundaryProps.resetKeys}. */
   resetKeys?: readonly unknown[];

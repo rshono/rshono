@@ -366,7 +366,7 @@ call and points at the wrong change (wrap it in `{ routes: … }`). `types/route
 reader may not be. A single signature over `readonly Route[] | RouteConfig<…>` with the validation
 applied conditionally would produce one error instead of a resolution report.
 
-### L3 — documentation and hygiene
+### L3 — ~~documentation and hygiene~~
 
 - **`onError` does not carry the note `fallback` does** (`boundaries.tsx:32` and `:122`).
   `ErrorFallback` explains that the function form only works from a `'use client'` component; `onError`
@@ -393,8 +393,10 @@ applied conditionally would produce one error instead of a resolution report.
   "Soft navigation, **prefetching**, scroll restoration and the fatal overlay only exist in a real
   browser." There is no `prefetch` anywhere in `packages/core/src`; the browser spec pins its *absence*
   (`client-runtime.spec.mjs:78`) and the README lists "No link prefetching" as a deliberate choice.
-- Outside the two packages, for completeness: `apps/website/src/components/home.tsx:37` exports an
-  unused `Pager`.
+- ~~Outside the two packages, for completeness: `apps/website/src/components/home.tsx:37` exports an
+  unused `Pager`.~~ **Not a finding.** Line 37 is inside the `CLIENT_SAMPLE` template literal — five
+  unescaped backticks precede it — so that `export function Pager` is code *shown on the homepage*, not code
+  the module exports. The textual unused-export scan read into a string. Nothing to remove.
 
 ---
 

@@ -178,8 +178,8 @@ jobs:
       - name: Install Chromium
         run: pnpm --filter @rshono/core exec playwright install --with-deps chromium
 
-      # Soft navigation, prefetching, scroll restoration and the fatal overlay only exist in a real
-      # browser; nothing in the node:test suite can reach them.
+      # Soft navigation, scroll restoration, the late-notFound bound and the fatal overlay only exist in a
+      # real browser; nothing in the node:test suite can reach them.
       - name: Browser tests
         run: pnpm --filter @rshono/core test:browser
 
