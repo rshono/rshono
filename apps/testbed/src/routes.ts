@@ -70,6 +70,14 @@ export const routes = defineRoutes({
     },
     {
       type: 'endpoint',
+      path: '/api/session',
+      // Two methods, one handler. The alternative is `'all'` plus a hand-rolled check, which would also
+      // answer every method nobody asked it to.
+      method: ['get', 'delete'],
+      server: () => import('./session'),
+    },
+    {
+      type: 'endpoint',
       path: '/api/boom',
       server: () => import('./boom'),
     },

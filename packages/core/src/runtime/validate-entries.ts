@@ -68,13 +68,7 @@ function validateRoute(route: unknown, index: number): void {
     if (typeof entry.server !== 'function') {
       fail(`src/routes.ts: ${name} is an endpoint, so it needs \`server\` — a function importing the module that exports \`handler\`.`);
     }
-    if (entry.method !== undefined && (typeof entry.method !== 'string' || !METHODS.has(entry.method))) {
-      const meantHead = typeof entry.method === 'string' && entry.method.toLowerCase() === 'head';
-      fail(
-        `src/routes.ts: ${name} has method ${JSON.stringify(entry.method)}, which is not one of ${[...METHODS].join(', ')}.` +
-          (meantHead ? " A HEAD is dispatched as a GET, so use 'get' — a route registered for HEAD alone answers neither." : ''),
-      );
-    }
+    if (entry.method !== undefined) validateMethod(entry.method, name);
     refuseForeignKeys(
       entry,
       name,
@@ -98,12 +92,38 @@ function validateRoute(route: unknown, index: number): void {
   }
 }
 
-/** The methods a route answers, with `'all'` expanded, so two registrations can be compared. */
+/**
+ * Checks an endpoint's `method`, which is one method or a list of them.
+ *
+ * A list is checked member by member so the message names the bad one rather than printing the array, and
+ * `'all'` is refused inside one: a list meaning every method is a list its author did not mean to write.
+ */
+function validateMethod(method: unknown, name: string): void {
+  if (Array.isArray(method)) {
+    if (method.length === 0) fail(`src/routes.ts: ${name} has an empty \`method\` list — omit it to answer every method.`);
+    for (const entry of method as unknown[]) {
+      if (entry === 'all') {
+        fail(`src/routes.ts: ${name} has 'all' inside a \`method\` list — use \`method: 'all'\`, or list the methods it answers.`);
+      }
+      validateMethod(entry, name);
+    }
+    return;
+  }
+  if (typeof method !== 'string' || !METHODS.has(method)) {
+    const meantHead = typeof method === 'string' && method.toLowerCase() === 'head';
+    fail(
+      `src/routes.ts: ${name} has method ${JSON.stringify(method)}, which is not one of ${[...METHODS].join(', ')}.` +
+        (meantHead ? " A HEAD is dispatched as a GET, so use 'get' — a route registered for HEAD alone answers neither." : ''),
+    );
+  }
+}
+
+/** The methods a route answers, with `'all'` expanded and a list flattened, so two can be compared. */
 function methodsOf(route: Route): readonly string[] {
   // A page is registered for GET and POST: the POST is how a `<form action={serverAction}>` reaches it.
   if (isPageRoute(route)) return ['get', 'post'];
-  const method = route.method ?? 'all';
-  return method === 'all' ? CONCRETE_METHODS : [method];
+  const methods = [route.method ?? 'all'].flat();
+  return methods.includes('all') ? CONCRETE_METHODS : methods;
 }
 
 /**

@@ -444,6 +444,21 @@ test('a HEAD on a prerendered route is served from the store, ETag and all', asy
   assert.equal(revalidated.status, 304, 'and that validator has to work');
 });
 
+test('an endpoint route answers every method it lists, and nothing else', async () => {
+  // `Origin`, because the testbed registers `csrf()`: it refuses an unsafe method with a foreign origin
+  // long before the router is reached, and a 403 would say nothing about routing.
+  for (const method of ['GET', 'DELETE']) {
+    const res = await fetch(`${base}/api/session`, { method, headers: { Origin: base } });
+    assert.equal(res.status, 200, `${method} is listed, so it must reach the handler`);
+    assert.deepEqual(await res.json(), { method }, 'one handler answers both');
+  }
+  for (const method of ['POST', 'PUT']) {
+    const res = await fetch(`${base}/api/session`, { method, headers: { Accept: 'text/html', Origin: base } });
+    await res.text();
+    assert.equal(res.status, 404, `${method} is not listed, so it must not reach the handler`);
+  }
+});
+
 test("a HEAD on a method: 'get' endpoint is answered by that handler, bodiless", async () => {
   // Why `HTTPMethod` has no `'head'`: Hono dispatches a HEAD as a GET and strips the body, so `'get'`
   // answers both — and a route registered for HEAD alone answers neither, not even the GET.

@@ -88,8 +88,9 @@ Rules worth knowing:
 ## Endpoint routes
 
 An endpoint route is served by a raw Hono handler instead of a component — JSON APIs, webhooks,
-redirects, feeds. `method` defaults to `'all'`. There is no `'head'`: Hono dispatches a `HEAD` as a
-`GET` and strips the body off the response, so `'get'` already answers both.
+redirects, feeds. `method` defaults to `'all'`, takes one method or a list of them, and there is no
+`'head'`: Hono dispatches a `HEAD` as a `GET` and strips the body off the response, so `'get'` already
+answers both.
 
 It is also how you answer a method a page does not. A page route is registered for `GET` and `POST` — plus
 the `HEAD` that rides the `GET` — and anything else is a 404 rather than a 405, deliberately: the `Allow`
@@ -98,6 +99,10 @@ here acts on differently.
 
 ```ts
 { type: 'endpoint', path: '/api/health', method: 'get', server: () => import('./health') }
+
+// Two methods, one handler. Without the list this would be `'all'` plus a hand-rolled method check,
+// which also answers every method you did not mean to. `'all'` inside a list is refused.
+{ type: 'endpoint', path: '/api/session', method: ['get', 'delete'], server: () => import('./session') }
 ```
 
 ```ts

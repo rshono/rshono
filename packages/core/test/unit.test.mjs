@@ -1639,6 +1639,14 @@ describe('validateRoutesModule', () => {
     rejects([{ ...endpoint, method: 'head' }], /A HEAD is dispatched as a GET, so use 'get'/);
   });
 
+  test('takes a list of methods, and refuses the lists that are mistakes', () => {
+    assert.deepEqual(validateRoutesModule([{ ...endpoint, method: ['get', 'delete'] }]).routes[0].method, ['get', 'delete']);
+    // Named member by member, so the message points at the bad one rather than printing the array.
+    rejects([{ ...endpoint, method: ['get', 'HEAD'] }], /has method "HEAD", which is not one of get, post/);
+    rejects([{ ...endpoint, method: [] }], /has an empty `method` list/);
+    rejects([{ ...endpoint, method: ['get', 'all'] }], /has 'all' inside a `method` list/);
+  });
+
   // The one that built cleanly, exited 0 and said nothing: Hono matches in registration order.
   test('refuses a route every method of which the table already answers', () => {
     rejects(
@@ -1646,6 +1654,14 @@ describe('validateRoutesModule', () => {
       /routes\[1\] \("\/"\) would never run — routes\[0\] \("\/"\) already answers GET, POST \//,
     );
     rejects([endpoint, { ...endpoint, method: 'get' }], /already answers GET \/api\/x/, 'an `all` endpoint claims every method');
+    rejects(
+      [
+        { ...endpoint, method: ['get', 'post'] },
+        { ...endpoint, method: 'post' },
+      ],
+      /already answers POST \/api\/x/,
+      'a listed method is claimed like any other',
+    );
     rejects([{ ...endpoint, path: '/' }, page], /already answers GET, POST \//, 'an endpoint shadows a page at the same path too');
   });
 
@@ -1659,6 +1675,8 @@ describe('validateRoutesModule', () => {
       ],
       // A catch-all behind a route claiming one method of the path: it still answers PUT, DELETE, …
       [{ ...endpoint, method: 'post' }, endpoint],
+      // And behind one claiming two of them.
+      [{ ...endpoint, method: ['get', 'post'] }, endpoint],
       // Overlapping *patterns* are the router's business, and specific-before-generic is the point.
       [
         { ...page, path: '/docs/getting-started' },

@@ -211,13 +211,21 @@ export interface EndpointRoute {
    */
   path: string;
   /**
-   * HTTP method to match. Defaults to `'all'` — every method.
+   * HTTP method to match, or a list of them. Defaults to `'all'` — every method.
    *
    * There is no `'head'`: Hono dispatches a `HEAD` as a `GET` and strips the body off the response, so a
    * `HEAD` is already answered by the `'get'` handler (and by `'all'`), and a route registered for `HEAD`
    * alone would never be reached.
+   *
+   * A list is how a two-method endpoint says so; `'all'` inside one is refused, since it is either the
+   * whole thing or a mistake. A method the route does not name gets Hono's 404 rather than the handler.
+   *
+   * @example
+   * ```ts
+   * { type: 'endpoint', path: '/api/session', method: ['get', 'delete'], server: () => import('./session') }
+   * ```
    */
-  method?: HTTPMethod;
+  method?: HTTPMethod | readonly HTTPMethod[];
   /** Dynamic import of the {@link EndpointServerModule} exporting `handler`. */
   server: () => Promise<EndpointServerModule>;
 }

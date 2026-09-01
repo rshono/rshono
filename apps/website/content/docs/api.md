@@ -38,7 +38,7 @@ See [Routing](/docs/routing) and [Configuration](/docs/configuration).
 | `PageComponent<P>`     | A page: a server component returning `ReactNode` or `Promise<ReactNode>`.                                       |
 | `PathParams<P>`        | The `params` record a path pattern implies — `'/users/:id'` → `{ id: string }`. `PageProps` applies it for you. |
 | `PageRoute`            | A path rendered by a server component: `path`, `component`, and optional `render` / `staticPaths`.              |
-| `EndpointRoute`        | A path served by a Hono handler: `type: 'endpoint'`, `path`, `server`, optional `method`.                       |
+| `EndpointRoute`        | A path served by a Hono handler: `type: 'endpoint'`, `path`, `server`, optional `method` (one or a list). |
 | `EndpointServerModule` | What an endpoint's module must export — a single named `handler`.                                               |
 | `Route`                | `PageRoute \| EndpointRoute`.                                                                                   |
 | `RouteConfig<TRoutes>` | The object `defineRoutes` takes: `routes`, plus optional `notFound` and `error`.                                |

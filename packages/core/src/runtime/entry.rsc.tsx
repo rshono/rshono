@@ -599,9 +599,17 @@ function buildApp(): Hono {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return endpointHandler(c, next);
       };
-      const method = route.method ?? 'all';
-      if (method === 'all') app.all(route.path, handler);
-      else app.on(method.toUpperCase(), route.path, handler);
+      // De-duplicated, because `app.on(['GET', 'GET'], …)` registers the path twice. Validation refuses
+      // `'all'` inside a list, so a list that reaches here is concrete methods only.
+      const methods = [...new Set([route.method ?? 'all'].flat())];
+      if (methods.includes('all')) app.all(route.path, handler);
+      else {
+        app.on(
+          methods.map((method) => method.toUpperCase()),
+          route.path,
+          handler,
+        );
+      }
     }
   }
 
