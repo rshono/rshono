@@ -133,11 +133,18 @@ the framework's correctness guarantees are type-only — the `EndpointServerModu
 no backstop at all behind the runtime checks. Worth a line in the README's Requirements & limitations
 list either way.
 
-### H3 — a late `notFound()` looks like an unbounded reload loop
+### H3 — ~~a late `notFound()` looks like an unbounded reload loop~~
 
 `packages/core/src/runtime/entry.client.tsx:214`, `packages/core/src/runtime/entry.rsc.tsx:245`
 
-> **Verification status.** Two of the three links are reproduced below. The middle one — React handing a
+> **Resolved.** The reload is now bounded — one attempt per URL per tab, then a "Page not found" panel —
+> and the browser suite has a case for each direction of the digest path. Link 2 is still not *executed*
+> here: no browser launches in this sandbox, so `test/browser/client-runtime.spec.mjs` runs in CI only. What
+> was added locally: the flight payload for the reproduction demonstrably carries `3:E{"digest":"RSHONO_NOT_FOUND"}`,
+> a React error row, which is the shape those hooks are handed — so the middle link now rests on the wire
+> rather than on the framework's own code.
+>
+> **Verification status (original).** Two of the three links are reproduced below. The middle one — React handing a
 > payload error row to `onCaughtError`/`onUncaughtError` during hydration — needs a real browser, and
 > none will launch here (Chromium exits `SIGSEGV`, Firefox fails to launch, WebKit times out, all three
 > under `@playwright/test` in this sandbox). It is asserted by the framework's own code in three places,

@@ -424,3 +424,57 @@ test.describe('no blank screens', () => {
     expect(consoleErrors.join('\n')).toContain('the client runtime failed to start');
   });
 });
+
+/*
+ * The digest path, which nothing in this file used to touch in either direction.
+ *
+ * A `redirect()` or `notFound()` raised from a boundary that resolves after the page shell has been sent
+ * cannot be a 3xx or a 404 — the response is committed as `200 text/html`. The framework's answer is to let
+ * React write the signal into the payload as an error row and act on it here, which is code that only ever
+ * runs in a browser. `/late-signal` signals 50ms in, long past shell-ready, so both cases are deterministic.
+ */
+test.describe('late control signals', () => {
+  test('a late redirect() navigates, since there is somewhere to go', async ({ page }) => {
+    await page.goto('/late-signal');
+    await expect(page).toHaveURL('/login');
+  });
+
+  /*
+   * `notFound()` has nowhere to navigate to, so the only recovery is asking for the page again — which works
+   * where the lateness was incidental and loops forever where it is structural, because the second response
+   * is byte-identical to the first. This page is the structural case, so the reload is spent once and then
+   * the client says what happened instead of spinning the tab until the visitor leaves.
+   */
+  test('a late notFound() reloads once and then paints, instead of looping', async ({ page }) => {
+    // Counted as requests rather than `load` events: the reload is triggered from hydration, which can
+    // outrun the first document's `load`, and a missed event would read as a reload that never happened.
+    let documents = 0;
+    page.on('request', (request) => {
+      if (request.resourceType() === 'document') documents++;
+    });
+
+    await page.goto('/late-signal?signal=notfound');
+
+    const overlay = page.locator('[data-rshono-fatal]');
+    await expect(overlay).toBeVisible();
+    await expect(overlay).toContainText('Page not found');
+    // Production must not explain the framework's internals on screen — that is the dev-only branch.
+    await expect(overlay).not.toContainText('notFound() was raised');
+    // No reload button, unlike the fatal overlay: the reload is spent, and offering it invites the loop by hand.
+    await expect(overlay.getByRole('button', { name: 'Reload page' })).toHaveCount(0);
+
+    // The recovery was *spent*, not skipped: the page was asked for twice, and the key that bounds it is
+    // what made the second answer terminal rather than a third request.
+    expect(documents).toBe(2);
+    expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith('rshono:late-not-found:')))).toEqual([
+      'rshono:late-not-found:/late-signal?signal=notfound',
+    ]);
+
+    // And it stays stopped: same document 1.5s later, with the panel still on it.
+    const settled = await markDocument(page);
+    await page.waitForTimeout(1500);
+    expect(await documentId(page)).toBe(settled);
+    expect(documents).toBe(2);
+    await expect(overlay).toBeVisible();
+  });
+});

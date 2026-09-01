@@ -232,7 +232,9 @@ function warnLateControlSignal(c: Context, signal: ControlSignal): void {
       `resolved after the page shell had already been sent (${c.req.method} ${c.req.path}), so it cannot become a real ` +
       `${isRedirect ? '3xx' : '404'}: the response is committed as 200 text/html. A browser with JavaScript follows the ` +
       `digest that rides the payload; one without stays on the Suspense fallback, and a crawler indexes the 200.${
-        isRedirect ? '' : ' A JavaScript client recovers by reloading, which renders this same page again.'
+        isRedirect
+          ? ''
+          : ' A JavaScript client asks for the page once more, in case the signal comes early enough that time to be a real 404 — and shows a plain "Page not found" panel when it does not, rather than reloading into the same response forever.'
       }` +
       ' Decide before the render starts streaming — in Hono middleware, or in the page component body above the boundary.',
   );

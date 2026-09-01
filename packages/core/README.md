@@ -305,9 +305,11 @@ Every target streams, which is the bar a new one has to clear.
 - **`redirect()` and `notFound()` must be reached before the page shell is sent.** A page streams: the status
   line and the first bytes go out as soon as the shell is ready, and HTTP has no take-backs after that. Called
   from a `<Suspense>` boundary that resolves later, the signal can no longer be a 3xx or a 404 — the response
-  is already committed as `200 text/html`. A browser with JavaScript still follows it (the signal rides the
-  payload as a digest, and the client runtime navigates), but a visitor without JavaScript is left on the
-  fallback under a 200, and a crawler indexes that 200 as a soft 404. The fix is app-side: decide in Hono
+  is already committed as `200 text/html`. The signal still rides the payload as a digest, so a browser with
+  JavaScript acts on it: `redirect()` navigates, and `notFound()` — which has nowhere to navigate to — asks
+  for the page once more and then paints a plain "Page not found" panel, since a second identical response is
+  proof that reloading will not help. A visitor without JavaScript is left on the fallback under a 200, and a
+  crawler indexes that 200 as a soft 404. The fix is app-side: decide in Hono
   middleware, or in the page component body above the boundary. `rshono dev` warns when it happens.
 - **A page route answers `GET`, `POST` and `HEAD`.** Every other method is a 404 rather than a 405: the
   `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
