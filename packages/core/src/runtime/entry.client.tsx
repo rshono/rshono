@@ -265,6 +265,9 @@ function refresh(): void {
 /** How long the recovery reload is given to replace this document before the panel is painted instead. */
 const RELOAD_GRACE_MS = 2000;
 
+/** The `sessionStorage` key bounding the recovery reload for one URL. Spent here, released in {@link main}. */
+const lateNotFoundKey = (): string => `rshono:late-not-found:${documentUrl()}`;
+
 /**
  * Spends the one reload a late `notFound()` gets, or paints if it has already been spent for this URL.
  *
@@ -281,7 +284,7 @@ const RELOAD_GRACE_MS = 2000;
  * second page's late signal still gets its own attempt.
  */
 function reloadOnceForLateNotFound(): void {
-  const key = `rshono:late-not-found:${documentUrl()}`;
+  const key = lateNotFoundKey();
   let spent: boolean;
   try {
     spent = sessionStorage.getItem(key) !== null;
@@ -451,6 +454,22 @@ async function main() {
   if (cspMeta?.nonce) __webpack_nonce__ = cspMeta.nonce;
 
   const initialPayload = await createFromReadableStream<RscPayload>(flightStream);
+
+  // The recovery reload landed: this document *is* the `notFound` page, so the signal that could only be a
+  // digest on the `RSC: 1` request became a real 404 on the document request. The one-reload bound was spent
+  // on a recovery that worked and has to be released — otherwise the *next* soft navigation to this URL sees a
+  // spent key and paints {@link showLateNotFound} over a page the app can still render.
+  //
+  // This is the discriminator the bound was missing. A structurally late `notFound()` commits its 200 before
+  // it signals, so its reloaded document is the page itself and carries no `notFound`: the key survives and
+  // that loop stays bounded at one reload, which is the whole reason the bound exists.
+  if (initialPayload.notFound) {
+    try {
+      sessionStorage.removeItem(lateNotFoundKey());
+    } catch {
+      // Blocked site data. `reloadOnceForLateNotFound` already treats that as the terminating case.
+    }
+  }
 
   function BrowserRoot() {
     const [payload, setPayloadState] = React.useState(initialPayload);
