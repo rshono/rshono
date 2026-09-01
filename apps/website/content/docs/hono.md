@@ -234,10 +234,26 @@ thrown action, a failed render, SSR falling over, anything reaching the top-leve
 ```ts
 import { onServerError } from '@rshono/core/server';
 
-onServerError((error, { source, request }) => {
-  Sentry.captureException(error, { tags: { source }, extra: { url: request.url } });
+onServerError((error, { source, request, hono, waitUntil }) => {
+  waitUntil(
+    Sentry.captureException(error, {
+      tags: { source, requestId: hono.var.requestId },
+      extra: { url: request.url },
+    }),
+  );
 });
 ```
 
 `source` is `'action' | 'render' | 'ssr' | 'request'`. Errors keep going to `stderr` either way, and a
 handler that throws is caught rather than failing the request.
+
+`hono` is the request's Hono context — `hono.var` for what your middleware put there, `hono.env` for
+bindings. It is handed over because `getRequestContext()` is not reachable from this handler: a
+`source: 'request'` error is reported from the top-level handler, outside the ambient context.
+
+`waitUntil` holds the invocation open until the report has been sent. On Cloudflare Workers that is
+`executionCtx.waitUntil`, without which a report started here is cut off the moment the response ends. On
+the `node` and `vercel` targets there is nothing to hold open — the process outlives the response — so it
+is a no-op and the report finishes on its own. On `aws-lambda` it is a no-op as well, because the streaming
+handler exposes no execution context to ask; a slow report there is best-effort, so prefer a tracker that
+batches over one that round-trips per error.

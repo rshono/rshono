@@ -336,7 +336,7 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
         }
         return error.digest;
       }
-      if (!signal.aborted) reportServerError(error, { source: 'render', request: c.req.raw, message: '[rshono] render error:' });
+      if (!signal.aborted) reportServerError(error, { source: 'render', hono: c, message: '[rshono] render error:' });
     },
   });
 
@@ -354,8 +354,8 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
       signal,
       nonce,
       onDone: release,
-      onShellError: (error) => reportServerError(error, { source: 'ssr', request: c.req.raw, message: '[rshono] SSR shell error:' }),
-      onError: (error) => reportServerError(error, { source: 'ssr', request: c.req.raw, message: '[rshono] SSR error:' }),
+      onShellError: (error) => reportServerError(error, { source: 'ssr', hono: c, message: '[rshono] SSR shell error:' }),
+      onError: (error) => reportServerError(error, { source: 'ssr', hono: c, message: '[rshono] SSR error:' }),
     });
   } catch (error) {
     release();
@@ -413,7 +413,7 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
         if (isControlSignal(error)) throw error;
         // In production React sends a thrown action error to the client as an opaque marker, so this is
         // the only place the real one is visible.
-        reportServerError(error, { source: 'action', request, message: '[rshono] server action error:' });
+        reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action error:' });
         returnValue = { ok: false, error };
         actionStatus = 500;
       }
@@ -440,7 +440,7 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
           // because this path has no client boundary and no `useActionState` to hand the error to, so the
           // app's `error` page is the honest answer. `reportServerError` de-duplicates, so the re-throw
           // reaching `onError` does not report it a second time.
-          reportServerError(error, { source: 'action', request, message: '[rshono] server action error:' });
+          reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action error:' });
           throw error;
         }
         formState = (await decodeFormState(result, formData, __rspack_rsc_manifest__.serverManifest)) ?? undefined;
@@ -528,7 +528,7 @@ function buildApp(): Hono {
         // fail, and this is what the same page does when `app.notFound` renders it — so it is honoured, and
         // recurses exactly once.
         if (error instanceof RedirectSignal) return respondToControlSignal(c, error);
-        reportServerError(error, { source: 'render', request: c.req.raw, message: '[rshono] the notFound page failed to render:' });
+        reportServerError(error, { source: 'render', hono: c, message: '[rshono] the notFound page failed to render:' });
       }
     }
     return plainNotFound(c);
@@ -629,7 +629,7 @@ function buildApp(): Hono {
       const res = error.getResponse();
       return c.newResponse(res.body, res);
     }
-    reportServerError(error, { source: 'request', request: c.req.raw, message: '[rshono] request error:' });
+    reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadErrorPage && (isRsc || acceptsHtml(c))) {
       const errorInfo: ErrorPageInfo = isDev
@@ -643,7 +643,7 @@ function buildApp(): Hono {
           renderComponent(c, await loadErrorPage(), { status: 500, isRsc, errorInfo, returnValue: actionResults.get(c) }),
         );
       } catch (renderError) {
-        reportServerError(renderError, { source: 'request', request: c.req.raw, message: '[rshono] the error page failed to render:' });
+        reportServerError(renderError, { source: 'request', hono: c, message: '[rshono] the error page failed to render:' });
       }
     }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';

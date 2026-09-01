@@ -42,9 +42,18 @@ const allowedOrigins = (process.env.TESTBED_ALLOWED_ORIGINS ?? '').split(',').fi
 // Where an error tracker goes. Registered at module load — src/server.ts is imported as the server
 // starts — so every error the framework catches (a thrown action, a failed render, SSR falling
 // over) reaches one place. A real app would call Sentry.captureException here instead of logging.
-onServerError((error, { source, request }) => {
+//
+// `hono` and `waitUntil` are used deliberately rather than for the demonstration. `hono.var` is the only
+// way to reach a request id from here — a `source: 'request'` error is reported from the top-level
+// handler, outside the ambient context `getRequestContext()` needs — and `waitUntil` is what keeps a
+// serverless invocation alive until an asynchronous report has actually been sent.
+onServerError<AppEnv>((error, { source, request, hono, waitUntil }) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.log(`[error-reporter] ${source} ${new URL(request.url).pathname}: ${message}`);
+  waitUntil(
+    Promise.resolve().then(() => {
+      console.log(`[error-reporter] ${source} ${new URL(request.url).pathname} #${hono.var.requestId}: ${message}`);
+    }),
+  );
 });
 
 server.use(trimTrailingSlash({ alwaysRedirect: true }));

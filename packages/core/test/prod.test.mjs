@@ -511,7 +511,7 @@ test('a no-JS (progressive-enhancement) action that throws renders the error pag
   // The two action paths have to agree about what happened. This one is re-thrown so the error page can
   // render, which also carries it into the top-level handler — where, without the reporter de-duplicating,
   // the same fault would arrive a second time as a `request`.
-  assert.match(logged, /\[error-reporter\] action \/crash: Intentional server-action failure/, 'a thrown PE action is an action');
+  assert.match(logged, /\[error-reporter\] action \/crash #[^:]+: Intentional server-action failure/, 'a thrown PE action is an action');
   assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'and one fault is reported once, whatever stages it crosses');
 });
 
@@ -575,9 +575,14 @@ test('onServerError sees the errors the framework catches, tagged by source, wit
   await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
 
   const logged = getOutput().slice(logsBefore);
-  assert.match(logged, /\[error-reporter\] request \/api\/boom: Intentional endpoint failure/, 'a thrown endpoint must be reported');
+  assert.match(logged, /\[error-reporter\] request \/api\/boom #[^:]+: Intentional endpoint failure/, 'a thrown endpoint must be reported');
   assert.match(logged, /\[error-reporter\] (?:render|ssr) \/crash/, 'a failed render must be reported');
   assert.match(logged, /\[rshono\] request error:/, 'stderr stays the fallback signal even with a reporter wired up');
+  // The handler logs from inside `waitUntil` and reads `hono.var.requestId`, so both assertions above also
+  // prove the two reach a handler at all — and the `request` one proves it for the source reported outside
+  // the ambient context, where `getRequestContext()` throws. That was the whole gap: reporting is what this
+  // hook exists for, and on a serverless target a report with nothing holding the invocation open is cut off.
+  assert.doesNotMatch(logged, /#undefined/, 'the Hono context must carry the middleware variables, not an empty one');
 });
 
 test('<AsyncBoundary> renders its children on the happy path', async () => {

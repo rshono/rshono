@@ -171,11 +171,16 @@ server.use('/blog/*', async (c, next) => {
 | `EnvVars<E>`         | What `ctx.env` resolves to: `Bindings` merged with `Record<string, string \| undefined>`. |
 | `RedirectStatus`     | `301 \| 302 \| 303 \| 307 \| 308`.                                                        |
 | `ServerErrorHandler` | `(error, context) => void` — what `onServerError` takes.                                  |
-| `ServerErrorContext` | `{ source, request }`, the second argument to that handler.                               |
+| `ServerErrorContext` | `{ source, request, hono, waitUntil }`, the second argument to that handler.               |
 | `ServerErrorSource`  | `'action' \| 'render' \| 'ssr' \| 'request'` — which stage produced the error.            |
 
 An `'action'` error is the one worth wiring up: React sends the client an opaque marker with no message
 in production, so a handler is the only place the real error is visible.
+
+`hono` is the request's Hono context, for `hono.var` and `hono.env` — handed over because
+`getRequestContext()` is not reachable from the handler. `waitUntil` holds a serverless invocation open
+until the report has been sent; see [error reporting](/docs/hono#error-reporting) for what it does per
+target.
 
 ## `@rshono/core/client`
 
