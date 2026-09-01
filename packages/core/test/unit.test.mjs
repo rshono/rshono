@@ -563,12 +563,17 @@ describe('prerenderStaticRoutes', () => {
       },
     });
 
-    assert.deepEqual(result.written, ['/about', '/docs/a', '/docs/b']);
+    assert.deepEqual(result.written, ['/about', '/docs/a', '/docs/b'], 'reported in route order, whatever order they rendered in');
     assert.deepEqual(
-      requested,
-      ['document /about', 'flight /about', 'document /docs/a', 'flight /docs/a', 'document /docs/b', 'flight /docs/b'],
+      requested.toSorted(),
+      ['document /about', 'document /docs/a', 'document /docs/b', 'flight /about', 'flight /docs/a', 'flight /docs/b'],
       'each path is rendered as a document and as a flight payload; a dynamic route is never prerendered',
     );
+    // Sorted above because paths render concurrently. Within a path the order is still fixed: the flight
+    // payload is only asked for once the document has come back 200.
+    for (const path of ['/about', '/docs/a', '/docs/b']) {
+      assert.ok(requested.indexOf(`document ${path}`) < requested.indexOf(`flight ${path}`), `${path}: document before flight`);
+    }
     const decode = (page) => new TextDecoder().decode(page.body);
     assert.equal(decode(await readPrerendered(ssgDir, '/docs/a')), '<!DOCTYPE html><p>ok</p>');
     assert.equal(decode(await readPrerendered(ssgDir, '/docs/a', 'flight')), '0:{"root":"flight"}');
@@ -584,6 +589,68 @@ describe('prerenderStaticRoutes', () => {
       'docs/b/index.html',
       'docs/b/index.rsc',
     ]);
+  });
+
+  test('renders a path once however many times staticPaths returns it', async () => {
+    const requested = [];
+    const warnings = [];
+    const warn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    let result;
+    try {
+      result = await prerenderStaticRoutes({
+        ssgDir: tempDir(),
+        routes: [
+          {
+            path: '/docs/:slug',
+            render: 'static',
+            component: async () => ({ default: () => null }),
+            staticPaths: async () => [{ slug: 'a' }, { slug: 'b' }, { slug: 'a' }],
+          },
+        ],
+        fetch: (request) => {
+          requested.push(new URL(request.url).pathname);
+          return okResponse(request);
+        },
+      });
+    } finally {
+      console.warn = warn;
+    }
+
+    assert.deepEqual(result.written, ['/docs/a', '/docs/b']);
+    assert.equal(requested.filter((path) => path === '/docs/a').length, 2, 'one document and one flight payload, not two of each');
+    assert.match(warnings.join('\n'), /repeated 1 path/, 'and the app is told, since a repeated entry is usually a bug in its query');
+  });
+
+  test('renders paths concurrently, up to a bound', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const slugs = Array.from({ length: 20 }, (_, index) => `p${index}`);
+    const result = await prerenderStaticRoutes({
+      ssgDir: tempDir(),
+      routes: [
+        {
+          path: '/docs/:slug',
+          render: 'static',
+          component: async () => ({ default: () => null }),
+          staticPaths: async () => slugs.map((slug) => ({ slug })),
+        },
+      ],
+      fetch: async (request) => {
+        peak = Math.max(peak, ++inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        return okResponse(request);
+      },
+    });
+
+    assert.deepEqual(
+      result.written,
+      slugs.map((slug) => `/docs/${slug}`),
+      'reported in staticPaths order, whatever order they finished in',
+    );
+    assert.ok(peak > 1, "rendered one at a time, a few hundred paths pay every page's latency in series");
+    assert.ok(peak <= 8, `and rendered all at once, a build points the whole site at the app's database (peak ${peak})`);
   });
 
   test('renders against siteUrl, so absolute URLs in the output are the deployed ones', async () => {
@@ -694,8 +761,8 @@ describe('prerenderStaticRoutes', () => {
 
     assert.deepEqual(result.written, ['/docs/caf%C3%A9', '/docs/a%20b']);
     assert.deepEqual(
-      requested,
-      ['/docs/caf%C3%A9', '/docs/caf%C3%A9', '/docs/a%20b', '/docs/a%20b'],
+      requested.toSorted(),
+      ['/docs/a%20b', '/docs/a%20b', '/docs/caf%C3%A9', '/docs/caf%C3%A9'],
       'the page is fetched at the URL a browser would use, once per representation',
     );
 

@@ -144,6 +144,32 @@ function writeManifest(ssgDir: string, files: readonly string[]): void {
 }
 
 /**
+ * How many paths are rendered at once.
+ *
+ * A prerender pass spends its time inside the app — a page's own data fetching is what each render awaits —
+ * so a few hundred `staticPaths` entries rendered one at a time pay all of that latency in series.
+ * Unbounded is the other wrong answer: it points the whole site at the app's database in one go. Eight keeps
+ * a build's peak load recognisable while hiding most of the wait.
+ */
+const RENDER_CONCURRENCY = 8;
+
+/**
+ * `items.map(run)` with at most `limit` running at once, results in input order.
+ *
+ * A worker pool rather than fixed batches: a batch is only as fast as its slowest member, so one slow page
+ * would idle the rest of its batch.
+ */
+async function mapBounded<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let index = next++; index < items.length; index = next++) results[index] = await run(items[index]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/**
  * One representation of a path, as the app answered for it at build time. Discriminated on `ok` because both
  * callers have to tell "the app rendered this" from "it did not", and only one cares why.
  */
@@ -156,6 +182,13 @@ async function renderVariant(fetch: PrerenderOptions['fetch'], url: string, vari
     return { ok: false, reason: `a non-${VARIANTS[variant].contentType} response` };
   }
   return { ok: true, body: await response.text() };
+}
+
+/** A path the pass will render, resolved far enough that nothing left can fail the build. */
+interface PrerenderTarget {
+  path: string;
+  /** Where a request for it will look — {@link ssgFilePath}, resolved before the render rather than after. */
+  relPath: string;
 }
 
 export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<PrerenderResult> {
@@ -174,6 +207,11 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
   const skipped: string[] = [];
   /** Every file written, as the reader names it — {@link writeManifest}. */
   const files: string[] = [];
+
+  /** Every path to render, in route order, each one once. Built before anything renders — see below. */
+  const targets: PrerenderTarget[] = [];
+  /** So a `staticPaths` entry that repeats — or that a second route also produces — is rendered once. */
+  const queued = new Set<string>();
 
   for (const route of staticRoutes) {
     let paths: string[];
@@ -199,11 +237,18 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
       }
     }
 
+    let duplicates = 0;
     for (const path of paths) {
+      if (queued.has(path)) {
+        duplicates++;
+        continue;
+      }
+      queued.add(path);
       // Resolved *before* the render, so a path no file can hold fails the build naming the path, rather than
       // after the work and as a bare `join(dir, null)` TypeError. The same call answers for the reader, which
       // is the whole point: a page written under a name the request path never resolves to is a page the build
-      // reports as prerendered and nothing ever serves.
+      // reports as prerendered and nothing ever serves. Resolved in this pass rather than the next one for a
+      // second reason too: which of several bad paths fails the build should not depend on render order.
       const relPath = ssgFilePath(path, 'html');
       if (relPath === null) {
         throw new Error(
@@ -211,36 +256,56 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
             `character a portable file name cannot — one of \\ / : * ? " < > | or a control character.`,
         );
       }
-      const pageDir = join(ssgDir, dirname(relPath));
-
-      const document = await renderVariant(fetch, origin + path, 'html');
-      if (!document.ok) {
-        console.warn(`  ⚠ "${path}" rendered ${document.reason} at build time — skipping, will SSR per request.`);
-        skipped.push(path);
-        continue;
-      }
-
-      // Both representations of a page share its directory and differ only in the file name.
-      const write = (variant: PrerenderVariant, body: string) => {
-        mkdirSync(pageDir, { recursive: true });
-        writeFileSync(join(pageDir, VARIANTS[variant].file), body);
-        // `ssgFilePath` again rather than the `join` above: the manifest is read against what a *request*
-        // resolves to, which is that function's output and not a filesystem path.
-        files.push(ssgFilePath(path, variant)!);
-      };
-      write('html', document.body);
-
-      // The soft-navigation representation of the same page. Best-effort: the document is valid on its own, and
-      // serving falls back to rendering the flight payload per request.
-      const flight = await renderVariant(fetch, origin + path, 'flight');
-      if (flight.ok) {
-        write('flight', flight.body);
-      } else {
-        console.warn(`  ⚠ "${path}" produced no flight payload — soft navigations to it will render per request.`);
-      }
-
-      written.push(path);
+      targets.push({ path, relPath });
     }
+    if (duplicates > 0) {
+      console.warn(`  ⚠ Static route "${route.path}" repeated ${duplicates} path${duplicates === 1 ? '' : 's'} — each page is prerendered once.`);
+    }
+  }
+
+  const outcomes = await mapBounded(targets, RENDER_CONCURRENCY, async ({ path, relPath }) => {
+    /** Buffered, so a concurrent pass logs in the same order a serial one did. */
+    const warnings: string[] = [];
+    const document = await renderVariant(fetch, origin + path, 'html');
+    if (!document.ok) {
+      warnings.push(`  ⚠ "${path}" rendered ${document.reason} at build time — skipping, will SSR per request.`);
+      return { path, ok: false as const, files: [], warnings };
+    }
+
+    // Both representations of a page share its directory and differ only in the file name.
+    const pageDir = join(ssgDir, dirname(relPath));
+    const wrote: string[] = [];
+    const write = (variant: PrerenderVariant, body: string) => {
+      mkdirSync(pageDir, { recursive: true });
+      writeFileSync(join(pageDir, VARIANTS[variant].file), body);
+      // `ssgFilePath` again rather than the `join` above: the manifest is read against what a *request*
+      // resolves to, which is that function's output and not a filesystem path.
+      wrote.push(ssgFilePath(path, variant)!);
+    };
+    write('html', document.body);
+
+    // The soft-navigation representation of the same page. Best-effort: the document is valid on its own, and
+    // serving falls back to rendering the flight payload per request.
+    const flight = await renderVariant(fetch, origin + path, 'flight');
+    if (flight.ok) {
+      write('flight', flight.body);
+    } else {
+      warnings.push(`  ⚠ "${path}" produced no flight payload — soft navigations to it will render per request.`);
+    }
+
+    return { path, ok: true as const, files: wrote, warnings };
+  });
+
+  // Folded back in target order rather than completion order, so a concurrent pass writes the same manifest
+  // and prints the same log a serial one did.
+  for (const outcome of outcomes) {
+    for (const warning of outcome.warnings) console.warn(warning);
+    if (!outcome.ok) {
+      skipped.push(outcome.path);
+      continue;
+    }
+    files.push(...outcome.files);
+    written.push(outcome.path);
   }
 
   // Only where the app has static routes at all: an empty manifest would be a store, and a build with
