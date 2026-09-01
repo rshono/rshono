@@ -310,6 +310,11 @@ Every target streams, which is the bar a new one has to clear.
   `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
   path for a distinction nothing acts on differently here. An endpoint route is the way to answer a `PUT`,
   `PATCH`, `DELETE` or `OPTIONS`.
+- **A page's `ctx` prop is non-enumerable**, so `<Child {...props} />` hands a *server* child
+  `ctx: undefined` — silently, since a spread copies enumerables only, and the type still says it is there.
+  It cannot be otherwise: an enumerable `ctx` would put `ctx.hono.env`, every binding and secret, into
+  React's dev-only serialization of a server component's props. Nested server components are meant to call
+  `getRequestContext()` rather than be handed the context.
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
   production ships no client source maps).

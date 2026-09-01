@@ -72,6 +72,13 @@ export interface PageProps<Path extends string = string, E extends Env = Env> {
    * serialized. Passing it to a `'use client'` component fails the render, because it wraps the live
    * request — read what you need here and pass plain values down.
    *
+   * Non-enumerable is the one place this API breaks a JavaScript expectation, and it is unavoidable: an
+   * enumerable `ctx` would put `ctx.hono.env` — every binding and secret — into React's dev-only
+   * serialization of a server component's props, which walks own enumerable properties. So `<Child
+   * {...props} />` hands a **server** child `ctx: undefined` with no error, while the type says otherwise.
+   * Nested server components are meant to call `getRequestContext()` for the same object rather than
+   * receive it, which is also the fix if a spread has already cost you an afternoon.
+   *
    * Reading it on a `render: 'static'` route throws: a prerendered page has no per-request context.
    * Mark the route `render: 'dynamic'`, or use the `url` / `params` props.
    *
