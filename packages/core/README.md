@@ -287,6 +287,9 @@ Every target streams, which is the bar a new one has to clear.
 - **Node ≥ 22.18** (worker threads, `process.loadEnvFile`, `Promise.withResolvers`, `URL.parse`, and native
   TypeScript stripping, so a `.ts` config needs no loader) and **React ≥ 19.1** (the floor
   `react-server-dom-rspack` requires).
+- **ESM only.** The package declares `import` and `types` conditions and no `require` one, so
+  `require('@rshono/core')` is `ERR_PACKAGE_PATH_NOT_EXPORTED` rather than a working call — deliberately,
+  since the framework's own graph is ESM throughout. Use `import`, or `await import()` from CommonJS.
 - No response compression, no base path (`siteUrl` is a bare origin), and wildcard, optional and regex
   params cannot be prerendered.
 - **No link prefetching**, by choice: a link is one fetch at click time and nothing before it. Speculative

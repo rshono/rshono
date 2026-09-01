@@ -273,13 +273,19 @@ export interface FallbackPage {
 export interface ErrorPageInfo {
   /** The thrown error's message in dev; `'Internal Server Error'` in production. */
   message: string;
-  /** The stack trace. Present in dev only. */
+  /**
+   * The stack trace — **dev only**, and `undefined` in every build. Optional for that reason rather than
+   * because some errors lack one, so a page that renders it should guard on it, not on a mode flag.
+   */
   stack?: string;
 }
 
 /**
  * Props for the `error` page declared in {@link RouteConfig.error} — the usual {@link PageProps} plus
  * the redaction-aware {@link ErrorPageInfo}.
+ *
+ * In a build `error.message` is the generic `'Internal Server Error'` and `error.stack` is `undefined`, so
+ * the page below guards on the stack rather than on a mode flag — there is no mode flag to guard on.
  *
  * @typeParam E - The app's Hono {@link Env}, forwarded to {@link PageProps.ctx}.
  *
@@ -288,7 +294,15 @@ export interface ErrorPageInfo {
  * import type { ErrorPageProps } from '@rshono/core';
  *
  * export default function ServerError({ error }: ErrorPageProps) {
- *   return <html><body><h1>Something went wrong</h1><p>{error.message}</p></body></html>;
+ *   return (
+ *     <html>
+ *       <body>
+ *         <h1>Something went wrong</h1>
+ *         <p>{error.message}</p>
+ *         {error.stack && <pre>{error.stack}</pre>}
+ *       </body>
+ *     </html>
+ *   );
  * }
  * ```
  */

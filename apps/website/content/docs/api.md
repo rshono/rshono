@@ -19,6 +19,10 @@ you need on the server and pass it down as props.
 These three are the whole public surface — the package's `exports` map lists only them, so there is no
 deeper path to import. Everything else is framework plumbing.
 
+All three are **ESM only**: the map declares `import` and `types` conditions and no `require` one, so
+`require('@rshono/core')` is `ERR_PACKAGE_PATH_NOT_EXPORTED`. Use `import`, or `await import()` from
+CommonJS.
+
 ## `@rshono/core`
 
 ### Functions
@@ -44,7 +48,7 @@ See [Routing](/docs/routing) and [Configuration](/docs/configuration).
 | `RouteConfig<TRoutes>` | The object `defineRoutes` takes: `routes`, plus optional `notFound` and `error`.                                |
 | `FallbackPage`         | The `notFound` / `error` page shape — a `component` with no path of its own.                                    |
 | `ErrorPageProps<E>`    | `PageProps` plus `error`, for the page declared as `error`.                                                     |
-| `ErrorPageInfo`        | `{ message, stack? }`. Redacted in production: a generic message, no stack.                                     |
+| `ErrorPageInfo`        | `{ message, stack? }`. Redacted in production: a generic message, and `stack` is `undefined`.                 |
 | `HTTPMethod`           | `'get'` \| `'post'` \| `'put'` \| `'patch'` \| `'delete'` \| `'options'` \| `'all'`. A `HEAD` reaches `'get'`.  |
 | `RshonoConfig`         | Every field of `rshono.config.ts`. All optional.                                                                |
 | `RspackHookContext`    | `{ isServer, isDev }`, handed to the `rspack` config hook.                                                      |

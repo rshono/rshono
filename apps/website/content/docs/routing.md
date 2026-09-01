@@ -125,7 +125,20 @@ Both are optional, and both are real server components with a page's contract mi
 
 - **`notFound`** — rendered with a 404 for unmatched paths and for `notFound()` calls.
 - **`error`** — rendered with a 500 when a request throws, and given an extra `error` prop: message-only
-  in production, message plus stack in dev.
+  in production, message plus stack in dev. `error.stack` is `undefined` in every build and
+  `error.message` is the generic `'Internal Server Error'`, so render the stack behind a check on the
+  stack itself — there is no mode flag to check:
+
+  ```tsx
+  export default function ServerError({ error }: ErrorPageProps) {
+    return (
+      <Layout>
+        <p>{error.message}</p>
+        {error.stack && <pre>{error.stack}</pre>}
+      </Layout>
+    );
+  }
+  ```
 
 See [Configuration & security](/docs/configuration#no-blank-screens) for what happens when a failure is
 bad enough that the `error` page itself cannot be reached.
