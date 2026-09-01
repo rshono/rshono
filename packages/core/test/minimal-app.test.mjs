@@ -3,8 +3,7 @@
 // `defineRoutes` shorthand. The rest of the suite runs against one richly-configured testbed, which
 // is exactly the app that would never catch "the framework assumes X exists".
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { buildApp, MINIMAL_APP_DIR, runCli, startApp, stopServer } from './helpers.mjs';
@@ -146,18 +145,29 @@ test('a browser-shaped form post from another origin cannot reach a server actio
 // the developer has to open, or — for the duplicate path — a clean exit 0 with the second entry dead.
 const throwaway = [];
 after(() => {
-  for (const dir of throwaway) {
-    // The link, not what it points at: `node_modules` is the fixture's, borrowed rather than copied.
-    unlinkSync(join(dir, 'node_modules'));
-    rmSync(dir, { recursive: true, force: true });
-  }
+  for (const dir of throwaway) rmSync(dir, { recursive: true, force: true });
 });
 
-/** The minimal app somewhere disposable, with `src/routes.ts` replaced — a build that must fail, run safely. */
+/**
+ * The minimal app with `src/routes.ts` replaced, somewhere disposable — a build that must fail, run safely.
+ *
+ * **Inside the fixture**, not in the OS temp directory, and with no `node_modules` of its own: these two
+ * cases run a real Rspack build, and `@rshono/core` is the one package it cannot resolve from the
+ * *framework's* `node_modules` — it is reachable only through the app's. Nesting the copy one level down
+ * means the resolver walks up and finds the fixture's real `node_modules`, with no link of any kind in the
+ * way.
+ *
+ * That link used to be a Windows-only build failure. A `'junction'` to the fixture's `node_modules` from a
+ * temp directory on another volume is not traversed by the bundler's resolver there, so the build died on
+ * `Can't resolve '@rshono/core'` before it could reach the validation these cases are about — while
+ * `react` and `hono`, which the framework's own `node_modules` answers for, resolved fine and hid the
+ * shape of it.
+ *
+ * The directory is a sibling of `src/`, so nothing that scans the fixture's pages can see it.
+ */
 function appWithRoutes(routesSource) {
-  const dir = mkdtempSync(join(tmpdir(), 'rshono-invalid-'));
+  const dir = mkdtempSync(join(MINIMAL_APP_DIR, 'throwaway-'));
   throwaway.push(dir);
-  symlinkSync(join(MINIMAL_APP_DIR, 'node_modules'), join(dir, 'node_modules'), 'junction');
   cpSync(join(MINIMAL_APP_DIR, 'package.json'), join(dir, 'package.json'));
   cpSync(join(MINIMAL_APP_DIR, 'src', 'pages'), join(dir, 'src', 'pages'), { recursive: true });
   writeFileSync(join(dir, 'src', 'routes.ts'), routesSource);

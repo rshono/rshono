@@ -2,7 +2,7 @@
 // exercises indirectly through one happy path. They import the *built* package, so they double as a
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
@@ -1614,18 +1614,19 @@ describe('parseRenderRequest', () => {
 });
 
 describe('the security-middleware build warning', () => {
-  /** The minimal app somewhere disposable, plus whatever `src/server.ts` the case wants. */
+  /**
+   * The minimal app somewhere disposable, plus whatever `src/server.ts` the case wants.
+   *
+   * No `node_modules`: `createConfigs` builds config objects and scans `src/`, and resolves packages from
+   * the *framework's* tree rather than the app's, so nothing here reads one. It used to borrow the
+   * fixture's through a junction, which was both unnecessary and a Windows reparse point for no reason.
+   */
   function appWithServer(serverSource) {
     const dir = mkdtempSync(join(tmpdir(), 'rshono-warn-'));
-    symlinkSync(join(MINIMAL_APP_DIR, 'node_modules'), join(dir, 'node_modules'), 'junction');
     cpSync(join(MINIMAL_APP_DIR, 'package.json'), join(dir, 'package.json'));
     cpSync(join(MINIMAL_APP_DIR, 'src'), join(dir, 'src'), { recursive: true });
     if (serverSource !== null) writeFileSync(join(dir, 'src', 'server.ts'), serverSource);
-    after(() => {
-      // The link, not what it points at: `node_modules` is the fixture's, borrowed rather than copied.
-      unlinkSync(join(dir, 'node_modules'));
-      rmSync(dir, { recursive: true, force: true });
-    });
+    after(() => rmSync(dir, { recursive: true, force: true }));
     return dir;
   }
 
