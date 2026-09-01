@@ -218,6 +218,52 @@ describe('injectFlightPayload', () => {
       assert.equal(released, 1);
     });
   });
+
+  // A slow client must park the producers rather than let them run to completion into the readable's queue.
+  // The payload pump is the half that had no gate at all: it writes into the transform's controller from a
+  // detached promise, so nothing about the transform's own backpressure applied to it.
+  test('stops producing while the consumer is not reading', async () => {
+    let htmlPulled = 0;
+    let flushes = 0;
+    // Shaped like React: a run of chunks per flush, flushes separated by a macrotask.
+    const html = new ReadableStream({
+      async pull(controller) {
+        if (htmlPulled % 5 === 0) {
+          flushes++;
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        if (++htmlPulled > 500) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode('<p>hi</p>'));
+      },
+    });
+    let flightPulled = 0;
+    const flight = new ReadableStream({
+      pull(controller) {
+        if (++flightPulled > 500) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode(`${flightPulled}:"hi"\n`));
+      },
+    });
+
+    const reader = html.pipeThrough(injectFlightPayload(flight)).getReader();
+    await reader.read(); // one chunk, then stall — a client that stopped reading
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.ok(flightPulled < 10, `the payload must park, not run to completion (pulled ${flightPulled})`);
+    assert.ok(htmlPulled < 20, `the document must park, not run to completion (pulled ${htmlPulled})`);
+    assert.ok(flushes >= 1, 'sanity: the source did produce');
+
+    // And reading again has to resume it, rather than having deadlocked on a permit nobody releases.
+    const before = flightPulled;
+    for (let i = 0; i < 20; i++) await reader.read();
+    assert.ok(flightPulled > before, 'reading again must resume the payload');
+    await reader.cancel();
+  });
 });
 
 // Two fields, because only two things here are decided by the build. The CSRF check, the CSP and the

@@ -82,7 +82,7 @@ const NONCE_CHARS = /^[A-Za-z0-9+/=_-]+$/;
 export function injectFlightPayload(
   rscStream: ReadableStream<Uint8Array>,
   options: { nonce?: string; onDone?: () => void } = {},
-): TransformStream<Uint8Array, Uint8Array> {
+): ReadableWritablePair<Uint8Array, Uint8Array> {
   const { nonce, onDone } = options;
   const safeNonce = nonce !== undefined && NONCE_CHARS.test(nonce) ? nonce : undefined;
   const scriptOpen = `<script${safeNonce ? ` nonce="${safeNonce}"` : ''}>(self.__FLIGHT_DATA||=[]).push(`;
@@ -104,6 +104,81 @@ export function injectFlightPayload(
   let cancelled = false;
   /** Held so {@link cancelled} can release the teed RSC branch rather than leaving it to be pumped. */
   let flightReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+
+  /**
+   * One permit per chunk the consumer has asked for: the backpressure a `TransformStream` alone does not give
+   * this module.
+   *
+   * A transform's writable side parks a write while its readable's queue is over the mark, which covers the
+   * HTML — but only once something has been enqueued, and `transform` defers that to a macrotask. So a
+   * producer that writes a whole document without ever yielding the microtask queue is admitted in full, and
+   * {@link writeFlight}, which pumps the payload into the same controller from a detached promise, is never
+   * gated at all: measured, a consumer that read one chunk and stalled still pulled all 500 chunks of a test
+   * payload into the queue, where this brings it down to 3. `controller.desiredSize` is no help — a transform
+   * readable's high-water mark is 0, so it is never positive.
+   *
+   * The wrapper readable this function returns is the missing signal: its `pull` runs exactly when the
+   * consumer wants another chunk, and releases one permit. Both producers — the HTML batcher and the payload
+   * pump — take one before they enqueue, so a stalled client parks React instead of filling the process. The
+   * Streams standard calls `pull` again only once the previous call has settled, so at most one permit is ever
+   * outstanding, which bounds the queue at a chunk.
+   *
+   * What is left buffered is one React flush, because a flush has to leave here as a single chunk (see
+   * {@link emitBatch}) — the same bound React itself holds while it builds one. The two enqueues in `flush`
+   * are ungated for a related reason: the response is over by then, and parking its last two chunks on a
+   * permit would only add a way for it not to end.
+   */
+  let permits = 0;
+  const waiting: Array<() => void> = [];
+
+  /** Returns nothing when a permit was already free, so the common case costs no microtask. */
+  function takePermit(): Promise<void> | undefined {
+    // Nothing will release another permit once the consumer is gone, and there is nothing left to protect:
+    // the caller goes on to a failing enqueue, which is what tears the pipeline down.
+    if (cancelled) return;
+    if (permits > 0) {
+      permits--;
+      return;
+    }
+    return new Promise<void>((resolve) => waiting.push(resolve));
+  }
+
+  function releasePermit(): void {
+    const next = waiting.shift();
+    if (next) next();
+    else permits++;
+  }
+
+  /** Fires `onDone` at most once, however the response ended — both cancel paths can reach it. */
+  let ended = false;
+  function reportDone(): void {
+    if (ended) return;
+    ended = true;
+    onDone?.();
+  }
+
+  /**
+   * The consumer has gone away: stop producing, release everything the request was holding, and unpark both
+   * producers so they see {@link cancelled} rather than a permit that will never come.
+   *
+   * Called from the wrapper readable's `cancel`, which is reliable, and from the transformer's, which the
+   * standard skips once the close algorithm has started — so it has to be idempotent.
+   */
+  function teardown(reason?: unknown): void {
+    cancelled = true;
+    if (boundary) {
+      unschedule(boundary);
+      boundary = null;
+    }
+    batch.length = 0;
+    for (const resolve of waiting.splice(0)) resolve();
+    // Otherwise the teed RSC branch keeps being pumped for a response nobody will read, and the tee's
+    // other half buffers every chunk waiting for this one to catch up.
+    flightReader?.cancel(reason).catch(() => {});
+    // Unparks `flush` if it is waiting on a payload that will now never arrive.
+    flightDone();
+    reportDone();
+  }
 
   /**
    * Emits the HTML buffered since the last boundary, holding back the document trailer for
@@ -139,7 +214,12 @@ export function injectFlightPayload(
     // `fatal`, so a chunk that split a multi-byte character throws instead of emitting U+FFFD; the catch
     // below falls back to a byte-exact encoding for it.
     const decoder = new TextDecoder('utf-8', { fatal: true });
-    const push = (literal: string) => controller.enqueue(encoder.encode(scriptOpen + literal + scriptClose));
+    const push = async (literal: string): Promise<void> => {
+      const permit = takePermit();
+      if (permit) await permit;
+      if (cancelled) return;
+      controller.enqueue(encoder.encode(scriptOpen + literal + scriptClose));
+    };
     for (;;) {
       if (cancelled) return;
       const { done, value } = await reader.read();
@@ -156,7 +236,7 @@ export function injectFlightPayload(
       // A failed enqueue means the consumer is gone: release the RSC branch so `flush` unparks now rather
       // than whenever the payload would have ended on its own.
       try {
-        push(literal);
+        await push(literal);
       } catch {
         cancelled = true;
         reader.cancel().catch(() => {});
@@ -165,21 +245,33 @@ export function injectFlightPayload(
     }
     if (cancelled) return;
     const remaining = decoder.decode();
-    if (remaining.length) push(escapeScript(JSON.stringify(remaining)));
+    if (remaining.length) await push(escapeScript(JSON.stringify(remaining)));
   }
 
   const transformer: CancellableTransformer<Uint8Array, Uint8Array> = {
-    transform(chunk, controller) {
+    async transform(chunk, controller) {
+      if (boundary) {
+        batch.push(chunk);
+        return;
+      }
+      // The permit is taken once per *batch*, not once per chunk: React writes a whole flush in one microtask
+      // cascade and the flush has to leave here as one chunk (see `emitBatch`), so a per-chunk gate would
+      // hand the consumer one chunk per read instead. `transform` is never re-entered concurrently — the
+      // writable side serializes it on the promise this returns — so nothing else can claim the batch in
+      // between.
+      const permit = takePermit();
+      if (permit) await permit;
       batch.push(chunk);
-      if (boundary) return;
       // A macrotask, not a microtask: React writes a whole flush in one synchronous run but `pipeThrough`
       // delivers it one microtask at a time, and a script injected between two chunks lands inside a tag.
       boundary = schedule(() => {
         try {
           emitBatch(controller);
         } catch (error) {
+          // A dead consumer, all but always. `teardown` rather than `flightDone` alone: a payload pump parked
+          // on a permit has to be unparked too, and the RSC branch it holds released.
           controller.error(error);
-          flightDone();
+          teardown(error);
           return;
         }
         if (!startedFlight) {
@@ -213,13 +305,10 @@ export function injectFlightPayload(
               .catch((error) => controller.error(error))
               .then(flightDone);
         }
-      } catch {
+      } catch (error) {
         // The consumer went away while the batch was being emitted, so there is nothing left to write to and
         // nothing to wait for. Settled explicitly rather than left dangling, so the payload chain is released.
-        cancelled = true;
-        flightReader?.cancel().catch(() => {});
-        flightDone();
-        onDone?.();
+        teardown(error);
         return;
       }
 
@@ -235,23 +324,37 @@ export function injectFlightPayload(
         flightReader?.cancel().catch(() => {});
       } finally {
         // A `finally` because `onDone` releases the abort forwarder in `renderComponent`, however this ended.
-        onDone?.();
+        reportDone();
       }
     },
     cancel(reason) {
-      cancelled = true;
-      if (boundary) {
-        unschedule(boundary);
-        boundary = null;
-      }
-      batch.length = 0;
-      // Otherwise the teed RSC branch keeps being pumped for a response nobody will read, and the tee's
-      // other half buffers every chunk waiting for this one to catch up.
-      flightReader?.cancel(reason).catch(() => {});
-      // Unparks `flush` if it is waiting on a payload that will now never arrive.
-      flightDone();
-      onDone?.();
+      teardown(reason);
     },
   };
-  return new TransformStream<Uint8Array, Uint8Array>(transformer);
+
+  const inner = new TransformStream<Uint8Array, Uint8Array>(transformer);
+  const innerReader = inner.readable.getReader();
+  /**
+   * A pull-driven wrapper around the transform's readable, and the only reason this function does not simply
+   * return the transform: `pull` runs once per chunk the consumer takes, which is the demand signal the two
+   * producers park on (see {@link takePermit}). It is also the one cancel notification the standard never
+   * skips, which is what makes {@link teardown} reliable.
+   */
+  const readable = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      releasePermit();
+      const { done, value } = await innerReader.read();
+      try {
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch {
+        // Cancelled while this pull was in flight. `teardown` has already run; there is nobody to hand it to.
+      }
+    },
+    cancel(reason) {
+      teardown(reason);
+      return innerReader.cancel(reason);
+    },
+  });
+  return { readable, writable: inner.writable };
 }
