@@ -258,7 +258,7 @@ README and `docs/configuration.md` all describe `.env` loading without mentionin
 watch it. This is the kind of gap that costs someone an afternoon. Either watch the two files and
 restart, or say so plainly in the docs.
 
-### M3 — importing `@rshono/core/server` from a `'use client'` module fails with a raw resolver error
+### M3 — ~~importing `@rshono/core/server` from a `'use client'` module fails with a raw resolver error~~
 
 Reproduced with a `'use client'` component importing `getRequestContext`. The build **does fail** —
 exit code 1, correctly — but with this and nothing else:

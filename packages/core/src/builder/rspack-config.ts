@@ -6,6 +6,7 @@ import { basename, dirname, join, sep, win32 } from 'node:path';
 import type { RshonoConfig } from '../config.js';
 import type { DeployPreset } from '../deploy/presets.js';
 import { resolveServerConfig } from '../server/server-config.js';
+import { serverOnlyImportPlugin } from './server-only-imports.js';
 import { scanPageFiles } from './page-files.js';
 import { publicEnv } from './public-env.js';
 import { checkReactVersions } from './react-versions.js';
@@ -243,6 +244,7 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
     },
     plugins: [
       new ClientPlugin(),
+      serverOnlyImportPlugin(rootDir),
       new rspack.DefinePlugin({ 'process.env': JSON.stringify(publicEnv(isDev)) }),
       ...(isDev ? [new rspack.HotModuleReplacementPlugin(), new ReactRefreshRspackPlugin()] : []),
     ],
