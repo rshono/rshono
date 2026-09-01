@@ -100,23 +100,23 @@ only — one instance exists per request and application code never constructs i
 
 Reads are safe anywhere. Writes are not — see [Writes happen before the render](#writes-happen-before-the-render).
 
-| Member                               | What it is                                                                                                               |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `url`                                | The browser-facing `URL`, proxy-header aware. Parsed once and cached.                                                    |
-| `req`                                | Hono's `HonoRequest` — method, headers, query, body readers.                                                             |
-| `params`                             | Matched route params. A page gets these typed as its `params` prop; this is for everywhere else.                         |
-| `env`                                | Process env merged with runtime bindings (bindings win). See [Environment](/docs/configuration#environment-and-secrets). |
-| `var`                                | Typed variables a middleware set with `c.set(…)`.                                                                        |
-| `cookies.get(name)`                  | One cookie, or `undefined`.                                                                                              |
-| `cookies.all()`                      | Every cookie as `{ name: value }`.                                                                                       |
-| `cookies.set(name, value, options?)` | Sets a cookie on the response. **Throws in a page.**                                                                     |
-| `cookies.delete(name, options?)`     | Clears one. Pass the `path`/`domain` it was set with. **Throws in a page.**                                              |
-| `setHeader(name, value, options?)`   | Sets a response header. **Throws in a page.**                                                                            |
-| `hono`                               | The underlying Hono `Context` — the escape hatch for everything not above.                                               |
+| Member                               | What it is                                                                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`                                | The browser-facing `URL`, proxy-header aware. Parsed once and cached.                                                                     |
+| `req`                                | Hono's `HonoRequest` — method, headers, query, body readers.                                                                              |
+| `params`                             | Matched route params. A page gets these typed as its `params` prop; this is for everywhere else.                                          |
+| `env`                                | Process env, merged on a bindings platform with its bindings (which win). See [Environment](/docs/configuration#environment-and-secrets). |
+| `var`                                | Typed variables a middleware set with `c.set(…)`.                                                                                         |
+| `cookies.get(name)`                  | One cookie, or `undefined`.                                                                                                               |
+| `cookies.all()`                      | Every cookie as `{ name: value }`.                                                                                                        |
+| `cookies.set(name, value, options?)` | Sets a cookie on the response. **Throws in a page.**                                                                                      |
+| `cookies.delete(name, options?)`     | Clears one. Pass the `path`/`domain` it was set with. **Throws in a page.**                                                               |
+| `setHeader(name, value, options?)`   | Sets a response header. **Throws in a page.**                                                                                             |
+| `hono`                               | The underlying Hono `Context` — the escape hatch for everything not above.                                                                |
 
-What this adds over Hono's own `Context` is a proxy-aware cached URL, an env that merges runtime
-bindings over process env, cookies without a second import, and writes that tell you when they cannot
-work. The long tail — `executionCtx.waitUntil()` and whatever Hono adds next — is `ctx.hono`.
+What this adds over Hono's own `Context` is a proxy-aware cached URL, an env that merges a platform's
+runtime bindings over process env, cookies without a second import, and writes that tell you when they
+cannot work. The long tail — `executionCtx.waitUntil()` and whatever Hono adds next — is `ctx.hono`.
 
 Hono's response builders (`redirect`, `notFound`, `json`, `text`, `html`, `body`, `status`, `header`)
 are present as stubs that throw and name the right API, because a page returns JSX and the framework

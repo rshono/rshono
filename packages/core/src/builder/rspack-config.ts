@@ -374,7 +374,9 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
       pageScanPlugin,
       new ServerPlugin({ onServerComponentChanges }),
       // Bakes rshono.config.ts into the bundle, read back as `__RSHONO_CONFIG__` at request time.
-      new rspack.DefinePlugin({ __RSHONO_CONFIG__: JSON.stringify(resolveServerConfig(config, { isDev, outDir })) }),
+      new rspack.DefinePlugin({
+        __RSHONO_CONFIG__: JSON.stringify(resolveServerConfig(config, { isDev, outDir, envBindings: preset.envBindings })),
+      }),
     ],
     performance: false,
   };

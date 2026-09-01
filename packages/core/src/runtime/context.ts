@@ -113,6 +113,9 @@ function firstForwardedValue(header: string | undefined): string | undefined {
 // public `@rshono/core/server` entry, which tooling can load without one. Absent means don't trust.
 const trustProxy = typeof __RSHONO_CONFIG__ !== 'undefined' && __RSHONO_CONFIG__.trustProxy;
 
+// Read the same way, for the same reason. Absent means the platform passes no bindings — see the getter.
+const envBindings = typeof __RSHONO_CONFIG__ !== 'undefined' && __RSHONO_CONFIG__.envBindings;
+
 /**
  * The browser-facing {@link URL} for a request, resolved from Hono's {@link Context} — a fresh
  * instance per call.
@@ -305,8 +308,15 @@ export class RequestContext<E extends Env = Env> {
   }
 
   /**
-   * Environment for the request: process env vars merged with runtime bindings, which win on conflict.
-   * Computed once and cached.
+   * Environment for the request: process env vars, merged on a bindings platform with the bindings, which
+   * win on conflict. Computed once and cached.
+   *
+   * Bindings are merged **only where the platform supplies them** — `deploy: 'cloudflare'`, today. Hono's
+   * `c.env` is whatever the host passed as the second argument to `app.fetch`, and off Workers that is the
+   * adapter's own private state: `{ incoming, outgoing }` on Node and Vercel, the entire invocation —
+   * headers, cookies, `authorization` — on Lambda. Merging it would make `ctx.env` uncloneable on one and
+   * a disclosure vector on the other, both behind names this type declares `string | undefined`. Reach for
+   * {@link RequestContext.hono}`.env` if you really do want the adapter's argument.
    *
    * @example `const key = getRequestContext().env.STRIPE_SECRET_KEY;`
    *
@@ -315,7 +325,7 @@ export class RequestContext<E extends Env = Env> {
    */
   get env(): EnvVars<E> {
     if (this.#env) return this.#env;
-    const bindings = this.#raw.env as Record<string, unknown> | undefined;
+    const bindings = envBindings ? (this.#raw.env as Record<string, unknown> | undefined) : undefined;
     return (this.#env = (bindings ? { ...processEnv(), ...bindings } : processEnv()) as EnvVars<E>);
   }
 

@@ -71,6 +71,12 @@ data down.
 `.env.local` and `.env` are loaded automatically, and the real environment wins over both. Commit `.env`
 with safe defaults; keep `.env.local` gitignored.
 
+`getRequestContext().env` is that same environment, plus the platform's own runtime bindings where it has
+them — `deploy: 'cloudflare'`, where a KV namespace or a Worker secret arrives per request and wins over a
+process variable of the same name. On every other target it is `process.env` alone: Hono's `c.env` there is
+the adapter's private state rather than your bindings, so the framework does not merge it. `ctx.hono.env`
+still reaches it if you need it.
+
 Two things worth remembering:
 
 - **Anything a server component renders is public.** Whatever is in the tree ships in the flight

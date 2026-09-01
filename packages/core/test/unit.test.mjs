@@ -605,6 +605,15 @@ describe('resolveServerConfig', () => {
     const config = resolveServerConfig({}, { isDev: false });
     assert.equal(config.trustProxy, false, 'proxy headers are never trusted by default');
     assert.equal(config.isDev, false, 'the build mode is baked in rather than read from NODE_ENV at runtime');
+    assert.equal(config.envBindings, false, 'no platform supplies bindings unless its preset says so');
+  });
+
+  // Only `cloudflare` passes it, and `ctx.env` merges `c.env` on exactly that condition. Defaulting the
+  // other way would spread an adapter's private handles — a live socket, or a whole Lambda invocation —
+  // into an object typed `Record<string, string | undefined>`.
+  test('records whether the selected platform supplies bindings', () => {
+    assert.equal(resolveServerConfig({}, { isDev: false, envBindings: true }).envBindings, true);
+    assert.equal(resolveServerConfig({}, { isDev: false, envBindings: undefined }).envBindings, false);
   });
 
   test('forces trustProxy on in dev, where the framework owns the proxy', () => {

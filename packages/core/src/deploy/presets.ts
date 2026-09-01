@@ -34,6 +34,14 @@ export interface DeployPreset {
   /** How to run what was just built, completing the "build complete —" line. */
   readonly deployHint: string;
   /**
+   * `true` where the platform hands per-request bindings to `app.fetch(request, env)` — Workers, and
+   * nowhere else. It gates the `getRequestContext().env` merge, because every other target passes its own
+   * private handles in that argument (`{ incoming, outgoing }` on Node, the whole invocation on Lambda) and
+   * merging those would put a live socket, or a request's headers and cookies, behind a name typed
+   * `string | undefined`.
+   */
+  readonly envBindings?: boolean;
+  /**
    * Extra resolve conditions for the server bundle, most specific first — what picks the right build of React
    * and the RSC runtime, both of which ship one per runtime. Omit to accept whatever the Rspack target
    * implies, which is correct for Node.
@@ -75,6 +83,7 @@ const CLOUDFLARE_PRESET: DeployPreset = {
   name: 'cloudflare',
   runtimeModule: 'deploy/cloudflare/runtime.js',
   deployHint: 'deploy with `wrangler deploy`',
+  envBindings: true,
   resolveConditions: ['workerd'],
   syntaxTargets: ['chrome 120'],
   configureServer(config) {
