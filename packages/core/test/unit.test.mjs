@@ -423,10 +423,41 @@ describe('ssgFilePath', () => {
   // The shared guard every deploy target relies on: an asset store addressed by key has no
   // `resolve()` to fall back on, so a traversal has to be refused here or not at all.
   test('refuses traversal in a request path, escaped or not', () => {
-    const attempts = ['/../secret', '/docs/../../etc/passwd', '/..', '/docs/..', '/./docs', '/docs/./x', '/%2e%2e/secret', '/..%2f'];
+    const attempts = ['/../secret', '/docs/../../etc/passwd', '/..', '/docs/..', '/./docs', '/docs/./x', '/%2e%2e/secret', '/..%2f', '/..%2F'];
     for (const attempt of attempts) {
       assert.equal(ssgFilePath(attempt, 'html'), null, `${attempt} must not resolve to a file`);
     }
+  });
+
+  // Not a traversal, and pinned so nobody "fixes" it into one: a double-encoded escape decodes to the
+  // literal text `..%2f`, which is one ordinary directory name. The single-encoded forms above are the
+  // ones that decode to a separator, and those are refused.
+  test('treats a double-encoded escape as the literal name it is', () => {
+    assert.equal(ssgFilePath('/..%252f'), '..%2f/index.html');
+  });
+
+  // The guard checks *decoded* segments, so what arrives decoded and what does not is load-bearing. Both
+  // layers below are upstream, and neither is ours to change — hence a test rather than a comment.
+  test('the upstream layers the guard is written against keep their promises', async () => {
+    // 1. The URL parser resolves a percent-encoded dot segment when the Request is built, so `%2e%2e`
+    //    never reaches a handler as a segment at all.
+    for (const encoded of ['%2e%2e', '%2E%2E']) {
+      assert.equal(new URL(`/docs/${encoded}/x`, 'http://example.test').pathname, '/x', `${encoded} must be resolved by the URL parser`);
+    }
+
+    // 2. Hono hands a handler the path with `decodeURI` run over it, which is the form `ssgFilePath`
+    //    stores under — and `decodeURI` leaves the reserved escapes alone, so a `%2F` arrives as an escape
+    //    rather than as a separator and cannot smuggle a second segment past the router. The framework's
+    //    own per-segment `decodeURIComponent` is what then refuses it as a file name (asserted above).
+    const { Hono } = await import('hono');
+    const app = new Hono();
+    const seen = [];
+    app.get('*', (c) => {
+      seen.push(c.req.path);
+      return c.text('ok');
+    });
+    for (const path of ['/docs/caf%C3%A9', '/docs/a%2Fb']) await app.fetch(new Request(`http://example.test${path}`));
+    assert.deepEqual(seen, ['/docs/café', '/docs/a%2Fb'], 'a non-reserved escape arrives decoded; a %2F arrives as itself');
   });
 });
 
@@ -525,13 +556,27 @@ describe('readPrerendered', () => {
     assert.equal(await readPrerendered(tempDir(), '/nope'), null);
   });
 
-  test('refuses to escape the ssg directory, decoded form included', async () => {
-    // `ssgFilePath` above is where the exhaustive path cases live; what this adds is that the
-    // percent-encoded form is decoded *before* the check rather than after it.
-    const dir = tempDir();
-    for (const attempt of ['/../', '/..%2f', '/docs/../../etc']) {
-      assert.equal(await readPrerendered(dir, attempt), null, `traversal attempt "${attempt}" must not resolve`);
+  test('refuses to escape the ssg directory, with the file a traversal would reach actually there', async () => {
+    // The version of this test that shipped first ran its attempts against a *freshly created empty* temp
+    // dir, so `null` proved nothing beyond "no file was there". Here the file a traversal is aiming at
+    // exists and is readable, so the only thing that can refuse it is the guard.
+    const parent = tempDir();
+    const store = join(parent, 'store');
+    mkdirSync(join(parent, 'sibling'), { recursive: true });
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(parent, 'sibling', 'index.html'), '<!DOCTYPE html><p>outside the store</p>');
+    // The control: the bytes are there, one `..` away from the root, and nothing but the guard is between
+    // them and a response.
+    assert.match(readFileSync(join(store, '..', 'sibling', 'index.html'), 'utf8'), /outside the store/);
+
+    for (const attempt of ['/../sibling', '/../sibling/', '/docs/../../sibling', '/..%2fsibling', '/%2e%2e/sibling']) {
+      assert.equal(await readPrerendered(store, attempt), null, `traversal attempt "${attempt}" must not resolve`);
     }
+
+    // And a page genuinely inside the store still resolves, so the guard is not simply refusing everything.
+    mkdirSync(join(store, 'sibling'), { recursive: true });
+    writeFileSync(join(store, 'sibling', 'index.html'), '<!DOCTYPE html><p>inside</p>');
+    assert.ok(await readPrerendered(store, '/sibling'), 'the same name inside the root is an ordinary page');
   });
 });
 
