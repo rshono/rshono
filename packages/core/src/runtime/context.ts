@@ -174,6 +174,14 @@ export type EnvVars<E extends Env> = E['Bindings'] & Record<string, string | und
  * Never construct it yourself. One instance is reused for the whole request, so its lazy getters
  * ({@link RequestContext.url}, {@link RequestContext.env}) are computed at most once.
  *
+ * The eight members that only throw — `redirect`, `notFound`, `json`, `text`, `html`, `body`, `status`,
+ * `header` — are **permanent, and exist to throw**. Every one of them is a silent no-op when reached through
+ * {@link RequestContext.hono} from a page, so a stub that names the thing that does work is the difference
+ * between a message and a page that renders while quietly ignoring half of what it was asked for. They carry
+ * `@deprecated` for the strike-through an editor draws with it, not because they are on the way out: nothing
+ * will un-deprecate or remove them, and dropping them would leave `ctx.redirect('/x')` as
+ * "property does not exist", which says what is wrong and not what to do.
+ *
  * @typeParam E - The Hono {@link Env} describing this app's `Bindings` and `Variables`, so
  *   {@link RequestContext.var} and {@link RequestContext.env} stay typed.
  *
@@ -394,8 +402,9 @@ export class RequestContext<E extends Env = Env> {
   }
 
   // Hono's response builders, restated as errors naming what to use instead — through `ctx.hono` every
-  // one of them is a silent no-op from a page. `@deprecated` strikes them through in autocomplete; the
-  // unread `..._args` is so `ctx.redirect('/x')` reaches the thrown message rather than an arity error.
+  // one of them is a silent no-op from a page. Permanent, deliberately: see the class doc. `@deprecated`
+  // strikes them through in autocomplete; the unread `..._args` is so `ctx.redirect('/x')` reaches the
+  // thrown message rather than an arity error.
 
   /** @deprecated Not available on a page's context — use `redirect()` from `@rshono/core/server`. */
   redirect(..._args: unknown[]): never {

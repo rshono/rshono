@@ -117,7 +117,8 @@ work. The long tail — `executionCtx.waitUntil()` and whatever Hono adds next �
 Hono's response builders (`redirect`, `notFound`, `json`, `text`, `html`, `body`, `status`, `header`)
 are present as stubs that throw and name the right API, because a page returns JSX and the framework
 builds the response from it — reaching them through `ctx.hono` bypasses the error without making them
-work.
+work. They are permanent: the strike-through your editor draws over them comes from a `@deprecated` tag
+put there for the strike-through, not because they are going away.
 
 `ctx` cannot be handed to a `'use client'` component — it wraps the live request. Reading it on a
 [`render: 'static'`](/docs/routing#static-rendering) page throws, because there is no request at build
