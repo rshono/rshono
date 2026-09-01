@@ -8,19 +8,19 @@ half of #3, which is marked. Line numbers are against `packages/core/src` at `af
 of them was re-checked. The suite (`npm run build` + `unit.test.mjs`, 154 tests) passes on this tree;
 none of these are covered by it.
 
-**Nothing here is applied.** This is a report: every fix below is a patch to apply deliberately, and
-`packages/core` is untouched.
+**All six are applied**, one commit each, on `feature/harden-for-production-3`. Struck through below as
+resolved; the analysis is kept as written so the reasoning behind each patch stays readable.
 
 ## Fixes at a glance
 
-| # | Finding | Severity | Fix | Touches |
-|---|---|---|---|---|
-| 1 | Flight payload with binary rows loses bytes, and can error the response outright | medium | Decode per chunk, not streaming; `ignoreBOM`; drop the final flush | `runtime/flight-inject.ts` |
-| 2 | Prerendered `index.rsc` corrupted at build time | high | Carry bytes, not a string, through `renderVariant` → `write` | `server/ssg.ts` |
-| 3 | `notFound()` by soft navigation paints the framework overlay on the second visit | medium | Release the reload bound when the reloaded document *is* the 404 | `runtime/entry.client.tsx` |
-| 4 | A failing `rshono build` truncates its own error report in CI | medium | An `exit(code)` helper that drains both streams first | `cli/exit.ts` (new), `cli/build.ts`, `cli/index.ts` |
-| 5 | `redirect()` responses get neither `Cache-Control` nor `Vary` | low | Set both by hand in `respondToControlSignal` | `runtime/entry.rsc.tsx` |
-| 6 | `RSHONO_DEPLOY=constructor` is accepted as a deploy target | low | One `Object.hasOwn` lookup helper, used by both readers | `deploy/presets.ts` |
+| # | Finding | Severity | Fix | Touches | Fixed in |
+|---|---|---|---|---|---|
+| 1 | ~~Flight payload with binary rows loses bytes, and can error the response outright~~ | medium | Decode per chunk, not streaming; `ignoreBOM`; drop the final flush | `runtime/flight-inject.ts` | `f688005` |
+| 2 | ~~Prerendered `index.rsc` corrupted at build time~~ | high | Carry bytes, not a string, through `renderVariant` → `write` | `server/ssg.ts` | `1c4b602` |
+| 3 | ~~`notFound()` by soft navigation paints the framework overlay on the second visit~~ | medium | Release the reload bound when the reloaded document *is* the 404 | `runtime/entry.client.tsx` | `7cb9ec1` |
+| 4 | ~~A failing `rshono build` truncates its own error report in CI~~ | medium | An `exit(code)` helper that drains both streams first | `cli/exit.ts` (new), `cli/build.ts`, `cli/index.ts` | `6243578` |
+| 5 | ~~`redirect()` responses get neither `Cache-Control` nor `Vary`~~ | low | Set both by hand in `respondToControlSignal` | `runtime/entry.rsc.tsx` | `78dd07a` |
+| 6 | ~~`RSHONO_DEPLOY=constructor` is accepted as a deploy target~~ | low | One `Object.hasOwn` lookup helper, used by both readers | `deploy/presets.ts` | `b8471d6` |
 
 How far each patch was taken before being written down, all of it outside the tree:
 
@@ -37,7 +37,7 @@ None of the six changes an assertion any current test makes — see the per-item
 
 ---
 
-## 1. A flight payload containing binary data can be silently corrupted in the inlined HTML
+## ~~1. A flight payload containing binary data can be silently corrupted in the inlined HTML~~ — fixed in `f688005`
 
 **Severity: medium** (silent data corruption → the page fails to hydrate; reaching it needs a byte alignment)
 **`src/runtime/flight-inject.ts:257-293`** (`writeFlight`; the decoder at `:261`, the fallback at `:278`, the final flush at `:292`)
@@ -104,7 +104,7 @@ lossy: 1 of 107 typed-array sizes
 { L: 4083, boundaries: [ 4096, 35 ], wantLen: 4131, gotLen: 4130, lostAt: 4095 }
 ```
 
-### 1b. The same decoder state makes the final flush throw, which errors the response
+### ~~1b. The same decoder state makes the final flush throw, which errors the response~~
 
 Found while building the fix, and worth its own note because the symptom is worse. The last three
 lines of `writeFlight` are:
@@ -212,7 +212,7 @@ with a trailer.
 
 ---
 
-## 2. A prerendered `index.rsc` is corrupted at build time
+## ~~2. A prerendered `index.rsc` is corrupted at build time~~ — fixed in `1c4b602`
 
 **Severity: high** (silent corruption, baked into the build)
 **`src/server/ssg.ts:181`** (`RenderedVariant`), **`:189`** (`renderVariant`) and **`:284-286`** (`write`)
@@ -279,7 +279,7 @@ covers this and would have caught it.
 
 ---
 
-## 3. `notFound()` reached by soft navigation shows the framework's overlay on the second visit
+## ~~3. `notFound()` reached by soft navigation shows the framework's overlay on the second visit~~ — fixed in `7cb9ec1`
 
 **Severity: medium** (user-visible; breaks an entirely ordinary pattern)
 **`src/runtime/entry.client.tsx:283-309`** (`reloadOnceForLateNotFound`)
@@ -381,7 +381,7 @@ the app's 404 heading; navigate away; soft-navigate back; assert the 404 heading
 
 ---
 
-## 4. A failing `rshono build` truncates its own error report in CI
+## ~~4. A failing `rshono build` truncates its own error report in CI~~ — fixed in `6243578`
 
 **Severity: medium** (a large build failure prints a report that stops mid-error)
 **`src/cli/build.ts:69-72`**
@@ -512,7 +512,7 @@ paths (`:34`, `:42`, `:93`, `:102`); the helper only awaits two zero-length writ
 
 ---
 
-## 5. `redirect()` responses get neither `Cache-Control` nor `Vary`
+## ~~5. `redirect()` responses get neither `Cache-Control` nor `Vary`~~ — fixed in `78dd07a`
 
 **Severity: low** (narrow, but it breaks a stated default)
 **`src/runtime/entry.rsc.tsx:486-488`** (the gate) and **`:517`** (the redirect)
@@ -593,7 +593,7 @@ final: 308 [ [ 'cache-control', 'private, no-cache' ], [ 'location', '/dashboard
 
 ---
 
-## 6. `RSHONO_DEPLOY=constructor` is accepted as a deploy target
+## ~~6. `RSHONO_DEPLOY=constructor` is accepted as a deploy target~~ — fixed in `b8471d6`
 
 **Severity: low** (bad error message, no security impact)
 **`src/deploy/presets.ts:184`** (and `:162`)
