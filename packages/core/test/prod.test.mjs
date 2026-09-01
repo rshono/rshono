@@ -436,6 +436,19 @@ test('a method a page route does not answer is a 404, not a 405', async () => {
   const options = await fetch(`${base}/api/boom`, { method: 'OPTIONS', headers: { Origin: base } });
   await options.text();
   assert.equal(options.status, 500, 'an endpoint route with no method of its own answers every one of them');
+
+  // And it can name that method rather than taking every one: `method: 'options'` is how an app answers
+  // the CORS preflight a cross-origin action needs, which no page route ever will.
+  const preflight = await fetch(`${base}/api/preflight`, { method: 'OPTIONS', headers: { Origin: 'https://admin.example' } });
+  await preflight.text();
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-methods'), 'POST, OPTIONS');
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://admin.example');
+
+  // …and only that method: the same path asked for as a page is the notFound page.
+  const asPage = await fetch(`${base}/api/preflight`, { headers: { Accept: 'text/html' } });
+  await asPage.text();
+  assert.equal(asPage.status, 404, 'an endpoint that names one method answers only that one');
 });
 
 // A HEAD promises the headers its GET would send, so it takes the same path — including the prerendered

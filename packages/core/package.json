@@ -56,6 +56,7 @@
     "dev": "tsc -p tsconfig.build.json --watch",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "test:coverage": "npm run build && node --experimental-test-coverage --test-coverage-include=\"dist/**\" --test-coverage-lines=82 --test-coverage-branches=90 --test-coverage-functions=75 --test --test-concurrency=1 \"test/*.test.mjs\"",
     "test:browser": "npm run build && playwright test",
     "prepack": "npm run build"
   },

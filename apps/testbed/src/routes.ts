@@ -70,6 +70,14 @@ export const routes = defineRoutes({
     },
     {
       type: 'endpoint',
+      path: '/api/preflight',
+      // The one method a page route never answers and a cross-origin action needs answered: a CORS
+      // preflight is an OPTIONS.
+      method: 'options',
+      server: () => import('./preflight'),
+    },
+    {
+      type: 'endpoint',
       path: '/api/session',
       // Two methods, one handler. The alternative is `'all'` plus a hand-rolled check, which would also
       // answer every method nobody asked it to.

@@ -55,10 +55,21 @@ pnpm check:pins                        # the exact pins agree: manifests, overri
 pnpm lint                              # one ESLint config, every package
 pnpm --filter @rshono/core typecheck
 pnpm --filter @rshono/core test        # unit + minimal-app + postcss + dev + production e2e + deploy targets
+pnpm --filter @rshono/core test:coverage # …the same, against a coverage floor over dist/**
 pnpm --filter @rshono/core test:browser  # Playwright: hydration, soft nav, actions, boundaries
 pnpm --filter @rshono/create test      # every combination of scaffolder options, asserted in memory
 CREATE_RSHONO_E2E=1 pnpm --filter @rshono/create test   # …and really installed and built
 ```
+
+`test:coverage` is `test` with a floor: it fails when line, branch or function coverage of `dist/**` drops
+below what is in `package.json`. It measures what the suite reaches **in process**, so the e2e suites — which
+run the app in a child process — contribute almost nothing to it, and neither does the browser-only client
+runtime. Raise the floor when a change lifts it; do not lower it to make a change fit.
+
+`test:browser` is a **separate** command and a separate CI job, not part of `pnpm test`: it needs Chromium.
+It is also the only coverage the client runtime has — soft navigation, hydration, the fatal overlay, an
+action's response reaching the browser — so a green local `pnpm test` says nothing about any of that. Run it
+before pushing a change to `src/runtime/entry.client.tsx` or to what a page sends the browser.
 
 CI runs all of it on Ubuntu and Windows, on Node 22 and 24. Windows is in the matrix because the framework
 resolves and compares absolute paths in several places, which is exactly where it breaks.

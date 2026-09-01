@@ -135,6 +135,31 @@ jobs:
         env:
           CREATE_RSHONO_E2E: '1'
 
+  coverage:
+    name: coverage floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A floor rather than a report, so a new branch cannot land untested. Scoped to `dist/**`: the report
+      # otherwise fills with the testbed's own bundle and the temp directories the e2e suites start servers
+      # from, neither of which is this package's code. Ubuntu only — one measurement of one tree is the
+      # gate, and the numbers do not differ by platform.
+      #
+      # It measures what the suite reaches *in process*. The e2e suites run the app in a child process, so
+      # what they exercise does not count towards it, and neither does the browser-only client runtime.
+      - name: Test with a coverage floor
+        run: pnpm --filter @rshono/core test:coverage
+
   browser:
     name: browser
     runs-on: ubuntu-latest
