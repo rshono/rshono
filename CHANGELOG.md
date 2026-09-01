@@ -9,7 +9,7 @@ from a maintainer's machine with `pnpm release` — see CONTRIBUTING.md.
 Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
 those.
 
-## [Unreleased]
+## 1.0.0-rc.18
 
 ### Changed
 
