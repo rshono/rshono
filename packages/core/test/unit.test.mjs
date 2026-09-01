@@ -6,20 +6,21 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unli
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 
 import { scanPageFiles } from '../dist/builder/page-files.js';
 import { checkReactVersions } from '../dist/builder/react-versions.js';
 import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
 import { appendVary, etagMatches } from '../dist/server/headers.js';
+import { loadConfig } from '../dist/server/load-config.js';
 import { parsePort, resolveServerConfig } from '../dist/server/server-config.js';
 import { createPageCache, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
-import { beginPageRender, RequestContext } from '../dist/runtime/context.js';
+import { beginPageRender, onServerError, publicUrl, reportServerError, RequestContext } from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
 import { validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
 import { MINIMAL_APP_DIR, TESTBED_DIR } from './helpers.mjs';
@@ -303,6 +304,257 @@ describe('injectFlightPayload', () => {
 // Two fields, because only two things here are decided by the build. The CSRF check, the CSP and the
 // body cap used to live alongside them and are now Hono middleware an app registers in src/server.ts
 // — see prod-config.test.mjs, which exercises them over HTTP rather than through a resolver.
+// The single funnel every caught server-side error goes through. `prod.test.mjs` covers the happy path over
+// HTTP; these are the parts an app only meets when something else has already gone wrong.
+describe('reportServerError', () => {
+  const hono = { req: { raw: new Request('http://example.test/boom') } };
+  const report = (error, source = 'request') => reportServerError(error, { source, hono, message: '[rshono] test:' });
+
+  /** Runs `body` with `console.error` collected rather than printed — every report writes one. */
+  function withStderr(body) {
+    const lines = [];
+    const original = console.error;
+    console.error = (...args) => lines.push(args.map(String).join(' '));
+    try {
+      body(lines);
+    } finally {
+      console.error = original;
+    }
+    return lines;
+  }
+
+  // Registered handlers are module state with no way to unregister, so every test sets its own and the
+  // last one leaves a no-op behind.
+  after(() => onServerError(() => {}));
+
+  test('hands the handler the source, the request and the Hono context, and still writes to stderr', () => {
+    const seen = [];
+    onServerError((error, context) => seen.push({ error, ...context }));
+    const lines = withStderr(() => report(new Error('boom'), 'action'));
+
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].source, 'action');
+    assert.equal(seen[0].error.message, 'boom');
+    assert.equal(seen[0].request.url, 'http://example.test/boom', 'the request is derived from the context');
+    assert.equal(seen[0].hono, hono);
+    assert.equal(typeof seen[0].waitUntil, 'function');
+    assert.match(lines.join('\n'), /\[rshono\] test:/, 'a handler must not replace the stderr log');
+  });
+
+  test('reports one fault once, however many stages catch it', () => {
+    const seen = [];
+    onServerError((_error, { source }) => seen.push(source));
+    withStderr(() => {
+      const error = new Error('one fault');
+      // What a thrown server action does: reported where it is known to be an action, then re-thrown, which
+      // lands it in the top-level handler as well. Two sources for one fault is worse than only the outer.
+      report(error, 'action');
+      report(error, 'request');
+    });
+    assert.deepEqual(seen, ['action'], 'the first stage to recognise it wins — it is the one that knows what it was');
+  });
+
+  test('reports a primitive throw wherever it is caught, having nothing to track it by', () => {
+    const seen = [];
+    onServerError((_error, { source }) => seen.push(source));
+    withStderr(() => {
+      report('a string', 'render');
+      report('a string', 'request');
+    });
+    assert.deepEqual(seen, ['render', 'request'], 'a primitive cannot go in a WeakSet, so it is reported twice');
+  });
+
+  test('a handler that throws is caught and logged, and does not fail the request', () => {
+    onServerError(() => {
+      throw new Error('the tracker is down');
+    });
+    const lines = withStderr(() => {
+      assert.doesNotThrow(() => report(new Error('boom')), 'reporting can never be what fails a request');
+    });
+    assert.match(lines.join('\n'), /the onServerError handler threw/);
+    assert.match(lines.join('\n'), /the tracker is down/, 'and the handler’s own error is not swallowed');
+  });
+
+  test('registering again replaces the previous handler', () => {
+    const calls = [];
+    onServerError(() => calls.push('first'));
+    onServerError(() => calls.push('second'));
+    withStderr(() => report(new Error('boom')));
+    assert.deepEqual(calls, ['second'], 'one funnel, not a growing list');
+  });
+
+  test('waitUntil is a no-op where the platform has no execution context, and swallows a rejection', async () => {
+    // `c.executionCtx` *throws* rather than answering undefined, so a handler reaching for it itself would
+    // have its report swallowed by the guard above — on exactly the platforms where nothing needed holding
+    // open. And an unhandled rejection from a report must not be what ends the process.
+    const rejections = [];
+    const onRejection = (error) => rejections.push(error);
+    process.on('unhandledRejection', onRejection);
+    // Captured across the await rather than with `withStderr`: the rejection is logged a tick after the
+    // report returns, which is exactly the window that helper closes.
+    const lines = [];
+    const original = console.error;
+    console.error = (...args) => lines.push(args.map(String).join(' '));
+    try {
+      onServerError((_error, { waitUntil }) => {
+        assert.doesNotThrow(() => waitUntil(Promise.resolve('sent')));
+        waitUntil(Promise.reject(new Error('the tracker refused it')));
+      });
+      report(new Error('boom'));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(rejections, [], 'a failed report must not surface as an unhandled rejection');
+      assert.match(lines.join('\n'), /waitUntil rejected/);
+      assert.match(lines.join('\n'), /the tracker refused it/);
+    } finally {
+      console.error = original;
+      process.off('unhandledRejection', onRejection);
+    }
+  });
+});
+
+// Every branch here ends in a message someone reads while a build is failing, and only the happy path of
+// `--config` was covered — indirectly, by `prod-config.test.mjs` building with a fixture config.
+describe('loadConfig', () => {
+  test('returns an empty config where the project has none', async () => {
+    assert.deepEqual(await loadConfig(tempDir()), {}, 'no config file is not an error — every field has a default');
+  });
+
+  test('finds rshono.config.{ts,js,mjs} at the root, in that order', async () => {
+    for (const [name, marker] of [
+      ['rshono.config.ts', 'ts'],
+      ['rshono.config.js', 'js'],
+      ['rshono.config.mjs', 'mjs'],
+    ]) {
+      const dir = tempDir();
+      writeFileSync(join(dir, name), `export default { siteUrl: 'https://${marker}.example' };\n`);
+      assert.equal((await loadConfig(dir)).siteUrl, `https://${marker}.example`, `${name} must be found`);
+    }
+
+    // Precedence, so a leftover file cannot quietly win: .ts first.
+    const dir = tempDir();
+    writeFileSync(join(dir, 'rshono.config.mjs'), "export default { siteUrl: 'https://mjs.example' };\n");
+    writeFileSync(join(dir, 'rshono.config.ts'), "export default { siteUrl: 'https://ts.example' };\n");
+    assert.equal((await loadConfig(dir)).siteUrl, 'https://ts.example');
+  });
+
+  test('names an explicit --config that is not there, rather than failing later', async () => {
+    const missing = join(tempDir(), 'nope.config.mjs');
+    await assert.rejects(loadConfig(tempDir(), missing), /\[rshono\] config file not found: /);
+  });
+
+  test('resolves a relative --config against the working directory', async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'custom.config.mjs'), "export default { siteUrl: 'https://custom.example' };\n");
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      assert.equal((await loadConfig(tempDir(), 'custom.config.mjs')).siteUrl, 'https://custom.example');
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  test('says a config with no default export is missing one', async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'rshono.config.mjs'), "export const config = { siteUrl: 'https://x.example' };\n");
+    await assert.rejects(loadConfig(dir), /must `export default` a config object/);
+  });
+
+  // The bespoke branch: Node strips types itself, and the one thing it will not do is rewrite a `.js`
+  // specifier to the `.ts` file beside it. Without the hint this surfaces as a raw ERR_MODULE_NOT_FOUND
+  // naming a path that does exist — as a .ts file.
+  test("explains a .ts config importing a sibling by its '.js' specifier", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'shared.ts'), 'export const siteUrl = "https://shared.example";\n');
+    writeFileSync(join(dir, 'rshono.config.ts'), "import { siteUrl } from './shared.js';\nexport default { siteUrl };\n");
+    await assert.rejects(loadConfig(dir), (error) => {
+      assert.match(error.message, /imports a module Node could not resolve/);
+      assert.match(error.message, /does not rewrite a \.js specifier/);
+      assert.equal(error.cause?.code, 'ERR_MODULE_NOT_FOUND', 'the original is kept as the cause');
+      return true;
+    });
+
+    // And the same import by its real extension loads, so the advice is advice that works. In a directory
+    // of its own: Node's module registry keeps the failed load above under its URL, so rewriting the file
+    // in place would re-throw it.
+    const fixed = tempDir();
+    writeFileSync(join(fixed, 'shared.ts'), 'export const siteUrl = "https://shared.example";\n');
+    writeFileSync(join(fixed, 'rshono.config.ts'), "import { siteUrl } from './shared.ts';\nexport default { siteUrl };\n");
+    assert.equal((await loadConfig(fixed)).siteUrl, 'https://shared.example');
+  });
+
+  test('lets any other import failure through as itself', async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, 'rshono.config.mjs'), 'throw new Error("config blew up");\n');
+    await assert.rejects(loadConfig(dir), /config blew up/, 'a config that throws must not be dressed up as a resolution hint');
+  });
+});
+
+// The browser-facing URL, which is what `csrf()` and every absolute link the app builds depend on. Reached
+// only through `prod-config.test.mjs`'s `csrf()` assertions until now, so the pieces below — a forwarded
+// chain, a forwarded host with no port, a host that is not one — were covered end to end at best and not at
+// all in the cases the e2e app does not send.
+describe('publicUrl', () => {
+  /** The two members `publicUrl` reads, and nothing else, so the test says what it depends on. */
+  const request = (url, headers = {}) => ({ req: { url, header: (name) => headers[name.toLowerCase()] } });
+
+  test('ignores the forwarded headers when trustProxy is off', () => {
+    const url = publicUrl(request('http://127.0.0.1:3000/a?b=1', { 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' }));
+    assert.equal(url.href, 'http://127.0.0.1:3000/a?b=1', 'the default must be the address the server was reached on');
+  });
+
+  describe('with trustProxy on', () => {
+    // The flag is a module-level const read from the `DefinePlugin` global when the module is first
+    // evaluated, so the only way to reach the other branch is a fresh module instance with the global
+    // already set. The query string is what makes the import fresh.
+    let trusted;
+    before(async () => {
+      globalThis.__RSHONO_CONFIG__ = { trustProxy: true, isDev: false };
+      trusted = (await import('../dist/runtime/context.js?trustProxy=1')).publicUrl;
+    });
+    after(() => {
+      delete globalThis.__RSHONO_CONFIG__;
+    });
+
+    test('takes the host and scheme the browser used, and drops the internal port', () => {
+      // The port is the subtle one: assigning `url.host` would keep :3000 when the new value has none,
+      // which is why the implementation parses instead. Asserted end to end once; never in isolation.
+      const url = trusted(request('http://127.0.0.1:3000/a?b=1', { 'x-forwarded-host': 'example.com', 'x-forwarded-proto': 'https' }));
+      assert.equal(url.href, 'https://example.com/a?b=1');
+    });
+
+    test('keeps a port the forwarded host names', () => {
+      const url = trusted(request('http://127.0.0.1:3000/', { 'x-forwarded-host': 'example.com:8443', 'x-forwarded-proto': 'https' }));
+      assert.equal(url.href, 'https://example.com:8443/');
+    });
+
+    test('honours the first hop of a proxy chain, which is the client-facing one', () => {
+      const url = trusted(
+        request('http://127.0.0.1:3000/', { 'x-forwarded-host': 'example.com, inner.local:8080', 'x-forwarded-proto': 'https, http' }),
+      );
+      assert.equal(url.href, 'https://example.com/', 'a chain appends, so the browser-facing value is the first entry');
+    });
+
+    test('leaves the URL alone where a header is not usable', () => {
+      const internal = 'http://127.0.0.1:3000/a';
+      // A host no URL can hold, an empty value, and a scheme a browser could not have requested. Each
+      // leaves that half of the URL as it was rather than throwing or guessing.
+      assert.equal(trusted(request(internal, { 'x-forwarded-host': 'a b' })).href, internal, 'an unparseable host');
+      assert.equal(trusted(request(internal, { 'x-forwarded-host': '  ' })).href, internal, 'a blank host');
+      assert.equal(trusted(request(internal, { 'x-forwarded-host': ', example.com' })).href, internal, 'a blank first hop');
+      assert.equal(trusted(request(internal, { 'x-forwarded-proto': 'ftp' })).href, internal, 'a scheme that is not http(s)');
+      assert.equal(trusted(request(internal, { 'x-forwarded-proto': 'HTTPS' })).href, internal, 'and it is compared case-sensitively');
+    });
+
+    test('returns a fresh URL each call, so a caller mutating one cannot affect the next', () => {
+      const c = request('http://127.0.0.1:3000/', { 'x-forwarded-host': 'example.com' });
+      const first = trusted(c);
+      first.pathname = '/mutated';
+      assert.equal(trusted(c).pathname, '/');
+    });
+  });
+});
+
 describe('resolveServerConfig', () => {
   test('applies the documented defaults', () => {
     const config = resolveServerConfig({}, { isDev: false });
