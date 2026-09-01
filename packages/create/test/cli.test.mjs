@@ -148,3 +148,41 @@ test('the dotfiles a published tarball cannot carry arrive as dotfiles', () => {
   }
   assert.ok(!existsSync(join(target, '_gitignore')));
 });
+
+/*
+ * `.` was special-cased as a literal, so `./` — the same directory, spelled the way a shell completes it —
+ * missed the branch and reached `toPackageName('./')`, which strips the `./` and the trailing `/` and has
+ * nothing left to name the package with. Resolving the path first answers for every spelling of it.
+ */
+test('every spelling of the current directory scaffolds into it and takes its name', () => {
+  for (const [index, spelling] of ['.', './', 'sub/..'].entries()) {
+    const target = dir(`cwd-spelling-${index}`);
+    const result = create([spelling, '-y', '--no-install', '--no-git'], { cwd: target });
+    assert.equal(result.status, 0, `"${spelling}" should scaffold into the current directory:\n${result.output}`);
+    assert.equal(
+      JSON.parse(readFileSync(join(target, 'package.json'), 'utf8')).name,
+      `cwd-spelling-${index}`,
+      `"${spelling}" should take the directory's name`,
+    );
+  }
+});
+
+/*
+ * A dry run writes nothing, so there is nothing for an existing file to conflict with — and the refusal's
+ * advice (`--force`) described an action the user had not asked for. The check itself still stands for a run
+ * that writes, which is the assertion that matters here.
+ */
+test('--dry-run reports the plan in a directory that is not empty, and a real run still refuses', () => {
+  const target = dir('dry-in-occupied');
+  writeFileSync(join(target, 'existing.txt'), 'mine\n');
+
+  const dry = create(['dry-in-occupied', '-y', '--dry-run']);
+  assert.equal(dry.status, 0, `a dry run writes nothing, so it has nothing to conflict with:\n${dry.output}`);
+  assert.match(dry.output, /Dry run: nothing was written/);
+  assert.doesNotMatch(dry.output, /--force/, 'the advice describes an action the user did not ask for');
+  assert.deepEqual(readdirSync(target), ['existing.txt'], 'and it really wrote nothing');
+
+  const real = create(['dry-in-occupied', '-y', '--no-install', '--no-git']);
+  assert.equal(real.status, 1, 'the check still stands for a run that writes');
+  assert.match(real.output, /"dry-in-occupied" is not empty \(existing\.txt\) — pass --force to scaffold into it anyway\./);
+});

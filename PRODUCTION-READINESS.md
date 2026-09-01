@@ -308,7 +308,7 @@ after a dev run reports on bundles rather than on anything you wrote."* (`templa
 
 ## Low
 
-### L1 — `create-rshono` argument handling: three small gaps
+### L1 — ~~`create-rshono` argument handling: three small gaps~~
 
 All three reproduced; all three in `packages/create/src/cli.ts` / `options.ts`.
 

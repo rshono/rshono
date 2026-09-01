@@ -77,6 +77,11 @@ export const QUALITY_PRESETS: readonly QualityPreset[] = [
 /**
  * Turns whatever the user typed into a name npm will accept, or `null` when nothing usable is left.
  * Lowercasing and replacing runs of invalid characters covers the ordinary cases (`My App`, `my_app`).
+ *
+ * The promise is checked rather than assumed: the result goes through {@link isValidPackageName} on the way
+ * out. It used to be spelled as a rule per character class here and the check made again by the caller, which
+ * left the exported function able to return a name npm refuses — `_leading` was one, because a leading
+ * underscore is stripped by npm's rule and not by this one.
  */
 export function toPackageName(input: string): string | null {
   const trimmed = input
@@ -95,11 +100,13 @@ export function toPackageName(input: string): string | null {
     .toLowerCase()
     .replace(/[\\/]/g, '/')
     .replace(/[^a-z\d\-._~/@]+/g, '-')
-    .replace(/^-+/, '')
+    // `_` alongside `-`: npm refuses a leading underscore too, and it is what `My_App` and `_internal` leave
+    // behind once the invalid runs are replaced.
+    .replace(/^[-_]+/, '')
     .replace(/-+$/, '');
 
-  if (!name || name === '@' || (!scoped && name.startsWith('.'))) return null;
-  return name.slice(0, 214);
+  const trimmedName = name.slice(0, 214);
+  return isValidPackageName(trimmedName) ? trimmedName : null;
 }
 
 /** npm's own rule, narrowed to what we ever generate: no uppercase, no leading dot or underscore. */

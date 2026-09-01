@@ -446,6 +446,43 @@ test('a directory name becomes a package name npm will accept', () => {
 });
 
 /*
+ * The contract, held rather than restated: `toPackageName` says it returns a name npm will accept, and its
+ * result now goes through `isValidPackageName` on the way out. It used to spell npm's rule again as a
+ * character check per class, which left `_leading` coming back as itself — npm refuses a leading underscore
+ * as it refuses a leading dot. Only the exported function was affected; the CLI called both and refused
+ * correctly, which is why this is a contract test and not a bug report.
+ */
+test('every name toPackageName returns is one npm accepts', () => {
+  const inputs = [
+    'My App',
+    './nested/my-app',
+    'my-app/',
+    '@scope/pkg',
+    '@scope/_pkg',
+    '  Spaced Out  ',
+    '_leading',
+    '__x__',
+    'My_App',
+    '.hidden',
+    '.',
+    './',
+    '_',
+    '@',
+    '',
+    '///',
+    '~tilde',
+    'ü'.repeat(300),
+  ];
+  for (const input of inputs) {
+    const name = toPackageName(input);
+    if (name === null) continue;
+    assert.ok(isValidPackageName(name), `toPackageName(${JSON.stringify(input)}) returned ${JSON.stringify(name)}, which npm refuses`);
+  }
+  // And the ordinary underscore case still produces something usable rather than nothing.
+  assert.equal(toPackageName('_leading'), 'leading');
+});
+
+/*
  * `dist/` is what `rshono build` writes and `.rshono/` is what `rshono dev` writes, and both hold generated
  * bundles: a linter that reads them reports on code nobody wrote, and `format` rewrites it. Prettier, oxfmt
  * and oxlint all honour `.gitignore`, which every scaffold carries — Biome does not, unless `vcs.enabled` and
