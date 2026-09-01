@@ -89,6 +89,8 @@ Rules worth knowing:
 - **Under a [nonce-based CSP](/docs/configuration#csp)** the document is rendered per request — a
   prerendered file cannot carry a per-request nonce. The flight payload is still served from the
   prerender, and a policy with no nonce in it keeps its prerendered documents too.
+- **`Cache-Control: public, max-age=300`**, with a weak `ETag`. To promise more — a longer `max-age`, a
+  `stale-while-revalidate` — set it from middleware [after `await next()`](/docs/configuration#response-headers-and-caching).
 
 ## Endpoint routes
 

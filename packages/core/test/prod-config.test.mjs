@@ -208,3 +208,34 @@ describe('a server.ts with no csrf()', () => {
     assert.notEqual(res.status, 403, 'with no csrf() middleware, a cross-origin action must not be rejected');
   });
 });
+
+// `SSG_CACHE_CONTROL` is `public, max-age=300` and has no config field, deliberately — it is a
+// per-response header and `rshono.config.ts` is compiled into the bundle. Middleware is the interface,
+// and the one thing a reader has to be told is *where* in the middleware it goes.
+describe('a server.ts that overrides the prerendered cache policy', () => {
+  const app = serve({ TESTBED_SSG_CACHE: '1' });
+
+  test('a header set after `await next()` replaces the framework default; one set before it does not', async () => {
+    const res = await fetch(`${app.base}/docs/getting-started`);
+    await res.text();
+    assert.equal(res.status, 200);
+    // The middleware sets `public, max-age=1` before `await next()` and the real value after it. Only the
+    // second lands: the SSG path builds its response with `cache-control` in the bag it hands `c.body(...)`,
+    // which replaces a header prepared with `c.header(...)`. That is why the recipe has to say "after".
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=86400, stale-while-revalidate=604800');
+    assert.ok(res.headers.get('etag'), 'a header edit, not a re-render — the prerendered ETag is untouched');
+    assert.equal(res.headers.get('vary'), 'RSC', 'and so is the Vary that makes one URL two answers');
+  });
+
+  test('the flight payload of the same page is overridden too, since both come off the same path', async () => {
+    const res = await fetch(`${app.base}/docs/getting-started`, { headers: { RSC: '1' } });
+    await res.text();
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=86400, stale-while-revalidate=604800');
+  });
+
+  test('a dynamic page outside the middleware keeps `private, no-cache`', async () => {
+    const res = await fetch(`${app.base}/`);
+    await res.text();
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'the default must not be widened for everything');
+  });
+});

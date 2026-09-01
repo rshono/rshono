@@ -123,6 +123,24 @@ server.use('*', async (c, next) => {
   c.res.headers.set('X-Response-Time', `${(end - start).toFixed(2)} ms`);
 });
 
+/**
+ * The documented way to change what a prerendered page promises about caching: the framework's
+ * `public, max-age=300` is a per-response header, not a config field, so middleware is the interface.
+ *
+ * **After `await next()`.** The line before it is kept on purpose — it is what a reader tries first, and
+ * prod-config.test.mjs asserts that it does not survive: the SSG path builds its response with
+ * `cache-control` in the bag it hands `c.body(...)`, which replaces a prepared header.
+ *
+ * Env-gated so the rest of the suite still sees the framework's own default; a real app would just set it.
+ */
+if (process.env.TESTBED_SSG_CACHE === '1') {
+  server.use('/docs/*', async (c, next) => {
+    c.header('cache-control', 'public, max-age=1');
+    await next();
+    c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  });
+}
+
 /** Reads a value out of a real `node_modules` dependency — see the import at the top of this file. */
 server.get('/api/external-dep', (c) => c.text(EXTERNAL_DEP_MARKER));
 

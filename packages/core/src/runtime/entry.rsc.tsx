@@ -43,7 +43,24 @@ const serverApp = validateServerApp(serverAppModule);
 // Compiled into the bundle from rshono.config.ts by DefinePlugin; there is no runtime env-var interface.
 const { isDev } = __RSHONO_CONFIG__;
 
-/** How long a prerendered page may be reused before revalidating. Also what `public/` files get. */
+/**
+ * How long a prerendered page may be reused before revalidating. Also what `public/` files get.
+ *
+ * Not a config field, deliberately: it is a per-response header, and `rshono.config.ts` is compiled into the
+ * bundle — a cache policy you cannot change without a rebuild is the wrong shape. An app that wants a longer
+ * `max-age`, or a `stale-while-revalidate`, sets it from middleware **after `await next()`**:
+ *
+ * ```ts
+ * server.use('/docs/*', async (c, next) => {
+ *   await next();
+ *   c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+ * });
+ * ```
+ *
+ * After, because the response below is built with `cache-control` in the bag it hands `c.body(...)`, and
+ * that replaces a header prepared with `c.header(...)` before the handler ran. The `ETag` is untouched
+ * either way, so revalidation still costs a 304 rather than the page.
+ */
 const SSG_CACHE_CONTROL = 'public, max-age=300';
 
 /**
