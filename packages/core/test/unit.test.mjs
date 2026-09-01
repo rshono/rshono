@@ -1420,6 +1420,16 @@ describe('deploy target resolution', () => {
     assert.throws(() => resolveDeployPreset({ config: 'fly' }), new RegExp(DEPLOY_TARGETS.join(', ')));
     assert.equal(deployHintFor('fly'), null, 'a dist/ from a newer rshono can carry a name this one lacks');
   });
+
+  // A bare bracket access resolves every `Object.prototype` key to an inherited value, which then passes a
+  // truthiness guard: `RSHONO_DEPLOY=constructor` used to reach the builder and die there on
+  // `preset.runtimeModule.split('/')` instead of being named as the typo it is.
+  test('a prototype key is a typo, not a target', () => {
+    for (const key of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+      assert.throws(() => resolveDeployPreset({ env: key }), /unknown deploy target/, `${key} must not resolve to a preset`);
+      assert.equal(deployHintFor(key), null, `${key} has no deploy hint`);
+    }
+  });
 });
 
 describe('the deploy seam', () => {
