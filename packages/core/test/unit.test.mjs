@@ -981,6 +981,26 @@ describe('prerenderStaticRoutes', () => {
     ]);
   });
 
+  test('writes a payload carrying binary rows byte-for-byte', async () => {
+    // A flight payload is not text: `emitChunk` puts the raw bytes of a `Uint8Array` a server component
+    // returned straight on the wire. Reading a variant with `response.text()` is a *non-fatal* UTF-8 decode,
+    // so each of those bytes became U+FFFD and was written back out as three — a page the build reports as
+    // prerendered and the client cannot parse, on every soft navigation to it, forever.
+    const payload = Buffer.from('303a226869220a313afffe0a', 'hex');
+    const ssgDir = tempDir();
+    await prerenderStaticRoutes({
+      ssgDir,
+      routes: [{ path: '/about', render: 'static', component: async () => ({ default: () => null }) }],
+      fetch: (request) =>
+        request.headers.get('RSC') === '1'
+          ? new Response(payload, { status: 200, headers: { 'Content-Type': 'text/x-component' } })
+          : new Response('<!DOCTYPE html><p>ok</p>', { status: 200, headers: { 'Content-Type': 'text/html' } }),
+    });
+
+    const stored = await readPrerendered(ssgDir, '/about', 'flight');
+    assert.deepEqual(Buffer.from(stored.body), payload, 'the file on disk must be the bytes the render produced');
+  });
+
   test('renders a path once however many times staticPaths returns it', async () => {
     const requested = [];
     const warnings = [];

@@ -178,7 +178,7 @@ async function mapBounded<T, R>(items: readonly T[], limit: number, run: (item: 
  * pass renders a page exactly as a request does, so per request it will throw again: skipping it prints
  * "will SSR per request" over a route that will 500 forever, and exits 0.
  */
-type RenderedVariant = { ok: true; body: string } | { ok: false; reason: string; failed: boolean };
+type RenderedVariant = { ok: true; body: Uint8Array } | { ok: false; reason: string; failed: boolean };
 
 async function renderVariant(fetch: PrerenderOptions['fetch'], url: string, variant: PrerenderVariant): Promise<RenderedVariant> {
   const response = await fetch(new Request(url, { headers: VARIANTS[variant].headers }));
@@ -186,7 +186,10 @@ async function renderVariant(fetch: PrerenderOptions['fetch'], url: string, vari
   if (!(response.headers.get('Content-Type') ?? '').includes(VARIANTS[variant].contentType)) {
     return { ok: false, reason: `a non-${VARIANTS[variant].contentType} response`, failed: false };
   }
-  return { ok: true, body: await response.text() };
+  // Bytes, not `response.text()`. That is a *non-fatal* UTF-8 decode, so every byte of a binary row in a
+  // flight payload — `emitChunk` puts raw typed-array bytes on the wire — becomes U+FFFD, and writing the
+  // string back out spends three real bytes on each one. The page is then prerendered and unparseable.
+  return { ok: true, body: new Uint8Array(await response.arrayBuffer()) };
 }
 
 /** A path the pass will render, resolved far enough that nothing left can fail the build. */
@@ -281,7 +284,7 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
     // Both representations of a page share its directory and differ only in the file name.
     const pageDir = join(ssgDir, dirname(relPath));
     const wrote: string[] = [];
-    const write = (variant: PrerenderVariant, body: string) => {
+    const write = (variant: PrerenderVariant, body: Uint8Array) => {
       mkdirSync(pageDir, { recursive: true });
       writeFileSync(join(pageDir, VARIANTS[variant].file), body);
       // `ssgFilePath` again rather than the `join` above: the manifest is read against what a *request*
