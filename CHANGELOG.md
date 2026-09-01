@@ -53,6 +53,19 @@ entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5
   `notfound` is still refused — and now refused when the object arrives through a variable too, which
   excess-property checking never covered.
 
+- **`@rspack/core` 2.2.1 → 2.2.2.** A patch on the pin rc.18 moved to. `react-server-dom-rspack` stays at
+  **0.1.0** and its `@rspack/core: ^2.2.0-0` peer is unchanged, so the pair still resolves as one and this is
+  the manifests, the overrides and the lockfile in a single commit — nothing in the framework moved. Upstream
+  is bug fixes and compile-time performance; the two fixes nearest what rshono builds are `import.meta.url`
+  surviving `createRequire` when `importMeta` is disabled, and CSS Modules local ident hashes no longer
+  varying with `exportsOnly` — the flag that necessarily differs between a client build that emits CSS and a
+  server build that only needs the class names. rshono sets neither option, so it takes the defaults on both
+  sides of that.
+
+  2.2.2 was published the same day it was taken here, which is inside pnpm's `minimumReleaseAge`; the sixteen
+  `@rspack/*@2.2.2` entries added to `minimumReleaseAgeExclude` are what waives the cooling-off for this one
+  version, and they can be dropped once the window has passed.
+
 ### Added
 
 - **`rshono build` checks every route's own module.** Four structural mistakes survived a build and then
