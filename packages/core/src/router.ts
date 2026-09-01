@@ -308,6 +308,25 @@ export interface RouteConfig<TRoutes extends readonly Route[] = readonly Route[]
   error?: FallbackPage;
 }
 
+/**
+ * The same check for `staticPaths`, whose param sets have to fill the route's own path: a key that does not
+ * is otherwise a build-time throw from `interpolatePath` rather than a type error.
+ *
+ * Keys only, not full assignability, because the declared field type is `Record<string, string>` and a
+ * `staticPaths` annotated as returning exactly that has to stay accepted — an index signature carries no
+ * key to check, so it passes. Skipped where the path has no params, because `staticPaths` is not called for
+ * such a route at all and an error there would be about the wrong thing.
+ */
+type ValidateStaticPaths<R, P extends string> = ParamKeys<P> extends never
+  ? R
+  : R extends { staticPaths: () => infer Sets }
+    ? Awaited<Sets> extends ReadonlyArray<infer Set>
+      ? [keyof PathParams<P>] extends [keyof Set]
+        ? R
+        : R & { staticPaths: `every param set staticPaths returns needs the params of '${P}'` }
+      : R
+    : R;
+
 // `PageProps<P, any>`, not `PageProps<P>`: only the *path* is being checked, and pinning the Env would
 // fail every page that declares its own (`PageProps<'/x', MyEnv>`, to type `ctx.var`).
 type ValidateRoute<R> = R extends {
@@ -316,7 +335,7 @@ type ValidateRoute<R> = R extends {
 }
   ? // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Env is deliberately unpinned; see above.
     [PageProps<P, any>] extends [CP]
-    ? R
+    ? ValidateStaticPaths<R, P>
     : R & { component: `component props are not satisfied by PageProps<'${P}'>` }
   : R;
 

@@ -72,6 +72,11 @@ hit a database or the filesystem:
 staticPaths: async () => (await db.docs.all()).map((d) => ({ slug: d.slug })),
 ```
 
+`defineRoutes` checks the param sets against the route's own path, the same way it checks a page's props:
+a set that does not carry every `:param` of the path is a type error where the route is declared, not a
+build-time throw. Keys only — a `staticPaths` typed as returning `Record<string, string>` has none to
+check, so it is accepted and the build reports the mismatch instead.
+
 Rules worth knowing:
 
 - **Reading `ctx` throws.** There is no request at build time. Use `params` and `url`, or make the route
