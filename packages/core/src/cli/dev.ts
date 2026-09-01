@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 import { rspack, type Stats } from '@rspack/core';
 import { Hono } from 'hono';
 import { proxy } from 'hono/proxy';
+import { watch } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -14,6 +15,48 @@ import { SERVER_DEFAULTS } from '../server/server-config.js';
 import { createStaticAssetsApp } from '../server/static.js';
 
 const WORKER_READY_TIMEOUT_MS = 15_000;
+
+/**
+ * Files whose contents are *compiled into* a build rather than read per request, so no rebuild picks a change
+ * to them up: `.env` because the `PUBLIC_` view of it is baked into the client bundle by DefinePlugin and into
+ * the SSR layer by the env-shadow prelude, and `rshono.config.ts` because `ServerConfig` is a DefinePlugin
+ * literal too. `.env` is worse than the config, which the docs at least describe as build-time: a page that
+ * reads `process.env` rebuilds, serves, and shows the old value.
+ */
+const BAKED_IN_FILES = ['.env.local', '.env', 'rshono.config.ts', 'rshono.config.js', 'rshono.config.mjs'];
+
+/**
+ * Watches those files, only to say that a restart is needed.
+ *
+ * Reloading them for real means re-exec'ing this process: `process.loadEnvFile` does not override a variable
+ * that is already set, so the copy this process took at startup would survive an in-place reload — and the
+ * worker is spawned with `env: process.env`, so it would inherit the stale value too. Choreographing that
+ * against a bound port and a live SSE connection is a great deal of machinery to save one Ctrl-C; a line
+ * saying which key to press costs nothing and loses nobody an afternoon.
+ *
+ * The directory is watched rather than each file, so a file that does not exist yet is still covered — and
+ * because an editor's atomic save replaces the file, which a watch on the file itself does not survive. An
+ * explicit `--config` outside the project root is not covered: this is a convenience, not a contract.
+ */
+function warnOnBakedInFileChanges(rootDir: string): void {
+  const warnedAt = new Map<string, number>();
+  try {
+    // `persistent: false`: the dev server is kept alive by its listener, and a watcher that outlived it
+    // would hold the process open with nothing left to report to.
+    watch(rootDir, { persistent: false }, (_event, filename) => {
+      if (!filename || !BAKED_IN_FILES.includes(filename)) return;
+      // One save fires several events — a write, a rename, an attribute change — and they are all the same
+      // save. The window is short enough that a second real edit still gets its own line.
+      const now = Date.now();
+      if (now - (warnedAt.get(filename) ?? 0) < 250) return;
+      warnedAt.set(filename, now);
+      console.warn(`  ⚠ ${filename} changed — restart \`rshono dev\` to pick it up. It is compiled into the build, not read per request.`);
+    });
+  } catch {
+    // No watcher available: a filesystem that cannot, or a platform limit reached. Rebuilding still works,
+    // so the dev server goes on without the reminder rather than refusing to start over one.
+  }
+}
 
 /** An error as the dev server shows it in the browser: the stack where there is one, since this is dev. */
 function describe(error: unknown): string {
@@ -279,6 +322,8 @@ export async function devCommand(options: DevOptions): Promise<void> {
     }
     return response;
   });
+
+  warnOnBakedInFileChanges(rootDir);
 
   serve({ fetch: front.fetch, port, hostname: '127.0.0.1' }, (info) => {
     console.log(`  ➜ rshono dev server: http://localhost:${info.port}`);

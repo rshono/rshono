@@ -71,6 +71,11 @@ data down.
 `.env.local` and `.env` are loaded automatically, and the real environment wins over both. Commit `.env`
 with safe defaults; keep `.env.local` gitignored.
 
+Both are read **once, when the process starts**, and the `PUBLIC_` view of them is compiled into the bundle by
+`DefinePlugin` — so `rshono dev` does not pick up an edit to either. A rebuild is not enough and does not
+look like a failure: the page rebuilds, serves, and shows the old value. Restart the dev server. It watches
+both files and says so when one changes, and the same holds for `rshono.config.ts`, which is read once too.
+
 `getRequestContext().env` is that same environment, plus the platform's own runtime bindings where it has
 them — `deploy: 'cloudflare'`, where a KV namespace or a Worker secret arrives per request and wins over a
 process variable of the same name. On every other target it is `process.env` alone: Hono's `c.env` there is

@@ -226,7 +226,7 @@ A 404 is heuristically cacheable under RFC 9111 — which is exactly the reasoni
 has, and a shared cache may store that answer for a content-hashed URL that is about to become valid.
 One line, and the two paths agree.
 
-### M2 — `rshono dev` never picks up a `.env` change
+### M2 — ~~`rshono dev` never picks up a `.env` change~~
 
 `packages/core/src/cli/index.ts:63-64`, `packages/core/src/builder/public-env.ts`,
 `packages/core/src/cli/dev.ts:112`

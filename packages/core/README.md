@@ -325,6 +325,9 @@ Every target streams, which is the bar a new one has to clear.
   the `handler` an endpoint module owes, and `defineRoutes`' path ↔ props and `staticPaths` ↔ path checks — so
   run `tsc --noEmit` (`npm run typecheck` in a scaffolded app) in CI beside the build. The mistakes that make
   a route unservable are checked at build time whether or not you do.
+- **`.env` and `rshono.config.ts` are read once, at startup**, and what a build needs from them is compiled
+  in — so `rshono dev` does not pick up an edit to either, and a rebuild that serves the old value looks like
+  nothing happened. Restart it; it watches both and says so when one changes.
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
   production ships no client source maps).
