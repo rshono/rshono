@@ -2,6 +2,7 @@
 // exercises indirectly through one happy path. They import the *built* package, so they double as a
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -2265,5 +2266,36 @@ describe('assertRouteModules', () => {
       console.warn = warn;
     }
     assert.match(warnings.join('\n'), /"\/side-effect" could not be loaded at build time, so its module was not checked — DATABASE_URL is not set/);
+  });
+});
+
+// The CLI's failure paths print the report that says what went wrong and then exit. `process.exit` does not
+// drain a pipe — every CI job, and any `rshono build | tee` — so everything past the 64 KiB pipe buffer used
+// to be discarded, cutting a large Rspack error dump mid-error.
+describe('exit', () => {
+  const EXIT_MODULE = new URL('../dist/cli/exit.js', import.meta.url).href;
+  const spawnWriting = (bytes, exiting) =>
+    spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `import('${EXIT_MODULE}').then(async ({ exit }) => {
+           console.error('E'.repeat(${bytes}));
+           ${exiting}
+         })`,
+      ],
+      { encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
+    );
+
+  test('a piped stream is drained before the process goes away', () => {
+    const bytes = 300_000;
+    const drained = spawnWriting(bytes, 'await exit(1);');
+    assert.equal(drained.status, 1, 'the exit code still has to be the one asked for');
+    assert.equal(drained.stderr.length, bytes + 1, 'every byte written must reach the pipe');
+
+    // The same write without the helper, so the assertion above is measuring the drain and not a pipe
+    // that was never small enough to matter on this machine.
+    const cut = spawnWriting(bytes, 'process.exit(1);');
+    assert.ok(cut.stderr.length < bytes, `a bare process.exit is what truncates (${cut.stderr.length} bytes)`);
   });
 });
