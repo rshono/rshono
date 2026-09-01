@@ -256,9 +256,18 @@ export function injectFlightPayload(
 
   async function writeFlight(controller: TransformStreamDefaultController<Uint8Array>): Promise<void> {
     const reader = (flightReader = rscStream.getReader());
-    // `fatal`, so a chunk that split a multi-byte character throws instead of emitting U+FFFD; the catch
-    // below falls back to a byte-exact encoding for it.
-    const decoder = new TextDecoder('utf-8', { fatal: true });
+    // One chunk at a time, deliberately *not* `{ stream: true }`: anything that is not valid UTF-8 on its
+    // own — a binary row's bytes, or a chunk that split a multi-byte character — throws, and the catch below
+    // re-encodes that whole chunk byte-exactly.
+    //
+    // Streaming is what makes that fallback wrong. A chunk ending mid-character leaves its lead bytes inside
+    // the decoder to be emitted with the next chunk; when the next chunk is a binary row and throws, those
+    // bytes are in neither `decode()`'s return nor `value`, and the client reassembles a payload short by
+    // them. It also left the end-of-stream flush able to throw from outside any `try`.
+    //
+    // `ignoreBOM` because a per-chunk decode re-runs the BOM check on every call: without it any chunk whose
+    // first three bytes are EF BB BF would silently lose them.
+    const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
     const push = async (literal: string): Promise<void> => {
       const permit = takePermit();
       if (permit) await permit;
@@ -273,7 +282,7 @@ export function injectFlightPayload(
       // re-encoding the chunk and enqueueing it again.
       let literal: string;
       try {
-        literal = escapeScript(JSON.stringify(decoder.decode(value, { stream: true })));
+        literal = escapeScript(JSON.stringify(decoder.decode(value)));
       } catch {
         literal = `Uint8Array.from(atob(${JSON.stringify(btoa(latin1(value)))}), m => m.codePointAt(0))`;
       }
@@ -288,9 +297,8 @@ export function injectFlightPayload(
         return;
       }
     }
-    if (cancelled) return;
-    const remaining = decoder.decode();
-    if (remaining.length) await push(escapeScript(JSON.stringify(remaining)));
+    // No end-of-stream flush: a non-streaming decoder holds nothing between calls, so there is nothing left
+    // to emit — and the flush this replaces could throw, erroring the response mid-document. See above.
   }
 
   const transformer: CancellableTransformer<Uint8Array, Uint8Array> = {

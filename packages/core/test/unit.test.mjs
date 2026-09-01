@@ -162,6 +162,45 @@ describe('injectFlightPayload', () => {
     assert.match(html, /<\\!--/);
   });
 
+  // The `atob` fallback is how a binary row — a `Uint8Array` a server component handed a client one —
+  // survives the trip through a `<script>` tag. Reassembles the payload the way `entry.client.tsx` does,
+  // by running the emitted script bodies against a `__FLIGHT_DATA` shim, and asserts the bytes are the
+  // bytes that went in.
+  async function replayPayload(payloadChunks) {
+    const out = streamOf(['<html><body>hi</body></html>']).pipeThrough(injectFlightPayload(streamOf(payloadChunks)));
+    const html = await readAll(out);
+    const parts = [];
+    for (const [, body] of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) {
+      new Function('self', body)({ __FLIGHT_DATA: { push: (chunk) => parts.push(chunk) } });
+    }
+    return Buffer.concat(parts.map((part) => Buffer.from(typeof part === 'string' ? encoder.encode(part) : part)));
+  }
+
+  test('carries binary payload bytes through the document byte-exactly', async () => {
+    // The chunk boundary is the hazard: a payload cut mid-character used to leave its lead bytes inside a
+    // streaming decoder, and the next chunk's `atob` fallback — which re-encodes only the chunk that threw —
+    // dropped them. The client then reassembled a payload short by those bytes and failed to hydrate.
+    const payload = Buffer.from('303a22e282ac220a313afffe0a', 'hex');
+    const got = await replayPayload([payload.subarray(0, 5), payload.subarray(5)]);
+    assert.deepEqual(got, payload, 'the client must read back exactly the bytes the server wrote');
+  });
+
+  test('keeps a byte-order mark that opens a payload chunk', async () => {
+    // Decoding per chunk re-runs the BOM check on every call, so the decoder is `ignoreBOM`.
+    const payload = Buffer.from('efbbbf41', 'hex');
+    assert.deepEqual(await replayPayload([payload]), payload);
+  });
+
+  test('completes the response when the payload ends mid-character', async () => {
+    // The end-of-stream flush on a `fatal` decoder holding an incomplete sequence threw from outside any
+    // `try`, and the rejection errored the response stream: a truncated document with no trailer.
+    const out = streamOf(['<html><body>hi</body></html>']).pipeThrough(
+      injectFlightPayload(streamOf([encoder.encode('0:"hi"\n'), Uint8Array.from([0x31, 0x3a, 0x22, 0xe2])])),
+    );
+    const html = await readAll(out);
+    assert.equal(countOf(html, '</body></html>'), 1, 'the document still has to be closed');
+  });
+
   test('re-emits a trailer even when the document never had one', async () => {
     const html = await inject(['<p>fragment</p>']);
     assert.equal(countOf(html, '</body></html>'), 1);
