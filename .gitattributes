@@ -1,0 +1,19 @@
+# Line endings are normalised in the repository and in every working tree, on every platform.
+#
+# Two reasons, neither of them cosmetic:
+#
+# - `packages/create/templates/**` ships verbatim in the published tarball — `write.ts` writes the bytes it
+#   read, and `files` carries the directory as-is. So the templates' line endings are whichever the
+#   publishing checkout had. A release cut from a checkout with `core.autocrlf` on would hand every scaffolded
+#   app CRLF files; Prettier's `--check` ignores line endings, so nothing would fail, but the first
+#   `pnpm format` would rewrite every file in the project. The generator should not produce a different
+#   project depending on which machine published it.
+#
+# - The suites read templates and fixtures off disk and compare what they find. A Windows checkout used to
+#   hand the scaffolder's own suite `dist/\r` where it expected `dist/`, which failed on windows-latest only
+#   — the least useful place to find out. Two neighbouring assertions survived the same conversion by
+#   accident, through a `trimEnd()` and a CRLF-to-CRLF comparison.
+#
+# Safe to apply wholesale: nothing tracked here is binary, and there is no `.bat`, `.cmd` or `.ps1` that
+# needs CRLF. `text=auto` would leave a binary file alone regardless.
+* text=auto eol=lf

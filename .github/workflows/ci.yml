@@ -20,6 +20,8 @@ on:
       - '.github/workflows/ci.yml'
       # One config governs every package, so a rule change is a change to all of them.
       - 'eslint.config.mjs'
+      # It decides the line endings every file is checked out with, which the suites read off disk.
+      - '.gitattributes'
   pull_request:
     paths:
       - 'packages/**'
@@ -29,6 +31,7 @@ on:
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
       - 'eslint.config.mjs'
+      - '.gitattributes'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

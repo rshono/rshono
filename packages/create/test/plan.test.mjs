@@ -494,10 +494,17 @@ test('the generated output directories are out of every quality preset’s reach
     const label = `${combination.deploy}/${combination.styling}/${combination.preset}`;
     const result = plan(answers(combination), pm);
 
-    // The one every tool but Biome reads.
-    const gitignore = result.files.get('.gitignore');
+    // The one every tool but Biome reads. Split on either line ending and trimmed, because what this
+    // asserts is which paths are ignored, not which bytes separate them: a Windows checkout applies git's
+    // `core.autocrlf` on the way in, and splitting on '\n' alone left every entry as `dist/\r`.
+    const ignored = new Set(
+      result.files
+        .get('.gitignore')
+        .split(/\r?\n/)
+        .map((line) => line.trim()),
+    );
     for (const dir of ['dist/', '.rshono/']) {
-      assert.ok(gitignore.split('\n').includes(dir), `${label}: .gitignore should list ${dir}`);
+      assert.ok(ignored.has(dir), `${label}: .gitignore should list ${dir}`);
     }
 
     const biome = result.files.get('biome.json');
