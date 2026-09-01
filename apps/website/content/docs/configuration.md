@@ -151,7 +151,9 @@ middleware needs the public origin, give it `publicUrl(c)` from `@rshono/core/se
 
 Leave it off on [`vercel`](/docs/deployment#vercels-request-handoff), where the request already arrives with the scheme
 and host the browser used — that platform's edge sets them, and the function cannot be reached around
-it. The setting is for a proxy you put in front yourself, which the framework cannot vouch for.
+it. To be precise about that target: the **scheme** is taken from `X-Forwarded-Proto` whether or not
+`trustProxy` is set, because there it is not client-supplied. The `Host` header is not part of the
+exception. The setting is for a proxy you put in front yourself, which the framework cannot vouch for.
 
 ## Response headers and caching
 
