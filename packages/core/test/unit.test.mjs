@@ -83,6 +83,40 @@ describe('injectFlightPayload', () => {
     });
   }
 
+  // The five splits above all land in one batch: they are enqueued synchronously, so the boundary macrotask
+  // has not run between them. This one puts a real macrotask between the halves, which is the only shape
+  // `emitBatch` can miss — it tests the joined batch, and a tail is what carries the miss across batches.
+  // React does not produce it (its final flush is one synchronous run), but this injector exists precisely
+  // because `rsc-html-stream` made a narrower version of that same assumption, so it is guarded rather than
+  // asserted about React.
+  test('holds back a document trailer split across two batches', async () => {
+    /** One chunk per batch: the wait is long enough that the injector's boundary has fired in between. */
+    const batchedStreamOf = (chunks) => {
+      let next = 0;
+      return new ReadableStream({
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          if (next >= chunks.length) controller.close();
+          else controller.enqueue(encoder.encode(chunks[next++]));
+        },
+      });
+    };
+
+    const html = await readAll(
+      batchedStreamOf(['<html><body><p>hi</p></bo', 'dy></html>']).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']))),
+    );
+    assert.equal(countOf(html, '</body></html>'), 1, 'exactly one trailer, however the batches fell');
+    assert.ok(html.indexOf('__FLIGHT_DATA') < html.indexOf('</body></html>'), 'the script must not land inside the trailer');
+    assert.match(html, /<script>\(self\.__FLIGHT_DATA\|\|=\[\]\)\.push\("0:\\"hi\\"\\n"\)<\/script><\/body><\/html>$/);
+
+    // The other half of holding a tail back: one that never completes still has to come back out. It comes
+    // out *after* the payload scripts, which is deliberate — releasing it as soon as a script wants to go out
+    // is exactly the bug above, since the next batch may be the rest of the trailer. Only a truncated
+    // document can reach this, it is 13 bytes at most, and they stay inside `<body>`.
+    const stump = await readAll(batchedStreamOf(['<html><body>a</bod']).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']))));
+    assert.match(stump, /^<html><body>a<script>.*<\/script><\/bod<\/body><\/html>$/, 'a tail that was not a trailer is not lost');
+  });
+
   test('puts the payload script inside the body, before the trailer', async () => {
     const html = await inject(['<html><body><p>hi</p></body></html>']);
     assert.ok(html.indexOf('__FLIGHT_DATA') < html.indexOf('</body></html>'), 'the script must not land after </body>');

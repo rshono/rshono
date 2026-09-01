@@ -66,6 +66,23 @@ function endsWithTrailer(buffer: Uint8Array, length: number): boolean {
 }
 
 /**
+ * How many of `buffer`'s last bytes could still turn into the document trailer — the length of the longest
+ * suffix of `buffer[0..length)` that is a prefix of it, `TRAILER_BYTES.length` for the whole thing.
+ *
+ * At most 14 bytes are ever held back, and in practice 0: a React flush ends with a closed tag, not with the
+ * start of one. Cheaper than it looks, too — the first comparison rejects every suffix whose first byte is
+ * not `<`.
+ */
+function trailerPrefixLength(buffer: Uint8Array, length: number): number {
+  candidate: for (let take = Math.min(length, TRAILER_BYTES.length); take > 0; take--) {
+    const from = length - take;
+    for (let i = 0; i < take; i++) if (buffer[from + i] !== TRAILER_BYTES[i]) continue candidate;
+    return take;
+  }
+  return 0;
+}
+
+/**
  * The characters a CSP nonce may be made of: base64 and base64url, which is what every generator of one emits
  * — Hono's `secureHeaders()`, the only source the framework reads, produces base64 of 16 random bytes.
  *
@@ -93,6 +110,11 @@ export function injectFlightPayload(
 
   const batch: Uint8Array[] = [];
   let boundary: TaskHandle | null = null;
+  /**
+   * The tail of the last batch that could still be the start of the document trailer, carried into the next
+   * one. See {@link emitBatch}.
+   */
+  let carry: Uint8Array | null = null;
 
   /**
    * Set once the consumer has gone away, so nothing tries to enqueue into a readable that cannot take it.
@@ -171,6 +193,7 @@ export function injectFlightPayload(
       boundary = null;
     }
     batch.length = 0;
+    carry = null;
     for (const resolve of waiting.splice(0)) resolve();
     // Otherwise the teed RSC branch keeps being pumped for a response nobody will read, and the tee's
     // other half buffers every chunk waiting for this one to catch up.
@@ -181,16 +204,24 @@ export function injectFlightPayload(
   }
 
   /**
-   * Emits the HTML buffered since the last boundary, holding back the document trailer for
-   * {@link TransformStream.flush} to re-emit after the payload scripts.
+   * Emits the HTML buffered since the last boundary, holding back the document trailer for `flush` to re-emit
+   * after the payload scripts.
    *
-   * The batch is joined before the trailer is looked for, so one React split across two views is still
-   * found. React writes its final flush in one synchronous run, so a trailer split across *batches* is not
-   * a shape it produces.
+   * The batch is joined before the trailer is looked for, so one React split across two views is still found.
+   * A trailer split across two *batches* is not a shape React produces — it writes its final flush in one
+   * synchronous run — but this injector exists because `rsc-html-stream` made a narrower version of that same
+   * assumption and was wrong (see the module header), so anything that could still become a trailer is held
+   * back in {@link carry} rather than assumed not to be. Only `final`, the call from `flush`, may emit such a
+   * tail: by then there is no next batch for it to complete.
+   *
+   * A tail that never does complete therefore leaves after the payload scripts rather than before them, which
+   * is the deliberate half of the trade: releasing it the moment a script wants to go out is the very bug this
+   * guards, because the next batch may be the rest of the trailer. It costs at most 13 bytes of a truncated
+   * document arriving late, still inside `<body>`.
    */
-  function emitBatch(controller: TransformStreamDefaultController<Uint8Array>): void {
+  function emitBatch(controller: TransformStreamDefaultController<Uint8Array>, final = false): void {
     boundary = null;
-    let total = 0;
+    let total = carry?.byteLength ?? 0;
     for (const chunk of batch) total += chunk.byteLength;
     if (total === 0) {
       batch.length = 0;
@@ -199,13 +230,21 @@ export function injectFlightPayload(
 
     const joined = new Uint8Array(total);
     let at = 0;
+    if (carry) {
+      joined.set(carry, at);
+      at += carry.byteLength;
+      carry = null;
+    }
     for (const chunk of batch) {
       joined.set(chunk, at);
       at += chunk.byteLength;
     }
     batch.length = 0;
 
-    const end = endsWithTrailer(joined, total) ? total - TRAILER_BYTES.length : total;
+    const held = final ? (endsWithTrailer(joined, total) ? TRAILER_BYTES.length : 0) : trailerPrefixLength(joined, total);
+    const end = total - held;
+    // Copied rather than a `subarray`, which would keep the whole joined flush alive for 14 bytes.
+    if (held > 0 && !final) carry = joined.slice(end);
     if (end > 0) controller.enqueue(joined.subarray(0, end));
   }
 
@@ -287,12 +326,10 @@ export function injectFlightPayload(
     async flush(controller) {
       // Both of these have to happen *before* the await, and in this order.
       try {
-        // Anything still batched belongs ahead of the payload scripts, which sit at the end of `<body>`.
-        if (boundary) {
-          unschedule(boundary);
-          boundary = null;
-          emitBatch(controller);
-        }
+        // Anything still batched — or carried — belongs ahead of the payload scripts, which sit at the end of
+        // `<body>`. Called unconditionally: a `carry` outlives its boundary, and an empty batch returns early.
+        if (boundary) unschedule(boundary);
+        emitBatch(controller, true);
         // A writable side that closed without ever reaching `transform` — an HTML stream with no chunks at
         // all — leaves nothing to have started the payload, and `flightDone` is only ever called from that
         // chain or from `cancel`. Without this the await below parks on a promise nothing will settle and the
