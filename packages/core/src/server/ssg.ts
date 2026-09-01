@@ -172,14 +172,19 @@ async function mapBounded<T, R>(items: readonly T[], limit: number, run: (item: 
 /**
  * One representation of a path, as the app answered for it at build time. Discriminated on `ok` because both
  * callers have to tell "the app rendered this" from "it did not", and only one cares why.
+ *
+ * `failed` splits the second case in two. A 404, a 3xx or a payload of the wrong type is a page this pass
+ * cannot *store*, and it still serves per request — the skip is honest. A 5xx is the app throwing, and this
+ * pass renders a page exactly as a request does, so per request it will throw again: skipping it prints
+ * "will SSR per request" over a route that will 500 forever, and exits 0.
  */
-type RenderedVariant = { ok: true; body: string } | { ok: false; reason: string };
+type RenderedVariant = { ok: true; body: string } | { ok: false; reason: string; failed: boolean };
 
 async function renderVariant(fetch: PrerenderOptions['fetch'], url: string, variant: PrerenderVariant): Promise<RenderedVariant> {
   const response = await fetch(new Request(url, { headers: VARIANTS[variant].headers }));
-  if (response.status !== 200) return { ok: false, reason: `${response.status}` };
+  if (response.status !== 200) return { ok: false, reason: `${response.status}`, failed: response.status >= 500 };
   if (!(response.headers.get('Content-Type') ?? '').includes(VARIANTS[variant].contentType)) {
-    return { ok: false, reason: `a non-${VARIANTS[variant].contentType} response` };
+    return { ok: false, reason: `a non-${VARIANTS[variant].contentType} response`, failed: false };
   }
   return { ok: true, body: await response.text() };
 }
@@ -252,7 +257,7 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
       const relPath = ssgFilePath(path, 'html');
       if (relPath === null) {
         throw new Error(
-          `Cannot prerender "${path}" for route "${route.path}": a path segment is "." or "..", or holds a ` +
+          `[rshono] Cannot prerender "${path}" for route "${route.path}": a path segment is "." or "..", or holds a ` +
             `character a portable file name cannot — one of \\ / : * ? " < > | or a control character.`,
         );
       }
@@ -268,8 +273,9 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
     const warnings: string[] = [];
     const document = await renderVariant(fetch, origin + path, 'html');
     if (!document.ok) {
-      warnings.push(`  ⚠ "${path}" rendered ${document.reason} at build time — skipping, will SSR per request.`);
-      return { path, ok: false as const, files: [], warnings };
+      // A 5xx fails the build instead of being warned about — see {@link RenderedVariant}.
+      if (!document.failed) warnings.push(`  ⚠ "${path}" rendered ${document.reason} at build time — skipping, will SSR per request.`);
+      return { path, ok: false as const, files: [], warnings, failure: document.failed ? document.reason : undefined };
     }
 
     // Both representations of a page share its directory and differ only in the file name.
@@ -290,22 +296,39 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
     if (flight.ok) {
       write('flight', flight.body);
     } else {
-      warnings.push(`  ⚠ "${path}" produced no flight payload — soft navigations to it will render per request.`);
+      // Not fatal the way a failed *document* is, even for a 5xx: the page is on disk and serves, and only
+      // soft navigation to it degrades to rendering per request. The reason is named because the two cases
+      // want different things done about them.
+      warnings.push(`  ⚠ "${path}" produced no flight payload (${flight.reason}) — soft navigations to it will render per request.`);
     }
 
-    return { path, ok: true as const, files: wrote, warnings };
+    return { path, ok: true as const, files: wrote, warnings, failure: undefined };
   });
 
   // Folded back in target order rather than completion order, so a concurrent pass writes the same manifest
   // and prints the same log a serial one did.
+  const failures: string[] = [];
   for (const outcome of outcomes) {
     for (const warning of outcome.warnings) console.warn(warning);
+    if (outcome.failure !== undefined) failures.push(`"${outcome.path}" rendered ${outcome.failure}`);
     if (!outcome.ok) {
       skipped.push(outcome.path);
       continue;
     }
     files.push(...outcome.files);
     written.push(outcome.path);
+  }
+
+  // Raised together, and in target order, so which of several failing pages is reported does not depend on
+  // which render finished first. The render's own error is already in the build log above: the framework's
+  // `onError` reported it when it turned the throw into the 500 counted here.
+  if (failures.length > 0) {
+    throw new Error(
+      `[rshono] ${failures.length} page${failures.length === 1 ? '' : 's'} failed to render while prerendering:\n` +
+        failures.map((failure) => `      • ${failure}`).join('\n') +
+        '\n    Prerendering renders a page the way a request does, so this is not a build-only failure — the route' +
+        '\n    would answer the same status per request. The error it threw is logged above.',
+    );
   }
 
   // Only where the app has static routes at all: an empty manifest would be a store, and a build with

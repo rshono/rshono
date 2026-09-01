@@ -143,6 +143,17 @@ describe('serving from a Worker', () => {
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
   });
 
+  test('merges the platform bindings into ctx.env, where they win over a process variable', async () => {
+    // The positive half of the rule `getRequestContext().env` implements — this is the one target whose
+    // `app.fetch(request, env)` argument really is the app's bindings, and the only one the merge runs on.
+    // A value that is nowhere in `process.env`, so a page showing it can only have read the binding.
+    const ctx = { waitUntil() {}, passThroughOnException() {} };
+    const res = await worker.fetch(new Request(`${ORIGIN}/whoami`), { ASSETS, PUBLIC_API_ENDPOINT: 'from-a-workers-binding' }, ctx);
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.match(body, /from-a-workers-binding/, 'a Workers binding must be readable as ctx.env');
+  });
+
   test('serves a prerendered document out of the assets binding', async () => {
     const res = await fetchWorker('/docs/getting-started');
     const body = await res.text();

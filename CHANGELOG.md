@@ -9,6 +9,131 @@ from a maintainer's machine with `pnpm release` — see CONTRIBUTING.md.
 Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
 those.
 
+## Unreleased
+
+A pass over the two published packages against four questions — is the API correct and minimal, is there dead
+code, is the framework easy to understand, does it fail gracefully — and everything it turned up. Three
+entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5xx while prerendering**, and
+**`defineRoutes`' typing**. Read those three before upgrading.
+
+### Security
+
+- **`getRequestContext().env` no longer merges the platform's own `fetch` argument.** `c.env` is the second
+  argument to `app.fetch(request, env)` — the app's bindings on Workers, and on every other target the
+  adapter's private state: `{ incoming, outgoing }` on Node and Vercel, the whole invocation on
+  `aws-lambda`. It was spread into `ctx.env` unfiltered, behind names the type declares
+  `string | undefined`. So `ctx.env.ANYTHING.startsWith(…)` type-checked over a live socket wrapper,
+  `JSON.stringify(ctx.env)` threw on a circular structure on two targets, and on Lambda the request's own
+  headers, cookies and `authorization` were readable through `ctx.env` and serialized cleanly into anything it
+  was spread into — the same class of leak the `ctx` page prop is made non-enumerable to prevent, reached
+  through a different door.
+
+  The selected preset now declares whether its platform supplies bindings, `resolveServerConfig` bakes that
+  into the bundle beside `trustProxy`, and the merge runs on exactly that condition. Only `cloudflare` sets
+  it, so `ctx.env` is `process.env` alone everywhere else. Filtering by value type would not do: KV, D1 and R2
+  bindings are objects on purpose. `ctx.hono.env` still reaches the raw argument.
+
+### Changed
+
+- **A 5xx while prerendering fails the build.** `renderVariant` only asked whether the status was 200, so
+  every non-200 got the same sentence — `⚠ "/x" rendered 500 at build time — skipping, will SSR per request` —
+  and the build printed `✓ build complete` and exited 0. "Will SSR per request" is true of a 404, a 3xx, a
+  wildcard param and a route with no `staticPaths`. It is false of a 5xx: prerendering renders a page exactly
+  as a request does, so that route 500s per request, forever, behind a green CI run. Every failing page is
+  named at once, in route order.
+
+- **`defineRoutes` has one signature over both accepted shapes.** The array shorthand was a second overload,
+  so a mistake inside a bare array came back as an overload-resolution report whose _first_ line was the
+  object form's complaint — "Property 'routes' is missing" — which is false for that call and points at a
+  change the author should not make; the real message was on line 8. All four cases (bad props or bad
+  `staticPaths`, through either form) now produce one error at the offending field.
+
+  The cost is excess-property checking on the config object, which a generic parameter inferred from its
+  argument cannot have. That check is now the framework's own and names the fields there are, so a typo'd
+  `notfound` is still refused — and now refused when the object arrives through a variable too, which
+  excess-property checking never covered.
+
+### Added
+
+- **`rshono build` checks every route's own module.** Four structural mistakes survived a build and then
+  answered 500 on every request: a `'use client'` page, a page module with no default export, the same under
+  `render: 'static'`, and an endpoint module exporting `GET` instead of `handler`. The two page checks already
+  existed and ran on first request; the endpoint fork had none at all, which made the one mistake people
+  actually make `TypeError: r is not a function` from a minified frame. All of them now run against every
+  route once the bundle is imported for the prerender pass — `notFound` and `error` included — and name every
+  broken route rather than the first.
+
+  A module that throws while _evaluating_ is warned about, not fatal: whether an import succeeds is a question
+  about the environment as much as about the module, and a page whose module scope reads a secret or opens a
+  connection works per request. A `render: 'static'` route is the exception and needs no special case — it
+  promised to render at build time, so the prerender pass demands the import.
+
+- **The client's own recovery loads reach the browser instead of the framework's router.**
+  `window.location.reload()` and `location.assign()` fire a `navigate` event like any other navigation, and
+  the router intercepts a `reload` on purpose — that is what `router.refresh()` is. Both of the client's
+  escape hatches from a torn-down React root went through it, so neither escaped: a late `notFound()` left
+  the tab on its Suspense fallback with no second document ever arriving, and a late `redirect()` moved the
+  address bar to a page it then failed to render into the root that had just been unmounted. The framework's
+  own recovery loads now bypass its listener for exactly one navigation.
+
+- **A late `notFound()` reloads once instead of forever.** `redirect()` and `notFound()` raised after the page
+  shell has been sent both degrade to a 200 carrying a digest, and the client's recovery differs: a redirect
+  has somewhere to navigate, a `notFound()` does not, so it asks for the page again — which recovers where
+  the lateness was incidental and cannot where it is structural, since the response is byte-identical. The
+  attempt is now spent once per URL per tab and the second arrival paints "Page not found", with the
+  diagnostic in dev only and no reload button in either. A reload that does not replace the document within
+  two seconds paints the same panel rather than leaving the visitor on a fallback.
+
+  Browser coverage added for both directions of the digest path, which had none — each asserting the
+  destination is on screen rather than that the address bar moved.
+
+- **A browser module importing `@rshono/core/server` is named.** The build failed correctly and said only
+  `ERROR in node:async_hooks × Reading from "node:async_hooks" is not handled by plugins` — no file path, no
+  issuer, no mention of rshono, for the one mistake the docs warn against often enough to suggest people make
+  it. The client compiler now catches the request where the issuer is still known and reports the module, with
+  the path on Rspack's own `ERROR in <file>` line, and what to use instead.
+
+- **`rshono dev` says when a change needs a restart.** `.env`, `.env.local` and `rshono.config.ts` are read
+  once at startup and what a build needs from them is compiled in, so no rebuild picks up an edit — and the
+  failure is invisible: the page rebuilds, is served, and shows the old value. The three files are watched, and
+  a change to one prints which file and what to do. Written down as well, in the core README's limitations, the
+  scaffolded README and `docs/configuration.md`, all three of which described `.env` loading without it.
+
+### Fixed
+
+- **A `/_static` 404 carries a `Cache-Control`.** `cacheControl` returns early for anything that is not
+  200/206 and the terminal `c.text('Not Found', 404)` set no header of its own. A 404 is heuristically
+  cacheable under RFC 9111 — the reasoning already written above `plainNotFound` — and `/_static` is where it
+  matters most: during a rolling deploy an old instance 404s a chunk the new one has, and a shared cache may
+  store that answer against a content-hashed URL that is about to become valid.
+
+- **The Biome templates exclude `.rshono/`.** Both listed `!dist` and not the dev server's output directory,
+  so after anyone ran `pnpm dev` a Biome app's `format:check` and `lint` failed on generated bundles and
+  `pnpm format` rewrote them. Specific to Biome, which does not read `.gitignore` unless `vcs.enabled` and
+  `vcs.useIgnoreFile` are set; Prettier, oxfmt and oxlint all honour it.
+
+- **`create-rshono`: three argument gaps.** `./` was rejected while `.` worked — `.` was special-cased as a
+  literal, so the shell-completed spelling reached `toPackageName('./')`, which has nothing left to name a
+  package with; the target is resolved first now, which answers for `sub/..` and an absolute path too.
+  `--dry-run` was refused in a non-empty directory, where a run that writes nothing has nothing to conflict
+  with and the advice (`--force`) described an action the user had not asked for. And `toPackageName` could
+  return a name npm refuses — a leading `_` survived where a leading `.` did not — because npm's rule was
+  spelled again per character class rather than reused; the result now goes through `isValidPackageName` on
+  the way out.
+
+- **Documentation and hygiene.** `onError` on both boundaries now carries the note `ErrorFallback`'s function
+  form does — it can only be passed from a `'use client'` component, and the headline use of these components
+  is that a _server_ component can render them. `CatchBoundaryProps.resetKeys` documented itself with a
+  `useNavigation()` call unreachable from that server component; the `url.pathname` form off a page's props
+  comes first now. `weakEtag` is no longer exported for nobody. A CI comment claimed the browser suite covers
+  prefetching, which exists nowhere in the framework — the browser spec pins its _absence_ and the README
+  lists it as a deliberate choice.
+
+- **`rshono build` does not type-check, and the README now says so.** swc strips types and `tsc` is never
+  invoked, while several of the framework's guarantees are types alone — the `handler` an endpoint module
+  owes, and `defineRoutes`' path ↔ props and `staticPaths` ↔ path checks. Run `tsc --noEmit` in CI beside the
+  build. The mistakes that make a route unservable are checked at build time whether or not you do.
+
 ## 1.0.0-rc.18
 
 ### Changed

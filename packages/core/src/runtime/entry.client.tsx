@@ -65,14 +65,13 @@ function overlayHost(): HTMLElement {
 }
 
 /**
- * Paints the reason for an uncaught render error over the blank page it leaves behind — the full stack in
- * dev, a generic notice and a reload button in production.
+ * Paints a full-viewport panel over whatever is on screen, and returns the box for the caller to fill.
  *
- * DOM calls rather than React (the renderer is what just failed), and `textContent` rather than
- * `innerHTML` (an error message is untrusted input).
+ * DOM calls rather than React (one caller runs because the renderer just failed), and `textContent` rather
+ * than `innerHTML` (an error message is untrusted input). Queued on a macrotask: React's teardown runs after
+ * the callback that reaches here returns, and would remove a node appended inline.
  */
-function showFatal(error: unknown, componentStack?: string | null): void {
-  // Queued: React's teardown runs after this callback returns and would remove a node appended inline.
+function paintOverlay(fill: (box: HTMLElement) => void): void {
   setTimeout(() => {
     const host = overlayHost();
     host.querySelector('[data-rshono-fatal]')?.remove();
@@ -84,10 +83,26 @@ function showFatal(error: unknown, componentStack?: string | null): void {
       'position:fixed;inset:0;z-index:2147483647;overflow:auto;padding:1.5rem;background:#18181b;color:#f4f4f5;' +
       'font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;text-align:left';
 
-    const title = document.createElement('div');
-    title.textContent = isDev ? 'Unhandled error' : 'Something went wrong';
-    title.style.cssText = 'font-size:1.0625rem;font-weight:700;color:#f87171;margin:0 0 0.75rem';
-    box.appendChild(title);
+    fill(box);
+    host.appendChild(box);
+  }, 0);
+}
+
+/** The overlay's heading. */
+function overlayTitle(text: string): HTMLElement {
+  const title = document.createElement('div');
+  title.textContent = text;
+  title.style.cssText = 'font-size:1.0625rem;font-weight:700;color:#f87171;margin:0 0 0.75rem';
+  return title;
+}
+
+/**
+ * Paints the reason for an uncaught render error over the blank page it leaves behind — the full stack in
+ * dev, a generic notice and a reload button in production.
+ */
+function showFatal(error: unknown, componentStack?: string | null): void {
+  paintOverlay((box) => {
+    box.appendChild(overlayTitle(isDev ? 'Unhandled error' : 'Something went wrong'));
 
     if (isDev) {
       const detail = document.createElement('pre');
@@ -107,13 +122,33 @@ function showFatal(error: unknown, componentStack?: string | null): void {
     reload.textContent = 'Reload page';
     reload.style.cssText =
       'margin-top:1.25rem;padding:0.5rem 1rem;font:inherit;color:#18181b;background:#f4f4f5;border:0;border-radius:4px;cursor:pointer';
-    reload.addEventListener('click', () => window.location.reload());
+    reload.addEventListener('click', () => loadOutsideRouter(() => window.location.reload()));
     box.appendChild(reload);
-
-    host.appendChild(box);
-  }, 0);
+  });
 }
 
+/**
+ * The end of the line for a `notFound()` that arrived too late to be a 404 and did not survive a reload.
+ *
+ * No reload button, unlike {@link showFatal}: the reload has already been spent, and the second identical
+ * response is what brought us here. "Page not found" is what the server was trying to say, so it is what the
+ * visitor is told; the reason it could not say it properly is a message for whoever wrote the page, and dev is
+ * where they are.
+ */
+function showLateNotFound(): void {
+  paintOverlay((box) => {
+    box.appendChild(overlayTitle('Page not found'));
+
+    const message = document.createElement('p');
+    message.textContent = isDev
+      ? 'notFound() was raised from a boundary that resolved after the page shell had been sent, so the response ' +
+        'could not be a 404 — and reloading rendered the same page again. Decide before the render starts ' +
+        'streaming: in Hono middleware, or in the page component body above the boundary.'
+      : 'This page is not available.';
+    message.style.cssText = 'margin:0;color:#d4d4d8';
+    box.appendChild(message);
+  });
+}
 /** What every flight response is typed as. The charset and any other parameters follow it. */
 const FLIGHT_CONTENT_TYPE = 'text/x-component';
 
@@ -172,6 +207,29 @@ function settle(result: NavigationResult): void {
   void result.finished?.catch(ignore);
 }
 
+/** Set by {@link loadOutsideRouter}, read and cleared by the `navigate` listener. */
+let bypassRouter = false;
+
+/**
+ * Performs a navigation the router below must **not** intercept, and returns having asked for it.
+ *
+ * `location.reload()` and `location.assign()` fire a `navigate` event like any other navigation, and
+ * `listenNavigation` intercepts a `reload` on purpose — that is what `router.refresh()` is. Every caller here
+ * is reaching for a *new document* precisely because the current one cannot be repaired: the React root a
+ * soft load would render into is the thing that just failed, or is about to be torn down. Intercepted, the
+ * escape hatch becomes a payload fetch that lands nowhere — which is how a late `notFound()` left the tab on
+ * its Suspense fallback with no second document ever arriving, and how a late `redirect()` moved the address
+ * bar to a page it then failed to render.
+ *
+ * One-shot: the listener clears the flag on the next event it sees. If that event never comes — a navigation
+ * the browser refuses — the cost is that the *next* navigation is a full load rather than a soft one, on a
+ * document that was on its way out anyway.
+ */
+function loadOutsideRouter(navigate: () => void): void {
+  bypassRouter = true;
+  navigate();
+}
+
 // The imperative actions behind `useNavigation().router`. Each one only *asks*: the browser turns it into a
 // `navigate` event, which is where `listenNavigation` answers it — so a `router.push` and a link click reach
 // the same code by the same route, and inherit the same fetch, scroll and `pending` flag.
@@ -204,6 +262,52 @@ function refresh(): void {
   else window.location.reload();
 }
 
+/** How long the recovery reload is given to replace this document before the panel is painted instead. */
+const RELOAD_GRACE_MS = 2000;
+
+/**
+ * Spends the one reload a late `notFound()` gets, or paints if it has already been spent for this URL.
+ *
+ * `redirect()` is terminal on the client — there is somewhere to navigate to — and `notFound()` is not: the
+ * response is already committed as a 200, so the only recovery left is asking for the page again and hoping
+ * the signal comes early enough this time to be a real 404. That works where the lateness was incidental, a
+ * boundary that happened to resolve after the shell on a slow request. Where it is structural — a page that
+ * always signals from a late boundary — the reload gets a byte-identical response and reloads again, and the
+ * tab spins until the visitor leaves. In production nothing is logged, because the warning that explains this
+ * is `isDev`-only.
+ *
+ * So it is bounded: one reload per URL per tab, then {@link showLateNotFound}. `sessionStorage` because the
+ * value has to outlive the document it is written in and must not outlive the tab, and keyed by URL so a
+ * second page's late signal still gets its own attempt.
+ */
+function reloadOnceForLateNotFound(): void {
+  const key = `rshono:late-not-found:${documentUrl()}`;
+  let spent: boolean;
+  try {
+    spent = sessionStorage.getItem(key) !== null;
+    if (!spent) sessionStorage.setItem(key, '1');
+  } catch {
+    // Storage can throw outright where site data is blocked, and a page that cannot count its reloads has
+    // to pick a side. It picks the terminating one: a message on a page that might have recovered is a
+    // worse outcome than a reload loop only by a lot less.
+    spent = true;
+  }
+  if (spent) {
+    showLateNotFound();
+    return;
+  }
+
+  loadOutsideRouter(() => window.location.reload());
+
+  // The reload wins this race whenever it happens at all: the document goes away and takes the timer with
+  // it. What this covers is a reload that does not happen — swallowed by an interceptor, refused by the
+  // browser, held by a `beforeunload` — which used to leave the visitor on a Suspense fallback with nothing
+  // coming and nothing said. The panel is the honest answer in that case too.
+  setTimeout(() => {
+    if (!document.querySelector('[data-rshono-fatal]')) showLateNotFound();
+  }, RELOAD_GRACE_MS);
+}
+
 /**
  * Turns a control-signal digest — how `redirect()` / `notFound()` reach the browser — into a real
  * navigation. Returns false for anything else, so callers fall through to their own handling.
@@ -216,9 +320,9 @@ function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean 
   if (!isControlDigest(digest)) return false;
   const redirect = parseRedirectDigest(digest);
   if (!redirect) {
-    window.location.reload();
+    reloadOnceForLateNotFound();
   } else if (hard) {
-    window.location.assign(new URL(redirect.location, window.location.href).href);
+    loadOutsideRouter(() => window.location.assign(new URL(redirect.location, window.location.href).href));
   } else {
     push(redirect.location);
   }
@@ -311,6 +415,12 @@ function listenNavigation(): () => void {
   if (!canSoftNavigate) return () => {};
 
   const onNavigate = (event: NavigateEvent) => {
+    // Cleared as it is consumed, whatever this event turns out to be: the flag names one navigation, and the
+    // one it named is the one that just arrived.
+    if (bypassRouter) {
+      bypassRouter = false;
+      return;
+    }
     if (!event.canIntercept || leaveToBrowser(event)) return;
 
     // A push or a traversal lands on a new page, so the browser resets the scroll offset — or restores the
@@ -324,7 +434,7 @@ function listenNavigation(): () => void {
       focusReset: inPlace ? 'manual' : 'after-transition',
       // The URL commits before the handler runs, so a failure leaves the address bar describing a page the
       // document is not showing. A real load is the only way back to agreement.
-      handler: () => loadPayload(event.destination.url, event.signal).catch(() => window.location.reload()),
+      handler: () => loadPayload(event.destination.url, event.signal).catch(() => loadOutsideRouter(() => window.location.reload())),
     });
   };
 
@@ -453,7 +563,7 @@ function initDevRefresh() {
 
   function reload(reason: string, error?: unknown): void {
     console.warn(`[rshono] ${reason} — reloading`, ...(error === undefined ? [] : [error]));
-    window.location.reload();
+    loadOutsideRouter(() => window.location.reload());
   }
 
   async function applyClientUpdate(): Promise<void> {
@@ -471,7 +581,7 @@ function initDevRefresh() {
         targetHash = message.hash ?? targetHash;
         if (connectedOnce) {
           await applyClientUpdate();
-          await loadPayload(window.location.href).catch(() => window.location.reload());
+          await loadPayload(window.location.href).catch(() => loadOutsideRouter(() => window.location.reload()));
         }
         connectedOnce = true;
         break;
@@ -481,7 +591,7 @@ function initDevRefresh() {
         break;
       case 'rsc-update':
         console.log('[rshono] server components updated');
-        await loadPayload(window.location.href).catch(() => window.location.reload());
+        await loadPayload(window.location.href).catch(() => loadOutsideRouter(() => window.location.reload()));
         break;
     }
   }

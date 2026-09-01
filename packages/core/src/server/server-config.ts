@@ -19,6 +19,12 @@ export interface ServerConfig {
    * compiler knows which directory it used.
    */
   outDir: string;
+  /**
+   * Whether this target's platform supplies per-request bindings as the second argument to
+   * `app.fetch(request, env)`. Baked in because only the build knows which preset was selected, and
+   * `getRequestContext().env` has to know: see `DeployPreset.envBindings`, which decides it.
+   */
+  envBindings: boolean;
 }
 
 /**
@@ -61,10 +67,14 @@ export function parsePort(value: string | undefined, source: string): number | u
  * rather than a config field because it decides one thing the user should not have to: `trustProxy` is forced on
  * under `rshono dev`, where the framework's own localhost proxy is the only way in.
  */
-export function resolveServerConfig(config: RshonoConfig, { isDev, outDir }: { isDev: boolean; outDir: string }): ServerConfig {
+export function resolveServerConfig(
+  config: RshonoConfig,
+  { isDev, outDir, envBindings = false }: { isDev: boolean; outDir: string; envBindings?: boolean },
+): ServerConfig {
   return {
     isDev,
     trustProxy: isDev || (config.trustProxy ?? false),
     outDir,
+    envBindings,
   };
 }

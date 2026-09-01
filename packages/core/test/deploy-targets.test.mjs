@@ -188,4 +188,28 @@ describe('aws-lambda', () => {
   test('ships a bundle the function can resolve, since the package is dist/ and nothing else', async () => {
     await assertSelfContained();
   });
+
+  /*
+   * `app.fetch(request, env)` is how every adapter hands the app its second argument, and only on Workers is
+   * that argument the app's bindings. Here it is the whole invocation — `{ event, requestContext, context }` —
+   * so a merge into `ctx.env` would put the request's own headers, cookies and `authorization` behind names
+   * this framework types `string | undefined`. On Node and Vercel the same argument is
+   * `{ incoming, outgoing }`, which additionally makes `JSON.stringify(ctx.env)` throw on a circular
+   * structure. Only the `cloudflare` preset sets `envBindings`, and this is what holds it there.
+   *
+   * Driven through `bundle.app` rather than the streaming handler, because the argument is what is under
+   * test and the handler's own job — turning an event into a `Request` — is not.
+   */
+  test("keeps the platform's own fetch argument out of ctx.env", async () => {
+    const res = await bundle.app.fetch(new Request(`${ORIGIN}/whoami`), {
+      event: { headers: { authorization: 'Bearer SECRET-TOKEN', cookie: 'session=abc' } },
+      PUBLIC_API_ENDPOINT: 'INJECTED-VIA-THE-ENV-ARGUMENT',
+    });
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    // The page reads `ctx.env.PUBLIC_API_ENDPOINT`; asserted so this cannot pass by no longer reading env.
+    assert.match(body, /env PUBLIC_API_ENDPOINT/, 'the page under test must still be the one that reads ctx.env');
+    assert.doesNotMatch(body, /INJECTED-VIA-THE-ENV-ARGUMENT/, 'the fetch env argument must not outrank process.env');
+    assert.doesNotMatch(body, /SECRET-TOKEN/, 'and nothing else it carries may be reachable through ctx.env either');
+  });
 });

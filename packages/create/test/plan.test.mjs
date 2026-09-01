@@ -444,3 +444,74 @@ test('a directory name becomes a package name npm will accept', () => {
   assert.ok(!isValidPackageName('My-App'));
   assert.ok(!isValidPackageName('.hidden'));
 });
+
+/*
+ * The contract, held rather than restated: `toPackageName` says it returns a name npm will accept, and its
+ * result now goes through `isValidPackageName` on the way out. It used to spell npm's rule again as a
+ * character check per class, which left `_leading` coming back as itself — npm refuses a leading underscore
+ * as it refuses a leading dot. Only the exported function was affected; the CLI called both and refused
+ * correctly, which is why this is a contract test and not a bug report.
+ */
+test('every name toPackageName returns is one npm accepts', () => {
+  const inputs = [
+    'My App',
+    './nested/my-app',
+    'my-app/',
+    '@scope/pkg',
+    '@scope/_pkg',
+    '  Spaced Out  ',
+    '_leading',
+    '__x__',
+    'My_App',
+    '.hidden',
+    '.',
+    './',
+    '_',
+    '@',
+    '',
+    '///',
+    '~tilde',
+    'ü'.repeat(300),
+  ];
+  for (const input of inputs) {
+    const name = toPackageName(input);
+    if (name === null) continue;
+    assert.ok(isValidPackageName(name), `toPackageName(${JSON.stringify(input)}) returned ${JSON.stringify(name)}, which npm refuses`);
+  }
+  // And the ordinary underscore case still produces something usable rather than nothing.
+  assert.equal(toPackageName('_leading'), 'leading');
+});
+
+/*
+ * `dist/` is what `rshono build` writes and `.rshono/` is what `rshono dev` writes, and both hold generated
+ * bundles: a linter that reads them reports on code nobody wrote, and `format` rewrites it. Prettier, oxfmt
+ * and oxlint all honour `.gitignore`, which every scaffold carries — Biome does not, unless `vcs.enabled` and
+ * `vcs.useIgnoreFile` are both set, and neither is. So its own config has to list them, and `.rshono` was
+ * missing from it: after anyone ran `pnpm dev`, that app's `format:check` and `lint` failed.
+ */
+test('the generated output directories are out of every quality preset’s reach', () => {
+  for (const combination of matrix()) {
+    const label = `${combination.deploy}/${combination.styling}/${combination.preset}`;
+    const result = plan(answers(combination), pm);
+
+    // The one every tool but Biome reads. Split on either line ending and trimmed, because what this
+    // asserts is which paths are ignored, not which bytes separate them: a Windows checkout applies git's
+    // `core.autocrlf` on the way in, and splitting on '\n' alone left every entry as `dist/\r`.
+    const ignored = new Set(
+      result.files
+        .get('.gitignore')
+        .split(/\r?\n/)
+        .map((line) => line.trim()),
+    );
+    for (const dir of ['dist/', '.rshono/']) {
+      assert.ok(ignored.has(dir), `${label}: .gitignore should list ${dir}`);
+    }
+
+    const biome = result.files.get('biome.json');
+    if (!biome) continue;
+    const { includes } = JSON.parse(biome).files;
+    for (const dir of ['dist', '.rshono']) {
+      assert.ok(includes.includes(`!${dir}`), `${label}: biome.json does not read .gitignore, so it must exclude ${dir} itself`);
+    }
+  }
+});

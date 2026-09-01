@@ -27,6 +27,10 @@ Interactive parts are `'use client'` components a page imports — only those sh
 variables reach the browser — everything else is server-only, and a stray read of it in client code
 compiles to `undefined` rather than shipping. `src/components/layout.tsx` reads `PUBLIC_APP_NAME` that way.
 
+Both are read **once, at startup**, and the `PUBLIC_` view of them is compiled into the bundle — so editing
+either while `pnpm dev` is running changes nothing until you restart it. The dev server says so when it
+happens; the same is true of `rshono.config.ts`.
+
 ## Deploying
 
 This app is built for `{{DEPLOY_TARGET}}`. {{DEPLOY_STEP}}

@@ -4,13 +4,13 @@ import { onServerError, publicUrl } from '@rshono/core/server';
 // at the bottom of this file and `assertSelfContained` in packages/core/test/deploy-targets.test.mjs.
 // Unscoped on purpose: the externals policy bundles anything under `@rshono/` unconditionally, so a
 // scoped name here would be bundled whatever the preset decided and prove nothing.
-import { EXTERNAL_DEP_MARKER } from 'rshono-test-external-dep';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { csrf } from 'hono/csrf';
 import { requestId } from 'hono/request-id';
 import { NONCE, secureHeaders } from 'hono/secure-headers';
 import { trimTrailingSlash } from 'hono/trailing-slash';
+import { EXTERNAL_DEP_MARKER } from 'rshono-test-external-dep';
 import { fakeDB } from './db';
 
 /**
@@ -153,6 +153,9 @@ server.get('/api/external-dep', (c) => c.text(EXTERNAL_DEP_MARKER));
 server.get('/api/request-url', (c) => c.text(c.req.url));
 
 server.get('/api/health', (c) => {
+  const dbURL = process.env.DATABASE_URL;
+  console.log('database url from .env or only serverless?', dbURL);
+
   return c.json({ status: 'ok', uptime: (Date.now() - startedAt) / 1000, timestamp: Date.now() });
 });
 

@@ -154,7 +154,7 @@ export function createPageCache(maxBytes = DEFAULT_CACHE_BYTES): {
  * A weak `ETag` for a page body — see {@link PrerenderedPage.etag} for why weak. Web Crypto rather than
  * `node:crypto`, so one implementation serves both a Node server and `workerd`.
  */
-export async function weakEtag(body: Uint8Array<ArrayBuffer>): Promise<string> {
+async function weakEtag(body: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', body);
   const base64url = btoa(String.fromCharCode(...new Uint8Array(digest)))
     .replace(/\+/g, '-')

@@ -8,7 +8,6 @@ import {
   LINTER_NAMES,
   PACKAGE_MANAGERS,
   QUALITY_PRESETS,
-  isValidPackageName,
   toPackageName,
   type Answers,
   type DeployTargetName,
@@ -145,12 +144,18 @@ async function main(): Promise<void> {
   }
 
   const targetDir = resolve(process.cwd(), directory);
-  const packageName = toPackageName(directory === '.' ? basename(targetDir) : directory);
-  if (!packageName || !isValidPackageName(packageName)) fail(`"${directory}" does not give a usable npm package name.`);
+  // Resolved rather than compared as text: `.`, `./`, `foo/..` and the cwd's own absolute path all name this
+  // directory, and its own basename is the only thing left to call the package. Matching the literal `'.'`
+  // covered one spelling and left `./` failing on "does not give a usable npm package name".
+  const intoCwd = targetDir === process.cwd();
+  const packageName = toPackageName(intoCwd ? basename(targetDir) : directory);
+  if (!packageName) fail(`"${directory}" does not give a usable npm package name.`);
 
-  const conflicts = conflictingEntries(targetDir);
+  // Not under --dry-run: nothing is written, so there is nothing to conflict with, and the advice it would
+  // give (`--force`) describes an action the user did not ask for.
+  const conflicts = values['dry-run'] ? [] : conflictingEntries(targetDir);
   if (conflicts.length > 0 && !values.force) {
-    const where = directory === '.' ? 'this directory' : `"${directory}"`;
+    const where = intoCwd ? 'this directory' : `"${directory}"`;
     const listed = `${conflicts.slice(0, 3).join(', ')}${conflicts.length > 3 ? ', …' : ''}`;
     if (!interactive) fail(`${where} is not empty (${listed}) — pass --force to scaffold into it anyway.`);
 

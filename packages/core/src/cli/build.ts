@@ -18,25 +18,35 @@ interface BuildOptions {
   preset: DeployPreset;
 }
 
+/** What `rshono build` uses the app's own server bundle for, once it has compiled it. */
+interface ServerBundle {
+  app: Hono;
+  routes: readonly Route[];
+  /** Resolves every route's own module and checks it — see `assertRouteModules`. */
+  checkRouteModules: () => Promise<void>;
+}
+
 /**
- * Loads the built server bundle, which the prerender pass renders through.
+ * Runs one phase of the build that the app itself can fail.
  *
- * Its module scope is where `src/routes.ts` and `src/server.ts` are validated, so a throw from here is
- * usually a message written for whoever is running the build — printed as one, rather than as a stack
- * through the minified frames of a bundle they did not write.
+ * A `[rshono]` message was written for whoever is running the build, so it is printed as the one line it is;
+ * anything else is a bug in the framework and keeps its stack. Everything the app can get wrong arrives this
+ * way — the two entry modules, checked in the bundle's module scope; each route's own module; and a page that
+ * throws while prerendering.
  */
-async function importServerBundle(distDir: string): Promise<{ app: Hono; routes: readonly Route[] }> {
+async function phase<T>(run: () => Promise<T>): Promise<T> {
   try {
-    return (await import(pathToFileURL(join(distDir, 'server', 'main.mjs')).href)) as {
-      app: Hono;
-      routes: readonly Route[];
-    };
+    return await run();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.startsWith('[rshono]')) throw error;
     console.error(`\n  ✗ ${message}\n`);
     process.exit(1);
   }
+}
+
+function importServerBundle(distDir: string): Promise<ServerBundle> {
+  return import(pathToFileURL(join(distDir, 'server', 'main.mjs')).href) as Promise<ServerBundle>;
 }
 
 export async function buildCommand(options: BuildOptions): Promise<void> {
@@ -76,13 +86,22 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   const ssgDir = join(distDir, 'ssg');
   await rm(ssgDir, { recursive: true, force: true });
   process.env.RSHONO_PRERENDER = '1';
-  const bundle = await importServerBundle(distDir);
-  const { written, skipped } = await prerenderStaticRoutes({
-    routes: bundle.routes,
-    fetch: (request) => bundle.app.fetch(request),
-    ssgDir,
-    siteUrl: config.siteUrl,
-  });
+  // The bundle's module scope is where `src/routes.ts` and `src/server.ts` are validated.
+  const bundle = await phase(() => importServerBundle(distDir));
+
+  // Before anything is rendered: the checks here are the ones a route fails on *every* request, so a build
+  // that skipped them would spend the prerender pass on a route it is about to refuse anyway. Without this
+  // they ran on first request instead, which meant a page that could never work shipped behind a green build.
+  await phase(() => bundle.checkRouteModules());
+
+  const { written, skipped } = await phase(() =>
+    prerenderStaticRoutes({
+      routes: bundle.routes,
+      fetch: (request) => bundle.app.fetch(request),
+      ssgDir,
+      siteUrl: config.siteUrl,
+    }),
+  );
   if (written.length > 0) console.log(`  • prerendered ${written.length} static page(s): ${written.join(', ')}`);
   if (skipped.length > 0) console.log(`  • skipped ${skipped.length} (will SSR per request)`);
 
