@@ -11,6 +11,15 @@ those.
 
 ## [Unreleased]
 
+A production-readiness pass over `@rshono/core` ahead of 1.0.0. Two independent reviews of the package were
+consolidated, re-verified against the tree, and worked through: four blockers, the security boundaries
+`SECURITY.md` commits to, ten correctness bugs, the robustness of the streaming path, the parts of the public
+surface that cannot change after 1.0.0 without a major, and the test gaps under all of it. The suite went from
+192 tests over 30 suites to 281 over 42, and coverage now has a floor.
+
+**If you are upgrading**, the two entries that can require a change are the `@rspack/core` /
+`react-server-dom-rspack` pair below and `HTTPMethod` losing `'head'`.
+
 ### Changed
 
 - **`@rspack/core` 2.1.7 → 2.2.1 and `react-server-dom-rspack` 0.0.3 → 0.1.0.** The two move as a pair —
@@ -42,12 +51,136 @@ those.
   the latest — still peers `typescript >=4.8.4 <6.1.0`. Nothing to do until that range widens; see
   CONTRIBUTING.md, "Two TypeScripts".
 
+- **`HTTPMethod` no longer offers `'head'`.** Hono dispatches a `HEAD` as a `GET` and strips the body off the
+  response, so a route registered for `HEAD` answered nothing — verified: `app.on('HEAD', …)` 404s the `HEAD`
+  _and_ the `GET`. The value type-checked, built and silently 404'd. Use `method: 'get'`, which answers both;
+  `src/routes.ts` validation now says so by name if it finds a `'head'`.
+
+- **`src/routes.ts` and `src/server.ts` are validated rather than cast.** Both reach the framework through a
+  build-time alias with no type the compiler can hold, so a mistake used to surface later and elsewhere — a
+  `routes` array that skipped `defineRoutes` as `TypeError: nN is not iterable` out of a minified bundle. Every
+  message now names the file, the entry by position _and_ path, and what to do. Two mistakes that produced no
+  error at all are refused as well: a key belonging to the other kind of route, and a route every method of
+  which an earlier one already answers.
+
+- **`ServerErrorContext` carries the request's Hono context and a `waitUntil`.** Reporting is what
+  `onServerError` exists for, and on a serverless platform a report started there was cut off when the
+  response ended. `waitUntil` holds the invocation open where the platform has such a thing to ask; `hono`
+  gives a handler `hono.var` — a request id to correlate on — which it had no way to reach for a
+  `source: 'request'` error, reported outside the ambient context. Both types are now generic over the app's
+  `Env`, defaulting so nothing existing changes.
+
+- **The prerender pass renders eight paths at a time and de-duplicates.** A documentation site with a few
+  hundred `staticPaths` entries paid every page's data fetching in series, and a repeated entry was rendered
+  and written twice with nothing said. Results, the manifest and the build log are folded back in route order,
+  so a concurrent pass reads like a serial one.
+
+- **The flight injector honours the consumer's demand.** The payload pump wrote into the response from a
+  detached promise with nothing consulting demand: a client that read one chunk and stalled still pulled the
+  whole payload into memory. It now takes one permit per chunk the consumer asks for, so a slow client parks
+  React instead of filling the process.
+
+- **A `render: 'static'` route the build wrote nothing for no longer pays a store lookup per request.** The
+  build leaves a manifest naming every file it wrote, and the runtime reads it once.
+
+- **`staticPaths` is checked against its own route's path.** A param key the path does not have is a type
+  error where the route is declared, rather than a build-time throw from the prerender pass. Keys only, so a
+  `staticPaths` annotated as returning `Record<string, string>` — the type the field declares — still
+  compiles.
+
 ### Added
+
+- **`method` on an endpoint route takes a list.** `method: ['get', 'delete']` is one handler for two methods;
+  before, a two-method endpoint had to be `'all'` plus a hand-rolled check, which also answered every method
+  it was not meant to. `'all'` inside a list is refused, as is an empty one.
 
 - **`pnpm check:pins`**, which asserts the exactly-pinned dependencies agree across both published manifests,
   the `pnpm-workspace.yaml` overrides, the lockfile and what is actually installed. It runs in CI before the
   gates that would otherwise report a false green, and again in `pnpm release`, where `--skip-tests` cannot
   skip it. Nothing compared those copies before, which is why the drift above lasted a month.
+
+- **`pnpm --filter @rshono/core test:coverage`**, the suite against a coverage floor over `dist/**`, and a CI
+  job that runs it. Nothing measured coverage before, so a new branch could land untested.
+
+### Fixed
+
+- **Prerendered pages whose paths need percent-encoding were built and then never served.** The build wrote
+  each page under `encodeURIComponent(value)` while Hono hands a handler a path it has already run
+  `decodeURI` over, so writer and reader disagreed for exactly the characters `decodeURI` unescapes: every
+  non-ASCII or space-bearing slug was reported as prerendered and missed on every request, forever, and
+  differently per deploy target. One mapping now answers for both, and stores each segment decoded.
+
+- **`PORT=""` bound a random port and reported success.** The CLI treated an empty `PORT` as unset while the
+  node bundle turned it into `0`. Both now parse it the same way, and a `PORT` that is not a usable port is a
+  named error rather than a silent bind — an empty `PORT` is common in CI images and container templates.
+
+- **An action that failed before its payload was produced made the browser throw a `TypeError`.** A
+  `bodyLimit()` 413, a proxy error page or a 502 mid-deploy all reached application code as
+  `Error: Connection closed.`, with the status nowhere in sight. A response that is not a flight payload now
+  surfaces its status, and an action that threw is answered with a payload the client can act on.
+
+- **A `notFound` or `error` page that itself threw a control signal produced a bodiless, unlogged 500.** Both
+  are now answered — reported, and with a body — and a `notFound` page calling `notFound()` recurses exactly
+  once.
+
+- **A `redirect()` or `notFound()` raised after the shell had flushed kept rendering a page nobody would
+  see.** HTTP has no take-backs once the status line is out, so the signal still rides the payload for the
+  client runtime to act on — but the render is now aborted rather than run to completion, and `rshono dev`
+  warns with the page and the destination. The limitation and its app-side fix are in the README.
+
+- **A `HEAD` on a page route rendered the whole document and threw it away.** Hono drops the body without
+  reading it, so nothing cancelled the render: the abort forwarder stayed attached to the request signal,
+  holding the rendered tree. A `HEAD` now takes the same path a `GET` would — prerendered bytes included, so
+  it promises the same `ETag` and `Content-Length` — and the render behind it is released.
+
+- **A plain-text 404 or 500 carried no `Cache-Control`.** The framework's default is applied to page content
+  types, so these two never got one — and a 404 is heuristically cacheable, meaning a shared cache was free to
+  store it while the rendered HTML 404 beside it was correctly private.
+
+- **A route that cannot be prerendered no longer fails the whole build.** A wildcard segment, an
+  optional/regex param or a `staticPaths` that rejected took the build down with a raw error; each is now a
+  warning naming the reason, and the route renders per request like any other. What still fails the build is a
+  `staticPaths` _value_ no single file can hold, which would otherwise be reported as prerendered and never
+  served.
+
+- **The injected flight payload could land inside `</body></html>`.** The trailer was looked for on each
+  batch, so one split across two batches was missed. Anything that could still become the trailer is now held
+  back and carried into the next batch.
+
+- **A soft navigation to an unmatched path got a payload without `notFound: true`.** The flag was set on one
+  of the two routes to the same page; both set it now.
+
+### Security
+
+- **The SSR env shadow covers every way a client component can read the environment.** The loader skipped any
+  module whose source did not contain the literal `process.env`, so `process?.env` — the spelling used by
+  code meant to run in a browser _and_ on a server, which is exactly what a `'use client'` component is —
+  `process['env']`, `const { env } = process` and a plain alias all went through untouched, rendering real
+  secrets into the SSR'd HTML while the browser bundle saw the `PUBLIC_`-only view. The gate is now the
+  `process` binding itself, which the prelude replaces. A read through `globalThis.process`, which no binding
+  can shadow, is warned about in the app's own source.
+
+- **`/_static/*` is served behind `src/server.ts`'s middleware.** The asset handler was mounted ahead of the
+  app and is terminal, so asset responses carried the framework's three baseline headers and nothing else —
+  no CSP, no COOP, and no HSTS, which is per-response and exactly what a `/_static` request over http needs.
+
+- **The built-in form-post guard refuses a same-site cross-origin post, and one with no `Origin`.**
+  `same-site` is the label a browser sends from a sibling subdomain — a user-content host, a stale CNAME, a
+  subdomain takeover — and for an app with no `src/server.ts` there is no `csrf()` behind it. The guard now
+  proves same-origin rather than not-foreign, so a label with no `Origin` at all is refused too.
+
+- **The CSP nonce is validated before it is written into the payload script tag.** That tag is built by hand,
+  so its attribute value is the one in a rendered document nothing else escapes, and `secureHeadersNonce` is
+  an ordinary context variable any middleware can set. A value outside the base64/base64url alphabet is
+  dropped rather than escaped: a payload script the policy then refuses is the visible failure to have.
+
+- **The build warns when nothing in `src/` registers a body cap.** Every `'use server'` export is a public
+  POST endpoint and the action path buffers the whole body before it can decide anything about it. The warning
+  used to appear only when `src/server.ts` was absent entirely.
+
+- **`SECURITY.md` and the docs now say that a client-initiated action relies on the CORS preflight** for its
+  cross-origin protection, which is what the `x-rsc-action` header buys — and what an app widening `cors()`
+  gives up.
 
 ## [1.0.0-rc.17] - 2026-08-29
 
