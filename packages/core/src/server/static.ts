@@ -29,8 +29,12 @@ export function createStaticAssetsApp(options: StaticOptions): Hono {
 
   // `GET` alone: Hono dispatches a `HEAD` as a `GET` and strips the body, so a `HEAD` registration beside it
   // is never reached — see `HTTPMethod`.
+  // The 404 carries a `Cache-Control` of its own because `cacheControl` above returns early for it, and a
+  // 404 is heuristically cacheable under RFC 9111 — the same reasoning as `plainNotFound`'s, and it matters
+  // most here: during a rolling deploy an old instance 404s a chunk the new one has, and without this a
+  // shared cache may store that answer for a content-hashed URL that is about to become valid.
   app.get('/*', cacheControl(isDev), serveStatic({ root, rewriteRequestPath: (path) => path.replace(/^\/_static/, '') }), (c) =>
-    c.text('Not Found', 404),
+    c.text('Not Found', 404, { 'cache-control': 'private, no-cache' }),
   );
 
   return app;

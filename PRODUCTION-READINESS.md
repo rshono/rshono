@@ -203,7 +203,7 @@ none in either direction.
 
 ## Medium
 
-### M1 — a `/_static` 404 carries no `Cache-Control`
+### M1 — ~~a `/_static` 404 carries no `Cache-Control`~~
 
 `packages/core/src/server/static.ts:7-16` and `:33`
 

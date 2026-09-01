@@ -778,12 +778,20 @@ test('unknown root paths fall through to a 404 — the public fallback never sha
   assert.equal(await res.text(), 'Not Found');
 });
 
-test('hashed static assets are served immutable', async () => {
+test('hashed static assets are served immutable, and a miss under /_static is not cacheable at all', async () => {
   const html = await (await fetch(`${base}/`)).text();
   const src = html.match(/src="(\/_static\/chunks\/main\.[0-9a-f]+\.js)"/)[1];
   const res = await fetch(base + src);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+
+  // The asset that is *not* there, which is the one a rolling deploy produces: an old instance 404s a chunk
+  // the new one has. A 404 is heuristically cacheable under RFC 9111, so with no header of its own a shared
+  // cache may store that answer against a content-hashed URL that is about to become valid — and then serve
+  // it to everyone. The same reasoning is why the framework's own plain 404 carries one.
+  const miss = await fetch(`${base}/_static/chunks/main.deadbeefdeadbeef.js`);
+  assert.equal(miss.status, 404);
+  assert.equal(miss.headers.get('cache-control'), 'private, no-cache', 'a 404 for a hashed URL must not be stored');
 });
 
 test('baseline security headers are set on every response', async () => {
