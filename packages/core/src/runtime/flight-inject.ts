@@ -142,13 +142,19 @@ export function injectFlightPayload(
    * The wrapper readable this function returns is the missing signal: its `pull` runs exactly when the
    * consumer wants another chunk, and releases one permit. Both producers — the HTML batcher and the payload
    * pump — take one before they enqueue, so a stalled client parks React instead of filling the process. The
-   * Streams standard calls `pull` again only once the previous call has settled, so at most one permit is ever
-   * outstanding, which bounds the queue at a chunk.
+   * Streams standard calls `pull` again only once the previous call has settled, and a call only settles once
+   * a chunk has arrived, so permits are handed out one at a time and the queue is bounded at a chunk.
    *
    * What is left buffered is one React flush, because a flush has to leave here as a single chunk (see
    * {@link emitBatch}) — the same bound React itself holds while it builds one. The two enqueues in `flush`
    * are ungated for a related reason: the response is over by then, and parking its last two chunks on a
-   * permit would only add a way for it not to end.
+   * permit would only add a way for it not to end. They are also why the count can reach two at the very
+   * end — an ungated enqueue settles a pull without spending its permit — which is harmless, there being
+   * nothing left to produce.
+   *
+   * The cost is one extra stream hop and a microtask per chunk: 3.6ms → 4.0ms to push a 187 kB page through
+   * this module with nothing else in the way, which is not the shape of a real response, where the socket
+   * dominates by orders of magnitude.
    */
   let permits = 0;
   const waiting: Array<() => void> = [];
