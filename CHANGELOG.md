@@ -9,7 +9,7 @@ from a maintainer's machine with `pnpm release` — see CONTRIBUTING.md.
 Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
 those.
 
-## Unreleased
+## 1.0.0-rc.19
 
 A pass over the two published packages against four questions — is the API correct and minimal, is there dead
 code, is the framework easy to understand, does it fail gracefully — and everything it turned up. Three
