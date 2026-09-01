@@ -338,15 +338,16 @@ export interface RouteConfig<TRoutes extends readonly Route[] = readonly Route[]
  * key to check, so it passes. Skipped where the path has no params, because `staticPaths` is not called for
  * such a route at all and an error there would be about the wrong thing.
  */
-type ValidateStaticPaths<R, P extends string> = ParamKeys<P> extends never
-  ? R
-  : R extends { staticPaths: () => infer Sets }
-    ? Awaited<Sets> extends ReadonlyArray<infer Set>
-      ? [keyof PathParams<P>] extends [keyof Set]
-        ? R
-        : R & { staticPaths: `every param set staticPaths returns needs the params of '${P}'` }
-      : R
-    : R;
+type ValidateStaticPaths<R, P extends string> =
+  ParamKeys<P> extends never
+    ? R
+    : R extends { staticPaths: () => infer Sets }
+      ? Awaited<Sets> extends ReadonlyArray<infer Set>
+        ? [keyof PathParams<P>] extends [keyof Set]
+          ? R
+          : R & { staticPaths: `every param set staticPaths returns needs the params of '${P}'` }
+        : R
+      : R;
 
 // `PageProps<P, any>`, not `PageProps<P>`: only the *path* is being checked, and pinning the Env would
 // fail every page that declares its own (`PageProps<'/x', MyEnv>`, to type `ctx.var`).

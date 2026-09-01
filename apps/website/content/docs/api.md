@@ -42,13 +42,13 @@ See [Routing](/docs/routing) and [Configuration](/docs/configuration).
 | `PageComponent<P>`     | A page: a server component returning `ReactNode` or `Promise<ReactNode>`.                                       |
 | `PathParams<P>`        | The `params` record a path pattern implies — `'/users/:id'` → `{ id: string }`. `PageProps` applies it for you. |
 | `PageRoute`            | A path rendered by a server component: `path`, `component`, and optional `render` / `staticPaths`.              |
-| `EndpointRoute`        | A path served by a Hono handler: `type: 'endpoint'`, `path`, `server`, optional `method` (one or a list). |
+| `EndpointRoute`        | A path served by a Hono handler: `type: 'endpoint'`, `path`, `server`, optional `method` (one or a list).       |
 | `EndpointServerModule` | What an endpoint's module must export — a single named `handler`.                                               |
 | `Route`                | `PageRoute \| EndpointRoute`.                                                                                   |
 | `RouteConfig<TRoutes>` | The object `defineRoutes` takes: `routes`, plus optional `notFound` and `error`.                                |
 | `FallbackPage`         | The `notFound` / `error` page shape — a `component` with no path of its own.                                    |
 | `ErrorPageProps<E>`    | `PageProps` plus `error`, for the page declared as `error`.                                                     |
-| `ErrorPageInfo`        | `{ message, stack? }`. Redacted in production: a generic message, and `stack` is `undefined`.                 |
+| `ErrorPageInfo`        | `{ message, stack? }`. Redacted in production: a generic message, and `stack` is `undefined`.                   |
 | `HTTPMethod`           | `'get'` \| `'post'` \| `'put'` \| `'patch'` \| `'delete'` \| `'options'` \| `'all'`. A `HEAD` reaches `'get'`.  |
 | `RshonoConfig`         | Every field of `rshono.config.ts`. All optional.                                                                |
 | `RspackHookContext`    | `{ isServer, isDev }`, handed to the `rspack` config hook.                                                      |
@@ -176,7 +176,7 @@ server.use('/blog/*', async (c, next) => {
 | `EnvVars<E>`         | What `ctx.env` resolves to: `Bindings` merged with `Record<string, string \| undefined>`. |
 | `RedirectStatus`     | `301 \| 302 \| 303 \| 307 \| 308`.                                                        |
 | `ServerErrorHandler` | `(error, context) => void` — what `onServerError` takes.                                  |
-| `ServerErrorContext` | `{ source, request, hono, waitUntil }`, the second argument to that handler.               |
+| `ServerErrorContext` | `{ source, request, hono, waitUntil }`, the second argument to that handler.              |
 | `ServerErrorSource`  | `'action' \| 'render' \| 'ssr' \| 'request'` — which stage produced the error.            |
 
 An `'action'` error is the one worth wiring up: React sends the client an opaque marker with no message

@@ -20,7 +20,15 @@ import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../di
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
-import { beginPageRender, getRequestContext, onServerError, publicUrl, reportServerError, RequestContext, runWithContext } from '../dist/runtime/context.js';
+import {
+  beginPageRender,
+  getRequestContext,
+  onServerError,
+  publicUrl,
+  reportServerError,
+  RequestContext,
+  runWithContext,
+} from '../dist/runtime/context.js';
 import { walkHotUpdates } from '../dist/runtime/hot-update.js';
 import { validateRoutesModule, validateServerApp } from '../dist/runtime/validate-entries.js';
 import { MINIMAL_APP_DIR, TESTBED_DIR } from './helpers.mjs';
@@ -103,9 +111,7 @@ describe('injectFlightPayload', () => {
       });
     };
 
-    const html = await readAll(
-      batchedStreamOf(['<html><body><p>hi</p></bo', 'dy></html>']).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']))),
-    );
+    const html = await readAll(batchedStreamOf(['<html><body><p>hi</p></bo', 'dy></html>']).pipeThrough(injectFlightPayload(streamOf(['0:"hi"\n']))));
     assert.equal(countOf(html, '</body></html>'), 1, 'exactly one trailer, however the batches fell');
     assert.ok(html.indexOf('__FLIGHT_DATA') < html.indexOf('</body></html>'), 'the script must not land inside the trailer');
     assert.match(html, /<script>\(self\.__FLIGHT_DATA\|\|=\[\]\)\.push\("0:\\"hi\\"\\n"\)<\/script><\/body><\/html>$/);
