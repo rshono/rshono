@@ -364,17 +364,47 @@ type ValidateRoute<R> = R extends {
 type ValidateRoutes<TRoutes extends readonly Route[]> = { [K in keyof TRoutes]: ValidateRoute<TRoutes[K]> };
 
 /**
+ * Refuses a key that is not a {@link RouteConfig} field — a typo'd `notfound` is otherwise a fallback page
+ * that never renders, and nothing at runtime looks for one.
+ *
+ * Excess-property checking did this while the object form was an overload of its own with a concrete
+ * parameter type. It cannot once the parameter is generic and inferred from the argument, because the
+ * inferred type *has* the extra key. The message here is the better one anyway: it lands on the field.
+ */
+type ValidateConfigKeys<T> =
+  Exclude<keyof T, keyof RouteConfig> extends never
+    ? T
+    : T & Record<Exclude<keyof T, keyof RouteConfig>, 'not a defineRoutes field — the fields are routes, notFound and error'>;
+
+/** The check for whichever of the two accepted shapes was passed. */
+type ValidateInput<T> = T extends readonly Route[]
+  ? ValidateRoutes<T>
+  : T extends { routes: infer R extends readonly Route[] }
+    ? ValidateConfigKeys<T> & { routes: ValidateRoutes<R> }
+    : T;
+
+/** The route tuple inside either shape, so the return type carries the literals through both. */
+type RoutesOf<T> = T extends readonly Route[] ? T : T extends { routes: infer R extends readonly Route[] } ? R : readonly Route[];
+
+/**
  * Declares the app's route table. Export the result as `routes` from `src/routes.ts` — the one file
  * rshono requires. It only ever runs on the server, so importing server-only modules from it (inside
  * `staticPaths`, say) is safe.
  *
- * Beyond typing the config, every page is cross-checked against its own path: props not satisfied by
- * `PageProps<'<its path>'>` make the `component` field a type error. A bare {@link Route} array is
- * accepted as shorthand — see the second overload.
+ * Takes a {@link RouteConfig} — the `routes` array plus the optional `notFound` and `error` pages — or a
+ * bare {@link Route} array as shorthand for an app with neither.
  *
- * @param config - A {@link RouteConfig}: the `routes` array plus the optional `notFound` and `error`
- *   pages.
- * @returns The config, unchanged and fully typed.
+ * Beyond typing the config, every page is cross-checked against its own path: props not satisfied by
+ * `PageProps<'<its path>'>` make the `component` field a type error, and a `staticPaths` whose param sets do
+ * not fill the path makes that field one.
+ *
+ * **One signature over both shapes, deliberately.** The array form used to be a second overload, which meant
+ * a mistake inside a bare array was reported as an overload-resolution failure whose *first* line was the
+ * object form's complaint — "Property 'routes' is missing" — pointing at a change the author should not make.
+ * The real message was on line 8. A single signature reports the argument once, at the field that is wrong.
+ *
+ * @param input - A {@link RouteConfig}, or the bare `routes` array.
+ * @returns The config, unchanged and fully typed; an array is wrapped as `{ routes }`.
  *
  * @example
  * ```ts
@@ -398,26 +428,15 @@ type ValidateRoutes<TRoutes extends readonly Route[]> = { [K in keyof TRoutes]: 
  * });
  * ```
  *
- * @see {@link https://www.rshono.com/docs/routing | Docs — routing}
- */
-export function defineRoutes<const TRoutes extends readonly Route[]>(
-  config: RouteConfig<TRoutes> & { routes: ValidateRoutes<TRoutes> },
-): RouteConfig<TRoutes>;
-/**
- * Array shorthand for {@link defineRoutes} — equivalent to `defineRoutes({ routes })`, for an app
- * with no `notFound` or `error` page.
- *
- * @param routes - The {@link Route} array; each page is checked against its own `path`.
- * @returns A {@link RouteConfig} wrapping them.
- *
  * @example
  * ```ts
+ * // The shorthand, for an app with no notFound or error page.
  * export const routes = defineRoutes([{ path: '/', component: () => import('./components/home') }]);
  * ```
  *
  * @see {@link https://www.rshono.com/docs/routing | Docs — routing}
  */
-export function defineRoutes<const TRoutes extends readonly Route[]>(routes: TRoutes & ValidateRoutes<TRoutes>): RouteConfig<TRoutes>;
+export function defineRoutes<const T extends readonly Route[] | RouteConfig<readonly Route[]>>(input: T & ValidateInput<T>): RouteConfig<RoutesOf<T>>;
 export function defineRoutes(input: readonly Route[] | RouteConfig): RouteConfig {
   return Array.isArray(input) ? { routes: input } : (input as RouteConfig);
 }

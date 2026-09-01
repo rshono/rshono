@@ -344,7 +344,7 @@ correctly (verified) — so this is only a contract violation on a function expo
 of the documented programmatic surface. Strip `_` alongside `-`, or fold the validity check in and drop
 the two-call dance.
 
-### L2 — every route type error leads with the wrong fix
+### L2 — ~~every route type error leads with the wrong fix~~
 
 `packages/core/src/router.ts:403-421`
 

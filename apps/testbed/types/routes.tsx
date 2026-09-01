@@ -7,8 +7,10 @@
  * negative one is still an error, so a refactor could switch the check off in silence.
  *
  * Every `@ts-expect-error` below is that assertion: if the check it names stops working, the directive
- * becomes an unused-directive error and this file fails to compile. Each one sits above the whole
- * `defineRoutes(...)` call, because that — the argument — is where an overload mismatch is reported.
+ * becomes an unused-directive error and this file fails to compile. `defineRoutes` has one signature over
+ * both accepted shapes, so an error is reported at the *field* that is wrong rather than as an
+ * overload-resolution report against the argument — which is why every call below is kept on one line, where
+ * a directive above it covers wherever inside it the error lands.
  *
  * Outside `src/`, so nothing bundles it: `tsconfig.json` includes this directory and `rshono build` does
  * not.
@@ -28,7 +30,7 @@ export const bothForms = defineRoutes({ routes: [{ path: '/u/:id', component: id
 
 // @ts-expect-error — props are typed for '/a/:b', the route is '/u/:id'.
 export const mismatchedProps = defineRoutes([{ path: '/u/:id', component: abPage }]);
-// @ts-expect-error — the same mismatch through the config form, which is a separate overload.
+// @ts-expect-error — the same mismatch reached through the config form.
 export const mismatchedInConfig = defineRoutes({ routes: [{ path: '/u/:id', component: abPage }] });
 // @ts-expect-error — a params-typed page on a path that has no params at all.
 export const paramsOnAStaticPath = defineRoutes([{ path: '/about', component: idPage }]);
@@ -58,3 +60,19 @@ export const everyMethod = defineRoutes([{ type: 'endpoint', path: '/api/x', ser
 export const headMethod = defineRoutes([{ type: 'endpoint', path: '/api/x', method: 'head', server: endpoint }]);
 // @ts-expect-error — and not inside a list either.
 export const headInAList = defineRoutes([{ type: 'endpoint', path: '/api/x', method: ['get', 'head'], server: endpoint }]);
+
+// ── The config object's own fields ──────────────────────────────────────────────────────────────────────
+
+export const bothPages = defineRoutes({
+  routes: [{ path: '/', component: anyPage }],
+  notFound: { component: anyPage },
+  error: { component: anyPage },
+});
+
+// Excess-property checking used to refuse this, and cannot now that the parameter is generic and inferred
+// from the argument — so the check is the framework's own, and says which fields there are. Without it a
+// typo'd `notfound` is a fallback page that never renders and nothing at runtime looks for.
+// @ts-expect-error — 'notfound' is not a field; the field is 'notFound'.
+export const misspelledFallback = defineRoutes({ routes: [{ path: '/', component: anyPage }], notfound: { component: anyPage } });
+// @ts-expect-error — nor is anything else.
+export const inventedField = defineRoutes({ routes: [{ path: '/', component: anyPage }], middleware: [] });
