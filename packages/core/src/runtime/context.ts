@@ -546,6 +546,14 @@ export function redirect(location: string, status: RedirectStatus = 303): never 
  * Like {@link redirect} it throws a control signal and never returns, so TypeScript narrows away
  * everything after the call. Don't catch-and-swallow it.
  *
+ * **A real 404 status is only possible on a document load.** A soft navigation asks for a flight payload,
+ * and that response is committed as `200 text/x-component` the moment the render hands its stream back —
+ * before anything is awaited — so there is no shell to beat and calling this from the first line of a page
+ * is already too late. The signal still reaches the browser as a digest, and the client recovers by
+ * reloading the page for real: correct, but an extra round trip and a full document parse every time. Unlike
+ * {@link redirect}, which the same client turns into a soft navigation and which costs nothing. Where the
+ * status matters — a crawler, a monitor — decide in Hono middleware, ahead of the render.
+ *
  * @example
  * ```tsx
  * export default async function Page({ params }: PageProps<'/users/:id'>) {

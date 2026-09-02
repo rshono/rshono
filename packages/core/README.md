@@ -317,6 +317,16 @@ Every target streams, which is the bar a new one has to clear.
   proof that reloading will not help. A visitor without JavaScript is left on the fallback under a 200, and a
   crawler indexes that 200 as a soft 404. The fix is app-side: decide in Hono
   middleware, or in the page component body above the boundary. `rshono dev` warns when it happens.
+
+  **On a soft navigation there is no shell to beat, so every `notFound()` degrades.** A flight fetch is
+  committed as `200 text/x-component` the moment the render hands its stream back — before anything has been
+  awaited — so a `notFound()` from the *first line* of a page component is already too late to be a 404. It
+  rides the payload as a digest, and the client recovers by reloading the page for real (once per URL per
+  tab, then a plain "Page not found" panel). Every in-app click that lands on something missing therefore
+  costs an extra round trip and a full document parse. **`redirect()` is not affected** — the same digest
+  becomes a soft `push()` to the new location, which is what the navigation was going to be anyway. Prefer a
+  `redirect()` where either would do, and decide in Hono middleware where the status still has to be a real
+  404.
 - **A page route answers `GET`, `POST` and `HEAD`.** Every other method is a 404 rather than a 405: the
   `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
   path for a distinction nothing acts on differently here. An endpoint route is the way to answer a `PUT`,

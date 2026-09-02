@@ -22,7 +22,7 @@ running production server — nothing here is inferred from reading alone.
 | ~~**M1**~~ | ~~JSDoc prescribes `useNavigation().url` for a static route's query — it's the same frozen URL~~ | ~~Correct the JSDoc~~ — **fixed** | Docs      |
 | ~~**M2**~~ | ~~*Any* cross-site form POST to a page route is refused, message blames a server action~~ | ~~Reword the 403 + README line~~ — **fixed** | Code + docs |
 | ~~**M3**~~ | ~~A malformed action body is a 500 + error-tracker page, not a 400~~ | ~~Wrap the decode~~ — **fixed** | **Code**  |
-| **M4** | `notFound()` always costs a full document load on a soft navigation | State it in the README                       | Docs      |
+| ~~**M4**~~ | ~~`notFound()` always costs a full document load on a soft navigation~~ | ~~State it in the README~~ — **fixed** | Docs      |
 | ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~ | ~~Normalise the key~~ — **fixed** | Code      |
 | ~~**L2**~~ | ~~An unknown CLI flag prints a raw Node stack trace~~ | ~~Wrap `parseArgs`~~ — **fixed** | Code      |
 | **L3** | `HOST` is read, then silently dropped by `rshono dev`              | Scope the doc, or warn                       | Docs      |
@@ -260,7 +260,7 @@ throw synchronously, for a manifest entry whose module will not load.
 
 ---
 
-# M4 — `notFound()` always costs a full document load on a soft navigation
+# ~~M4 — `notFound()` always costs a full document load on a soft navigation~~ ✅ FIXED
 
 ### Issue
 
