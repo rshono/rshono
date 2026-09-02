@@ -160,6 +160,9 @@ jobs:
       #
       # It measures what the suite reaches *in process*. The e2e suites run the app in a child process, so
       # what they exercise does not count towards it, and neither does the browser-only client runtime.
+      # That half is measurable on demand — see the recipe in the package README's Testing section, which
+      # remaps the testbed bundle's coverage through its source map — and the floors here are deliberately
+      # loose *because* they cannot see it: tightening them would ratchet the build tooling alone.
       - name: Test with a coverage floor
         run: pnpm --filter @rshono/core test:coverage
 

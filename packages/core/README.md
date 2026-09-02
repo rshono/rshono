@@ -392,6 +392,25 @@ most thoroughly tested code in the package — by the e2e suites above, over HTT
 them at all. So the percentage covers the builder, the CLI, the deploy build steps and the pure runtime
 helpers; treat its floors as a ratchet on those, and never as a statement about the framework as a whole.
 
+The other half can be measured on demand, and is worth a look before a release. Every process the suite
+spawns writes its own V8 coverage if you ask for it, and the testbed's bundle carries a source map that
+reaches back into this package's `src/`, so the request path can be remapped onto the files it came from:
+
+```bash
+# from the repository root, so the testbed the coverage points into is under the working directory
+NODE_V8_COVERAGE=.coverage-e2e node --test packages/core/test/prod.test.mjs
+npx c8 report --temp-directory .coverage-e2e --reporter=text --all=false --exclude-after-remap \
+  --exclude='**/node_modules/**' --exclude='**/testbed/src/**' --exclude='**/webpack/**' \
+  --exclude='**/test/**' --exclude='**/drift-*/**' --exclude='**/*.css'
+```
+
+One suite at a time, because a full run builds the testbed several times over — production, dev, cloudflare,
+vercel — and each bundle is a separate path holding the same sources, which no total can add up. Last taken
+this way, the production e2e suite alone reached **97.4% of `entry.rsc.tsx`** (92.3% of its branches),
+**100% of `entry.ssr.tsx`, `navigation.tsx` and the node runtime**, and 88% of `boundaries.tsx` — the rest of
+which is its client half, and belongs to the browser suite. That is why the gate is left where it is rather
+than tightened: the code it cannot see is not the code that is thin.
+
 ## How it works
 
 Two coordinated Rspack compilers, using native RSC support (`rspack.experiments.rsc`):

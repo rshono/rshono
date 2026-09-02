@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1–F6 have since been fixed too** and are struck through below. F7–F10 are open.
+**F1–F7 have since been fixed too** and are struck through below. F8–F10 are open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -25,7 +25,7 @@ running server, or is marked as reasoning rather than observation.
 | ~~**F4**~~ | ~~`decodeFormState` sits outside M3's guard, so one 500 path survives~~ — **fixed**        | ~~Low~~    | Cost of M3            |
 | ~~**F5**~~ | ~~The two action `400`s carry no `cache-control` and no `Vary: RSC`~~ — **fixed**          | ~~Low~~    | Pre-existing          |
 | ~~**F6**~~ | ~~The client's "produced no result" branch is now close to unreachable~~ — **superseded**  | ~~Nit~~    | Residue of M3         |
-| **F7**     | The coverage number still cannot see the request hot path                                  | Low        | L5 documented it only |
+| ~~**F7**~~ | ~~The coverage number still cannot see the request hot path~~ — **measured**               | ~~Low~~    | L5 documented it only |
 | **F8**     | The `NODE_ENV` substitution added by H1 is textual, not syntactic                          | Nit        | Cost of H1            |
 | **F9**     | `prettier --check` fails on five files and nothing in CI runs it                           | Nit        | Pre-existing          |
 | **F10**    | The shadow check compares regex constraints as text                                        | Nit        | Limit of L1           |
@@ -318,9 +318,9 @@ has not been observed to pass.
 
 ---
 
-# F7 — The coverage number still cannot see the request hot path
+# ~~F7 — The coverage number still cannot see the request hot path~~ ✅ MEASURED
 
-**Severity: low.** L5 documented the gap; the gap is still there.
+**Severity: low.** L5 documented the gap; it is now measurable on demand, and measured.
 
 ### Issue
 
@@ -333,11 +333,37 @@ L5's fix was to say so where a contributor reads it (the README's Testing sectio
 a comment on the coverage job). Saying so is the honest minimum, but the number still describes the build
 tooling while looking like it describes the framework.
 
-### Fix
+### Fix — done, though not the one proposed
 
-`NODE_V8_COVERAGE` on the child processes `startTestbed` spawns, merged into the parent's report. The e2e
-suites already drive nearly all of the hot path over HTTP, so this is a measurement change rather than new
-tests — and it would let the floors mean what they appear to.
+`NODE_V8_COVERAGE` on the children works, and better than expected: every process the suite spawns writes its
+own coverage, the testbed's bundle included, and that bundle's source map reaches all the way back to
+`packages/core/src/**.ts` — through rspack's map, through `dist`'s own `.js.map`, to the TypeScript. Remapped
+with `c8 report`, the production e2e suite alone comes out at:
+
+| file                     | statements | branches | functions |
+| ------------------------ | ---------- | -------- | --------- |
+| `entry.rsc.tsx`          | 97.4%      | 92.3%    | 90.9%     |
+| `entry.ssr.tsx`          | 100%       | 100%     | 100%      |
+| `navigation.tsx`         | 100%       | 100%     | 100%      |
+| `deploy/node/runtime.ts` | 100%       | 100%     | 100%      |
+| `boundaries.tsx`         | 88.0%      | 66.7%    | 28.6%     |
+
+(`boundaries.tsx`'s remainder is its client half, which belongs to the browser suite.) **So the question
+underneath F7 has an answer: the code the gate cannot see is not the code that is thin.**
+
+What it is _not_ is a gate, and that is deliberate. Merging those numbers into the existing floor needs every
+bundle's sources to resolve to one path, and a full run builds the testbed four times over — production, dev,
+cloudflare, vercel — so the same source appears once per bundle, each with a partial number, plus once more
+from the in-process load. Making them one file means normalising the bundle's source paths
+(`output.devtoolModuleFilenameTemplate`), which changes the maps that ship to users, and it means a
+coverage tool in the dependency tree of a package that pins every dependency on purpose. Both are decisions
+for the maintainer, not a follow-up fix; a gate assembled without them would move for reasons that have
+nothing to do with the tests.
+
+So the recipe is written down instead — in the README's Testing section, beside L5's note, with the flags
+that work and the caveat that it is one suite at a time — and `ci.yml` now says _why_ the floors are loose
+rather than only that they are: they cannot see the hot path, so tightening them would ratchet the build
+tooling alone.
 
 ---
 

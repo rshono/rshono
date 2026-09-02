@@ -7,6 +7,8 @@ dist/
 # contributor's local file, and the cloudflare suite asserts on the one the build writes.
 apps/*/wrangler.jsonc
 *.tsbuildinfo
+# Raw V8 coverage from the on-demand hot-path measurement — see the README's Testing section.
+.coverage-e2e/
 .DS_Store
 .env*
 test-results/
