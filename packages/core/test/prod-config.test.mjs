@@ -273,6 +273,10 @@ describe('a server.ts with no csrf()', () => {
     // post above — there is no action in it. It names the constraint and the way round it instead.
     assert.match(message, /cross-site form post to a page route/, 'the refusal must name what it actually refused');
     assert.match(message, /\{ type: 'endpoint' \}/, 'and the escape hatch, which is otherwise undiscoverable');
+    // The same header bag as the framework's other plain-text refusals — see `plainRefusal` in entry.rsc.tsx,
+    // and the test beside the plain 404 in prod.test.mjs. This one used to carry `vary` and no cache policy.
+    assert.equal(page.headers.get('cache-control'), 'private, no-cache', 'a refusal is not something to store');
+    assert.match(page.headers.get('vary') ?? '', /\bRSC\b/);
 
     // Keyed on the content type, not on the presence of an action: the same request with a non-form body is
     // let through, which is what makes the limitation about form posts rather than about actions.

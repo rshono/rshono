@@ -209,15 +209,30 @@ function acceptsHtml(c: Context): boolean {
 }
 
 /**
- * The 404 for an app with no `notFound` page, and for a client that wanted neither HTML nor a flight
- * payload. It carries the `Vary` too: this is one of the answers a page URL gives depending on the `RSC` request header.
+ * Every plain-text answer the framework gives on a page route: the 404s, the refusals on the action path and
+ * the last-resort 500. One function, because the header bag is what gets forgotten — and the four call sites
+ * used to make three different choices about it, which left the next one to guess.
+ *
+ * Both headers are set here rather than left to the response floor, which only decorates page *content
+ * types* and so never sees a `text/plain` answer.
+ *
+ * - **`cache-control`** matters in one case and is consistency in the rest. A 404 is heuristically cacheable
+ *   under RFC 9111, so without this a shared cache may store the plain-text one — while the rendered HTML
+ *   404 beside it, the same answer to the same request from a client that asked for HTML, is correctly
+ *   private. The action refusals answer a POST, which no cache stores, and 400/403/500 are not in that list
+ *   either; saying it anyway costs a header and settles the question for good.
+ * - **`vary: RSC`** because a page URL has two representations, and every one of these is an answer to a
+ *   request that could have asked for either.
+ */
+function plainRefusal(c: Context, message: string, status: ContentfulStatusCode): Response {
+  return c.text(message, status, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+}
+
+/**
+ * The 404 for an app with no `notFound` page, and for a client that wanted neither HTML nor a flight payload.
  */
 function plainNotFound(c: Context): Response {
-  // `cache-control` explicitly, because the default above is applied to page *content types* and this is
-  // `text/plain`. A 404 is heuristically cacheable under RFC 9111, so without it a shared cache may store
-  // this one — while the rendered HTML 404 next to it, the same answer to the same request from a client
-  // that asked for HTML, is correctly private.
-  return c.text('Not Found', 404, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+  return plainRefusal(c, 'Not Found', 404);
 }
 
 /** A lazy once-cell: runs `load` at most once, but clears a rejection so a later call can retry. */
@@ -449,7 +464,7 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
  * framework's decoding to a caller who cannot act on it.
  */
 function malformedAction(c: Context): Response {
-  return c.text('Bad Request: malformed server action request', 400);
+  return plainRefusal(c, 'Bad Request: malformed server action request', 400);
 }
 
 async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageComponent>>): Promise<Response> {
@@ -465,7 +480,7 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       // Before the body is decoded, so an unknown id costs nothing to reject. `hasOwn` so `__proto__`
       // does not resolve to a manifest entry.
       if (!Object.hasOwn(__rspack_rsc_manifest__.serverManifest, renderRequest.actionId)) {
-        return c.text('Bad Request: unknown server action', 400);
+        return plainRefusal(c, 'Bad Request: unknown server action', 400);
       }
       let args: unknown[];
       try {
@@ -515,10 +530,10 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
         // knowing whether a post carries an action means buffering an untrusted body — so "to a server
         // action" claimed something this code cannot know, and said it to a caller whose post very often
         // has no action in it at all.
-        return c.text(
+        return plainRefusal(
+          c,
           "Forbidden: cross-site form post to a page route — a page route cannot accept one, because a form post to a page is how a server action is called. Use an { type: 'endpoint' } route.",
           403,
-          { vary: RSC_VARY_HEADER },
         );
       }
       let formData: FormData;
@@ -781,9 +796,7 @@ function buildApp(): Hono {
       }
     }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';
-    // Same reason as `plainNotFound`, minus the urgency: a 500 is not heuristically cacheable, so this half
-    // is consistency — the framework's own answers should not differ in what they promise about caching.
-    return c.text(`Internal Server Error${detail}`, 500, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+    return plainRefusal(c, `Internal Server Error${detail}`, 500);
   });
 
   return app;

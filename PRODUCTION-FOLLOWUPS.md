@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1–F4 have since been fixed too** and are struck through below. F5–F10 are open.
+**F1–F5 have since been fixed too** and are struck through below. F6–F10 are open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -23,7 +23,7 @@ running server, or is marked as reasoning rather than observation.
 | ~~**F2**~~ | ~~Under a global nonce CSP, prerendered documents are built and never served~~ — **fixed** | ~~Low~~    | Residue of L4         |
 | ~~**F3**~~ | ~~A deploy-drift `loadServerAction` failure is now a silent 400~~ — **fixed**              | ~~Low~~    | Cost of M3            |
 | ~~**F4**~~ | ~~`decodeFormState` sits outside M3's guard, so one 500 path survives~~ — **fixed**        | ~~Low~~    | Cost of M3            |
-| **F5**     | The two action `400`s carry no `cache-control` and no `Vary: RSC`                          | Low        | Pre-existing          |
+| ~~**F5**~~ | ~~The two action `400`s carry no `cache-control` and no `Vary: RSC`~~ — **fixed**          | ~~Low~~    | Pre-existing          |
 | **F6**     | The client's "produced no result" branch is now close to unreachable                       | Nit        | Residue of M3         |
 | **F7**     | The coverage number still cannot see the request hot path                                  | Low        | L5 documented it only |
 | **F8**     | The `NODE_ENV` substitution added by H1 is textual, not syntactic                          | Nit        | Cost of H1            |
@@ -243,7 +243,7 @@ guard reverted the second fails as the 500 it used to be.
 
 ---
 
-# F5 — The two action `400`s carry no `cache-control` and no `Vary: RSC`
+# ~~F5 — The two action `400`s carry no `cache-control` and no `Vary: RSC`~~ ✅ FIXED
 
 **Severity: low.** Consistency, not correctness.
 
@@ -265,10 +265,19 @@ This is **not** a caching bug: RFC 9111 lists the statuses a shared cache may st
 not among them, so nothing will store these without being told to. It is that three sibling refusals on one
 route make three different choices, and the next one added will have to guess which.
 
-### Fix
+### Fix — done
 
-Give the action refusals the same bag the 404 has — `vary: RSC` and `PAGE_CACHE_CONTROL` — or say in the header
-floor why a 4xx that is not a 404 needs neither.
+They all go through one function now, `plainRefusal(c, message, status)`: the two 404s, both action 400s, the
+cross-site 403 and the last-resort 500 — every plain-text answer the framework gives on a page route. It sets
+`vary: RSC` and `private, no-cache`, and its doc comment says which of those is correctness and which is
+consistency: the plain 404 answers a GET and is heuristically cacheable, so it is the one that needs the cache
+policy; the rest answer a POST, which no cache stores, and saying it anyway costs a header and settles the
+question. The floor above never sees any of them, because it only decorates page _content types_.
+
+Asserted as a set rather than one at a time — the point is that they agree — beside the existing plain-404
+test. The cross-site 403 is asserted in `prod-config.test.mjs`, since it is only the framework's own refusal
+with `csrf()` off; with Hono's `csrf()` on, the 403 that comes back is Hono's and carries neither header,
+which is its business and not this rule's.
 
 ---
 

@@ -343,6 +343,31 @@ test('non-HTML clients get plain-text 404s, private like the rendered one', asyn
   assert.equal(rendered.headers.get('cache-control'), res.headers.get('cache-control'), 'the two 404s must agree');
 });
 
+// The 404 above and the refusals on the action path are the same kind of answer — the framework declining, in
+// plain text, on a URL that answers in two representations. They used to make three different choices about
+// the header bag, which left whoever added the next one to guess; they all go through `plainRefusal` now.
+// Only the 404 *needs* it (a GET, and heuristically cacheable); for the POST refusals it is consistency. The
+// third refusal, the cross-site form post, is only the framework's own with `csrf()` off — prod-config.test.mjs
+// asserts the same bag on it there.
+test('the framework’s plain-text refusals all carry the same headers', async () => {
+  const post = (body, headers) => fetch(`${base}/users`, { method: 'POST', headers: { Origin: base, ...headers }, body });
+  const refusals = {
+    'unknown action id': await post('[]', { 'x-rsc-action': 'no-such-action', 'content-type': 'text/plain;charset=UTF-8' }),
+    'undecodable action body': await post('not-a-flight-reply', {
+      'x-rsc-action': serverActionId('Add user'),
+      'content-type': 'text/plain;charset=UTF-8',
+    }),
+    'plain 404': await fetch(`${base}/api/definitely-not-an-endpoint`),
+  };
+
+  for (const [name, res] of Object.entries(refusals)) {
+    await res.text();
+    assert.match(res.headers.get('content-type') ?? '', /text\/plain/, `${name}: should be plain text`);
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', `${name}: no shared cache should ever store a refusal`);
+    assert.match(res.headers.get('vary') ?? '', /\bRSC\b/, `${name}: the URL answers in two representations`);
+  }
+});
+
 test('useNavigation() gives a client island server-computed pathname/params/searchParams during SSR (no flicker)', async () => {
   const html = await (await fetch(`${base}/profile/1?tab=settings`)).text();
   assert.match(html, /data-nav="pathname">(?:<!--[^]*?-->)?\/profile\/1</, 'useNavigation().pathname was wrong at SSR time');
