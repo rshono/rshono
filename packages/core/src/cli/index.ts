@@ -4,6 +4,7 @@ import { DEPLOY_TARGETS, resolveDeployPreset } from '../deploy/presets.js';
 import { loadConfig } from '../server/load-config.js';
 import { loadEnvFiles } from '../server/load-env.js';
 import { parsePort } from '../server/server-config.js';
+import { exit } from './exit.js';
 
 // The commands are imported where they are dispatched: `build` and `dev` pull in Rspack, and a static import
 // would load it for `start` too — ~30 MB of RSS and ~70ms of startup that would then sit in the server's own
@@ -82,11 +83,11 @@ async function main(): Promise<void> {
     default:
       console.error(`rshono: unknown command "${command}"\n`);
       console.log(HELP);
-      process.exit(1);
+      return exit(1);
   }
 }
 
-main().catch((error) => {
+main().catch(async (error: unknown) => {
   console.error(error);
-  process.exit(1);
+  await exit(1);
 });

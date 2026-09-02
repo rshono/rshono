@@ -2,6 +2,7 @@
 // exercises indirectly through one happy path. They import the *built* package, so they double as a
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -160,6 +161,45 @@ describe('injectFlightPayload', () => {
     assert.equal(countOf(html, '</script>'), 1, 'only the real closing tag');
     assert.match(html, /<\/\\script>/, 'the payload copy is escaped');
     assert.match(html, /<\\!--/);
+  });
+
+  // The `atob` fallback is how a binary row — a `Uint8Array` a server component handed a client one —
+  // survives the trip through a `<script>` tag. Reassembles the payload the way `entry.client.tsx` does,
+  // by running the emitted script bodies against a `__FLIGHT_DATA` shim, and asserts the bytes are the
+  // bytes that went in.
+  async function replayPayload(payloadChunks) {
+    const out = streamOf(['<html><body>hi</body></html>']).pipeThrough(injectFlightPayload(streamOf(payloadChunks)));
+    const html = await readAll(out);
+    const parts = [];
+    for (const [, body] of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) {
+      new Function('self', body)({ __FLIGHT_DATA: { push: (chunk) => parts.push(chunk) } });
+    }
+    return Buffer.concat(parts.map((part) => Buffer.from(typeof part === 'string' ? encoder.encode(part) : part)));
+  }
+
+  test('carries binary payload bytes through the document byte-exactly', async () => {
+    // The chunk boundary is the hazard: a payload cut mid-character used to leave its lead bytes inside a
+    // streaming decoder, and the next chunk's `atob` fallback — which re-encodes only the chunk that threw —
+    // dropped them. The client then reassembled a payload short by those bytes and failed to hydrate.
+    const payload = Buffer.from('303a22e282ac220a313afffe0a', 'hex');
+    const got = await replayPayload([payload.subarray(0, 5), payload.subarray(5)]);
+    assert.deepEqual(got, payload, 'the client must read back exactly the bytes the server wrote');
+  });
+
+  test('keeps a byte-order mark that opens a payload chunk', async () => {
+    // Decoding per chunk re-runs the BOM check on every call, so the decoder is `ignoreBOM`.
+    const payload = Buffer.from('efbbbf41', 'hex');
+    assert.deepEqual(await replayPayload([payload]), payload);
+  });
+
+  test('completes the response when the payload ends mid-character', async () => {
+    // The end-of-stream flush on a `fatal` decoder holding an incomplete sequence threw from outside any
+    // `try`, and the rejection errored the response stream: a truncated document with no trailer.
+    const out = streamOf(['<html><body>hi</body></html>']).pipeThrough(
+      injectFlightPayload(streamOf([encoder.encode('0:"hi"\n'), Uint8Array.from([0x31, 0x3a, 0x22, 0xe2])])),
+    );
+    const html = await readAll(out);
+    assert.equal(countOf(html, '</body></html>'), 1, 'the document still has to be closed');
   });
 
   test('re-emits a trailer even when the document never had one', async () => {
@@ -942,6 +982,26 @@ describe('prerenderStaticRoutes', () => {
     ]);
   });
 
+  test('writes a payload carrying binary rows byte-for-byte', async () => {
+    // A flight payload is not text: `emitChunk` puts the raw bytes of a `Uint8Array` a server component
+    // returned straight on the wire. Reading a variant with `response.text()` is a *non-fatal* UTF-8 decode,
+    // so each of those bytes became U+FFFD and was written back out as three — a page the build reports as
+    // prerendered and the client cannot parse, on every soft navigation to it, forever.
+    const payload = Buffer.from('303a226869220a313afffe0a', 'hex');
+    const ssgDir = tempDir();
+    await prerenderStaticRoutes({
+      ssgDir,
+      routes: [{ path: '/about', render: 'static', component: async () => ({ default: () => null }) }],
+      fetch: (request) =>
+        request.headers.get('RSC') === '1'
+          ? new Response(payload, { status: 200, headers: { 'Content-Type': 'text/x-component' } })
+          : new Response('<!DOCTYPE html><p>ok</p>', { status: 200, headers: { 'Content-Type': 'text/html' } }),
+    });
+
+    const stored = await readPrerendered(ssgDir, '/about', 'flight');
+    assert.deepEqual(Buffer.from(stored.body), payload, 'the file on disk must be the bytes the render produced');
+  });
+
   test('renders a path once however many times staticPaths returns it', async () => {
     const requested = [];
     const warnings = [];
@@ -1359,6 +1419,16 @@ describe('deploy target resolution', () => {
     assert.throws(() => resolveDeployPreset({ config: 'fly' }), /unknown deploy target "fly"/);
     assert.throws(() => resolveDeployPreset({ config: 'fly' }), new RegExp(DEPLOY_TARGETS.join(', ')));
     assert.equal(deployHintFor('fly'), null, 'a dist/ from a newer rshono can carry a name this one lacks');
+  });
+
+  // A bare bracket access resolves every `Object.prototype` key to an inherited value, which then passes a
+  // truthiness guard: `RSHONO_DEPLOY=constructor` used to reach the builder and die there on
+  // `preset.runtimeModule.split('/')` instead of being named as the typo it is.
+  test('a prototype key is a typo, not a target', () => {
+    for (const key of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+      assert.throws(() => resolveDeployPreset({ env: key }), /unknown deploy target/, `${key} must not resolve to a preset`);
+      assert.equal(deployHintFor(key), null, `${key} has no deploy hint`);
+    }
   });
 });
 
@@ -2206,5 +2276,39 @@ describe('assertRouteModules', () => {
       console.warn = warn;
     }
     assert.match(warnings.join('\n'), /"\/side-effect" could not be loaded at build time, so its module was not checked — DATABASE_URL is not set/);
+  });
+});
+
+// The CLI's failure paths print the report that says what went wrong and then exit. `process.exit` does not
+// drain a pipe — every CI job, and any `rshono build | tee` — so everything past the 64 KiB pipe buffer used
+// to be discarded, cutting a large Rspack error dump mid-error.
+describe('exit', () => {
+  const EXIT_MODULE = new URL('../dist/cli/exit.js', import.meta.url).href;
+  const spawnWriting = (bytes, exiting) =>
+    spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `import('${EXIT_MODULE}').then(async ({ exit }) => {
+           console.error('E'.repeat(${bytes}));
+           ${exiting}
+         })`,
+      ],
+      { encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
+    );
+
+  test('a piped stream is drained before the process goes away', () => {
+    const bytes = 300_000;
+    const drained = spawnWriting(bytes, 'await exit(1);');
+    assert.equal(drained.status, 1, 'the exit code still has to be the one asked for');
+    assert.equal(drained.stderr.length, bytes + 1, 'every byte written must reach the pipe');
+
+    // The same write without the helper, so the assertion above is measuring the drain and not a pipe
+    // that was never small enough to matter on this machine. Only POSIX: a write to a pipe is synchronous
+    // on Windows, so there is nothing there for a bare exit to drop and nothing for the drain to rescue.
+    if (process.platform !== 'win32') {
+      const cut = spawnWriting(bytes, 'process.exit(1);');
+      assert.ok(cut.stderr.length < bytes, `a bare process.exit is what truncates (${cut.stderr.length} bytes)`);
+    }
   });
 });

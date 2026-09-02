@@ -488,4 +488,28 @@ test.describe('late control signals', () => {
     expect(documents).toBe(2);
     await expect(overlay).toBeVisible();
   });
+
+  /*
+   * The other direction, and the ordinary one: a page that calls `notFound()` before it renders anything.
+   * A soft navigation to it still can only be answered with a digest — the payload was committed before the
+   * component ran — so it takes the same reload, and that reload always works. The bound is what used to be
+   * wrong: it was spent on a recovery that succeeded and never released, so the *second* visit to the same
+   * URL painted the framework's panel over a 404 page the app renders perfectly well.
+   */
+  test('a notFound() page reached twice by soft navigation renders the app 404 both times', async ({ page }) => {
+    const notFoundHeading = page.getByRole('heading', { name: '404 — nothing here' });
+    const overlay = page.locator('[data-rshono-fatal]');
+
+    // Not a link click: the testbed links only to profiles that exist, and the destination has to be one
+    // that raises `notFound()`. A `navigation.navigate` is the same soft navigation a `router.push` makes.
+    await page.goto('/users');
+    await page.evaluate(() => void navigation.navigate('/profile/9999'));
+    await expect(notFoundHeading).toBeVisible();
+    await expect(overlay).toHaveCount(0, 'the recovery reload works here — nothing to explain to the visitor');
+
+    await page.goto('/users');
+    await page.evaluate(() => void navigation.navigate('/profile/9999'));
+    await expect(notFoundHeading).toBeVisible();
+    await expect(overlay).toHaveCount(0, 'the second visit must recover exactly like the first');
+  });
 });

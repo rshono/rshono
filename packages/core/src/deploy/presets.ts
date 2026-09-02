@@ -155,11 +155,23 @@ const PRESETS: Record<DeployTarget, DeployPreset> = {
 export const DEPLOY_TARGETS = Object.keys(PRESETS) as DeployTarget[];
 
 /**
+ * `PRESETS[target]` for a target that really is one.
+ *
+ * `Object.hasOwn` rather than a bare bracket access, which resolves every `Object.prototype` key —
+ * `constructor`, `__proto__`, `toString` — to an inherited value that then passes a truthiness guard. A typo
+ * that happens to be one of those used to reach the builder and die on `preset.runtimeModule.split('/')`
+ * instead of getting the message written for an unknown target.
+ */
+function presetFor(target: string): DeployPreset | undefined {
+  return Object.hasOwn(PRESETS, target) ? PRESETS[target as DeployTarget] : undefined;
+}
+
+/**
  * How to deploy what a given target built, or `null` for a name this rshono does not know — which a `dist/`
  * from a newer version can legitimately carry.
  */
 export function deployHintFor(target: string): string | null {
-  return (PRESETS as Record<string, DeployPreset | undefined>)[target]?.deployHint ?? null;
+  return presetFor(target)?.deployHint ?? null;
 }
 
 /** Where a deploy target can be named, in precedence order. */
@@ -181,7 +193,7 @@ export function resolveDeployPreset(sources: DeploySources = {}): DeployPreset {
   const target = sources.flag?.trim() || sources.env?.trim() || sources.config?.trim();
   if (!target) return NODE_PRESET;
 
-  const preset = (PRESETS as Record<string, DeployPreset | undefined>)[target];
+  const preset = presetFor(target);
   if (!preset) {
     throw new Error(`[rshono] unknown deploy target ${JSON.stringify(target)} — expected one of: ${DEPLOY_TARGETS.join(', ')}.`);
   }

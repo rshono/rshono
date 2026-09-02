@@ -10,6 +10,7 @@ import { writeBuildMarker } from '../deploy/build-marker.js';
 import type { DeployPreset } from '../deploy/presets.js';
 import type { Route } from '../router.js';
 import { prerenderStaticRoutes } from '../server/ssg.js';
+import { exit } from './exit.js';
 
 interface BuildOptions {
   rootDir: string;
@@ -41,7 +42,7 @@ async function phase<T>(run: () => Promise<T>): Promise<T> {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.startsWith('[rshono]')) throw error;
     console.error(`\n  ✗ ${message}\n`);
-    process.exit(1);
+    return exit(1);
   }
 }
 
@@ -68,7 +69,7 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
 
   if (stats.hasErrors()) {
     console.error(stats.toString({ preset: 'errors-warnings', colors: true }));
-    process.exit(1);
+    return exit(1);
   }
   // Printed rather than left to the summary below, which counts warnings without saying what they are —
   // and one of them is the env shadow reporting a read it cannot cover. See `env-shadow-loader.cjs`.
@@ -119,9 +120,7 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
 
   console.log(`  ✓ build complete — ${preset.deployHint}`);
 
-  // Rspack's worker pool can keep the loop alive after `close()`, so the exit is explicit — but a piped
-  // stdout is asynchronous, and exiting drops whatever has not drained. In CI that is exactly the lines
-  // saying what was built and where it went. A zero-length write's callback fires behind the real ones.
-  await new Promise<void>((resolve) => process.stdout.write('', () => resolve()));
-  process.exit(0);
+  // Rspack's worker pool can keep the loop alive after `close()`, so the exit is explicit. {@link exit}
+  // drains first: in CI the tail is the lines saying what was built and where it went.
+  await exit(0);
 }

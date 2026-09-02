@@ -514,7 +514,15 @@ function buildApp(): Hono {
           'content-type': 'text/x-component;charset=utf-8',
         });
       }
-      return c.redirect(signal.location, signal.status as RedirectStatusCode);
+      // Both page defaults by hand: `c.redirect` builds a bodiless response with no content type, so the
+      // middleware that would apply them skips it on `PAGE_CONTENT_TYPE`. They are not decoration here —
+      // `301` and `308` are cacheable with no explicit `Cache-Control` at all, so a session-gated permanent
+      // redirect could otherwise be stored by a shared cache and replayed to another visitor, and without
+      // `Vary` this document redirect could answer an `RSC: 1` fetch that needs the payload above.
+      const redirected = c.redirect(signal.location, signal.status as RedirectStatusCode);
+      appendVary(redirected.headers, RSC_VARY_HEADER);
+      if (!redirected.headers.has('cache-control')) redirected.headers.set('cache-control', PAGE_CACHE_CONTROL);
+      return redirected;
     }
     if (loadNotFoundPage) {
       try {
