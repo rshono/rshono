@@ -27,25 +27,6 @@ interface ServerBundle {
   checkRouteModules: () => Promise<void>;
 }
 
-/**
- * Runs one phase of the build that the app itself can fail.
- *
- * A `[rshono]` message was written for whoever is running the build, so it is printed as the one line it is;
- * anything else is a bug in the framework and keeps its stack. Everything the app can get wrong arrives this
- * way — the two entry modules, checked in the bundle's module scope; each route's own module; and a page that
- * throws while prerendering.
- */
-async function phase<T>(run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.startsWith('[rshono]')) throw error;
-    console.error(`\n  ✗ ${message}\n`);
-    return exit(1);
-  }
-}
-
 function importServerBundle(distDir: string): Promise<ServerBundle> {
   return import(pathToFileURL(join(distDir, 'server', 'main.mjs')).href) as Promise<ServerBundle>;
 }
@@ -88,21 +69,26 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   await rm(ssgDir, { recursive: true, force: true });
   process.env.RSHONO_PRERENDER = '1';
   // The bundle's module scope is where `src/routes.ts` and `src/server.ts` are validated.
-  const bundle = await phase(() => importServerBundle(distDir));
+  //
+  // This and the two stages below are what the *app* can fail — the two entry modules here, each route's own
+  // module next, and a page that throws while prerendering after that. Each raises a `[rshono]` message
+  // written for whoever is running the build, and `main().catch` in `cli/index.ts` is what prints it as the
+  // one line it is. These used to be wrapped in a `phase()` helper that did the same thing three times and
+  // nowhere else, which left `createConfigs` above — where a missing `src/routes.ts` is found — printing a
+  // raw `Error` object with framework frames in it.
+  const bundle = await importServerBundle(distDir);
 
   // Before anything is rendered: the checks here are the ones a route fails on *every* request, so a build
   // that skipped them would spend the prerender pass on a route it is about to refuse anyway. Without this
   // they ran on first request instead, which meant a page that could never work shipped behind a green build.
-  await phase(() => bundle.checkRouteModules());
+  await bundle.checkRouteModules();
 
-  const { written, skipped } = await phase(() =>
-    prerenderStaticRoutes({
-      routes: bundle.routes,
-      fetch: (request) => bundle.app.fetch(request),
-      ssgDir,
-      siteUrl: config.siteUrl,
-    }),
-  );
+  const { written, skipped } = await prerenderStaticRoutes({
+    routes: bundle.routes,
+    fetch: (request) => bundle.app.fetch(request),
+    ssgDir,
+    siteUrl: config.siteUrl,
+  });
   if (written.length > 0) console.log(`  • prerendered ${written.length} static page(s): ${written.join(', ')}`);
   if (skipped.length > 0) console.log(`  • skipped ${skipped.length} (will SSR per request)`);
 

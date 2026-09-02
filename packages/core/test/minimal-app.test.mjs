@@ -183,6 +183,50 @@ test('a second route claiming a path the table already answers fails the build, 
   assert.equal(status, 1, `the build must not exit 0:\n${output}`);
   assert.match(output, /\[rshono\] src\/routes\.ts: routes\[1\] \("\/"\) would never run — routes\[0\] \("\/"\) already answers GET, POST \//);
   assert.doesNotMatch(output, /is not iterable|Cannot read properties/, 'and not by handing over a TypeError from a minified bundle');
+  assert.doesNotMatch(
+    output,
+    /\n\s+at /,
+    'and as a line, not an Error object — the three build stages the app can fail go out through `main().catch` too',
+  );
+});
+
+test('the one required file missing is one line, from `build` and from `dev` alike', () => {
+  // `src/routes.ts` is the file this whole fixture exists to say is required, so its absence is the likeliest
+  // first-run failure there is — and it used to get the worst output of any of them. The `[rshono]` message
+  // was only turned into a line by a `phase()` helper inside `build.ts`, wrapped around three later stages;
+  // `createConfigs` raises this one *before* the first of them, and `dev` never had the helper at all. Both
+  // fell through to `main().catch`'s bare `console.error(error)` — a raw `Error` object with
+  // `at createConfigs` and `at Module.devCommand` under it. That rule now lives in `main().catch` itself.
+  //
+  // `PORT: '0'` so `dev` cannot stop on the port-in-use branch instead: 0 is always bindable, and this has to
+  // fail for the reason under test on any machine.
+  const dir = mkdtempSync(join(MINIMAL_APP_DIR, 'throwaway-'));
+  throwaway.push(dir);
+
+  for (const command of ['build', 'dev']) {
+    const { status, output } = runCli(dir, [command], { env: { PORT: '0' } });
+    assert.equal(status, 1, `\`rshono ${command}\` must exit 1:\n${output}`);
+    assert.match(output, /✗ \[rshono\] src\/routes\.ts not found/, `\`rshono ${command}\` must name the file that is missing`);
+    assert.match(output, /it is the one required file/, 'and say why it matters');
+    assert.doesNotMatch(
+      output,
+      /\n\s+at /,
+      `\`rshono ${command}\` must not print a stack — node:internal and framework frames are not the user’s to read`,
+    );
+  }
+});
+
+test('a failure that is not the app’s keeps its stack, because that stack is the report', () => {
+  // The other half of the rule: only a `[rshono]`-prefixed message is a message for the user. Anything else
+  // is a bug in the framework, and flattening it to one line would throw away the only thing that locates it.
+  // A config module that throws is the cheapest way to raise one from inside the CLI's own call path.
+  const dir = appWithRoutes(HOME_AND(''));
+  writeFileSync(join(dir, 'rshono.config.ts'), "throw new Error('not an rshono message');\n");
+
+  const { status, output } = runCli(dir, ['build']);
+  assert.equal(status, 1);
+  assert.match(output, /not an rshono message/);
+  assert.match(output, /\n\s+at /, 'a framework fault has to keep the frames that say where it came from');
 });
 
 test('a src/server.ts that does not default-export a Hono app fails the build, naming the file', () => {
@@ -192,6 +236,7 @@ test('a src/server.ts that does not default-export a Hono app fails the build, n
   assert.equal(status, 1, `the build must not exit 0:\n${output}`);
   assert.match(output, /\[rshono\] src\/server\.ts must `export default` a Hono app/);
   assert.doesNotMatch(output, /Cannot read properties of undefined/, "Hono's own failure names nothing the developer wrote");
+  assert.doesNotMatch(output, /\n\s+at /, 'and as a line, not an Error object');
 });
 
 /*

@@ -122,7 +122,21 @@ async function main(): Promise<void> {
   }
 }
 
+/**
+ * The one place a failure becomes output, for every command.
+ *
+ * A `[rshono]` message was written for whoever is running the command, so it is printed as the one line it
+ * is; anything else is a bug in the framework and keeps its stack, because that stack is the report.
+ *
+ * This rule used to live in `build.ts`, as a `phase()` wrapper around three stages of one command — which
+ * left everything outside those three going out through a bare `console.error(error)`: the whole of
+ * `rshono dev`, and `build`'s own `createConfigs`, which is where a missing `src/routes.ts` is found. So the
+ * likeliest first-run mistake there is answered with a raw `Error` object and two frames of framework
+ * internals, which is the same shape of problem an unknown CLI flag had.
+ */
 main().catch(async (error: unknown) => {
-  console.error(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith('[rshono]')) console.error(`\n  ✗ ${message}\n`);
+  else console.error(error);
   await exit(1);
 });

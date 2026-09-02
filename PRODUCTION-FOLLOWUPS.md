@@ -4,37 +4,40 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
+**F1 has since been fixed too** and is struck through below. F2–F10 are open.
+
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
-**Baseline now.** `npm test` **320/320** pass (was 303) · `typecheck` clean · `eslint packages/core` clean ·
-coverage **85.30 / 92.25 / 80.24** against floors of 82 / 90 / 75 (was 83.44 / 91.39 / 78.42)
-**Verified.** 2026-09-02 at `b86a3f5`. Each item below was reproduced against a real build and a running
-server, or is marked as reasoning rather than observation.
+**Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
+`typecheck` clean · `eslint packages/core` clean · coverage **85.30 / 92.25 / 80.24** against floors of
+82 / 90 / 75 (was 83.44 / 91.39 / 78.42)
+**Verified.** 2026-09-02, written at `b86a3f5`. Each item below was reproduced against a real build and a
+running server, or is marked as reasoning rather than observation.
 
 ---
 
 ## Summary
 
-| #       | Issue                                                                      | Severity | Origin                |
-| ------- | -------------------------------------------------------------------------- | -------- | --------------------- |
-| **F1**  | A `[rshono]` failure from `dev` or `build` still prints a raw Node stack   | Medium   | New — found via L2    |
-| **F2**  | Under a global nonce CSP, prerendered documents are built and never served | Low      | Residue of L4         |
-| **F3**  | A deploy-drift `loadServerAction` failure is now a silent 400              | Low      | Cost of M3            |
-| **F4**  | `decodeFormState` sits outside M3's guard, so one 500 path survives        | Low      | Cost of M3            |
-| **F5**  | The two action `400`s carry no `cache-control` and no `Vary: RSC`          | Low      | Pre-existing          |
-| **F6**  | The client's "produced no result" branch is now close to unreachable       | Nit      | Residue of M3         |
-| **F7**  | The coverage number still cannot see the request hot path                  | Low      | L5 documented it only |
-| **F8**  | The `NODE_ENV` substitution added by H1 is textual, not syntactic          | Nit      | Cost of H1            |
-| **F9**  | `prettier --check` fails on five files and nothing in CI runs it           | Nit      | Pre-existing          |
-| **F10** | The shadow check compares regex constraints as text                        | Nit      | Limit of L1           |
+| #          | Issue                                                                                    | Severity   | Origin                |
+| ---------- | ---------------------------------------------------------------------------------------- | ---------- | --------------------- |
+| ~~**F1**~~ | ~~A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ — **fixed** | ~~Medium~~ | New — found via L2    |
+| **F2**     | Under a global nonce CSP, prerendered documents are built and never served               | Low        | Residue of L4         |
+| **F3**     | A deploy-drift `loadServerAction` failure is now a silent 400                            | Low        | Cost of M3            |
+| **F4**     | `decodeFormState` sits outside M3's guard, so one 500 path survives                      | Low        | Cost of M3            |
+| **F5**     | The two action `400`s carry no `cache-control` and no `Vary: RSC`                        | Low        | Pre-existing          |
+| **F6**     | The client's "produced no result" branch is now close to unreachable                     | Nit        | Residue of M3         |
+| **F7**     | The coverage number still cannot see the request hot path                                | Low        | L5 documented it only |
+| **F8**     | The `NODE_ENV` substitution added by H1 is textual, not syntactic                        | Nit        | Cost of H1            |
+| **F9**     | `prettier --check` fails on five files and nothing in CI runs it                         | Nit        | Pre-existing          |
+| **F10**    | The shadow check compares regex constraints as text                                      | Nit        | Limit of L1           |
 
 **Also worth knowing:** the Playwright suite could not be run in this environment — see
 [Not verified here](#not-verified-here) at the end. Run it before tagging.
 
 ---
 
-# F1 — A `[rshono]` failure from `dev` or `build` still prints a raw Node stack
+# ~~F1 — A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ ✅ FIXED
 
-**Severity: medium.** The likeliest first-run failure there is, and it gets the output L2 was about.
+**Severity: medium.** The likeliest first-run failure there is, and it got the output L2 was about.
 
 ### Issue
 
@@ -66,11 +69,28 @@ and it is the first thing anyone scaffolding by hand will see.
 equivalent at all. Both escape to `main().catch`, which is `console.error(error)` — the same raw-object
 handler L2 removed for `parseArgs`.
 
-### Fix
+### Fix — done
 
-Move the `phase()` treatment into `main().catch`, where it covers every command rather than two stages of one:
-a message starting with `[rshono]` is a message for the user, so print it and exit 1; anything else keeps its
-stack, because it is a framework bug. `phase()` can then stay as it is or collapse into it.
+`phase()` is gone and its rule now lives in `main().catch`, where it covers every command rather than three
+stages of one. A message starting with `[rshono]` is a message for the user, so it is printed as the line it
+is; anything else keeps its stack, because that stack is the report. `phase()` collapsed rather than stayed —
+two implementations of one rule is how they drift.
+
+Both commands now answer identically, exit 1:
+
+```
+$ rshono dev        # and `rshono build`, after its "building client + server bundles…" line
+
+  ✗ [rshono] src/routes.ts not found in /tmp/f1 — it is the one required file.
+```
+
+And the other half of the rule holds — a config module throwing a plain `Error` still comes out with its
+frames, `at loadConfig`, `at main` and all.
+
+Removing `phase()` is the part that could have regressed silently, since the three stages it wrapped were
+covered by tests that asserted only on the message. Those two tests now also assert no stack, so the move is
+guarded from both ends: with the new handler reverted, the missing-`routes.ts` case and both build-stage cases
+fail.
 
 ---
 
