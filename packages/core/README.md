@@ -321,6 +321,15 @@ Every target streams, which is the bar a new one has to clear.
   `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
   path for a distinction nothing acts on differently here. An endpoint route is the way to answer a `PUT`,
   `PATCH`, `DELETE` or `OPTIONS`.
+- **A page route refuses every cross-site form post**, not only one carrying a server action. A form post to
+  a page is how a `<form action={serverAction}>` reaches the server, and whether a given one holds an action
+  can only be known by reading the body — so the framework refuses on `Sec-Fetch-Site` and the content type,
+  before parsing, rather than buffering a body for anyone who asks. The shapes this rules out are real ones:
+  a **SAML ACS callback**, OIDC **`response_mode=form_post`**, and most payment-gateway returns all arrive as
+  a cross-site `application/x-www-form-urlencoded` or `multipart/form-data` POST. `csrf()`'s allowlist does
+  not widen it — this is the framework declining to run its own action mechanism, ahead of any app policy.
+  **Receive them on an `{ type: 'endpoint' }` route**, which calls your Hono handler directly and never
+  reaches the page renderer, then redirect to the page.
 - **A page's `ctx` prop is non-enumerable**, so `<Child {...props} />` hands a _server_ child
   `ctx: undefined` — silently, since a spread copies enumerables only, and the type still says it is there.
   It cannot be otherwise: an enumerable `ctx` would put `ctx.hono.env`, every binding and secret, into

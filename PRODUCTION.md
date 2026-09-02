@@ -20,7 +20,7 @@ running production server — nothing here is inferred from reading alone.
 | ------ | ------------------------------------------------------------------ | -------------------------------------------- | --------- |
 | ~~**H1**~~ | ~~Server bundles ship React's **development** builds — 2× every target~~ | ~~2-line loader change~~ — **fixed** | **Code**  |
 | ~~**M1**~~ | ~~JSDoc prescribes `useNavigation().url` for a static route's query — it's the same frozen URL~~ | ~~Correct the JSDoc~~ — **fixed** | Docs      |
-| **M2** | *Any* cross-site form POST to a page route is refused, message blames a server action | Reword the 403 + README line | Code + docs |
+| ~~**M2**~~ | ~~*Any* cross-site form POST to a page route is refused, message blames a server action~~ | ~~Reword the 403 + README line~~ — **fixed** | Code + docs |
 | ~~**M3**~~ | ~~A malformed action body is a 500 + error-tracker page, not a 400~~ | ~~Wrap the decode~~ — **fixed** | **Code**  |
 | **M4** | `notFound()` always costs a full document load on a soft navigation | State it in the README                       | Docs      |
 | ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~ | ~~Normalise the key~~ — **fixed** | Code      |
@@ -180,7 +180,7 @@ prerendered — is a real option, but the doc correction is the honest 1.0 answe
 
 ---
 
-# M2 — *Any* cross-site form POST to a page route is refused
+# ~~M2 — *Any* cross-site form POST to a page route is refused~~ ✅ FIXED
 
 ### Issue
 

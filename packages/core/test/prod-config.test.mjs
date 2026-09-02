@@ -229,6 +229,40 @@ describe('a server.ts with no csrf()', () => {
     await res.text();
     assert.notEqual(res.status, 403, 'with no csrf() middleware, a cross-origin action must not be rejected');
   });
+
+  test('a page route refuses every cross-site form post; an endpoint route is how you take one', async () => {
+    // With `csrf()` off, this is the framework's own check and nothing else. It runs on `Sec-Fetch-Site` and
+    // the content type, *before* the body is read — `parseRenderRequest` calls any form-content-type POST
+    // with no `x-rsc-action` header a form action, because deciding otherwise means buffering an untrusted
+    // body to look for a `$ACTION_*` field. So the refusal is not "an action from another site": it is every
+    // cross-site form post to a page, action or no action, which is the arrival shape of SAML ACS, OIDC
+    // `response_mode=form_post` and most payment-gateway returns.
+    const post = (path, contentType) =>
+      fetch(`${app.base}${path}`, {
+        method: 'POST',
+        headers: { Origin: 'https://idp.example', 'sec-fetch-site': 'cross-site', 'content-type': contentType },
+        body: contentType === 'application/json' ? '{}' : 'SAMLResponse=abc',
+      });
+
+    const page = await post('/login', 'application/x-www-form-urlencoded');
+    assert.equal(page.status, 403);
+    const message = await page.text();
+    // The message used to say "to a server action", which this code cannot know and which is wrong for the
+    // post above — there is no action in it. It names the constraint and the way round it instead.
+    assert.match(message, /cross-site form post to a page route/, 'the refusal must name what it actually refused');
+    assert.match(message, /\{ type: 'endpoint' \}/, 'and the escape hatch, which is otherwise undiscoverable');
+
+    // Keyed on the content type, not on the presence of an action: the same request with a non-form body is
+    // let through, which is what makes the limitation about form posts rather than about actions.
+    const asJson = await post('/login', 'application/json');
+    await asJson.text();
+    assert.notEqual(asJson.status, 403, 'a non-form content type is not the shape a browser can forge');
+
+    // And the documented remedy works: an endpoint calls the app handler directly, so it never reaches this.
+    const endpoint = await post('/api/acs', 'application/x-www-form-urlencoded');
+    assert.equal(endpoint.status, 200, 'an endpoint route must be able to receive the post a page route cannot');
+    assert.deepEqual(await endpoint.json(), { received: 3 }, 'and the handler must actually see the body');
+  });
 });
 
 // `SSG_CACHE_CONTROL` is `public, max-age=300` and has no config field, deliberately — it is a

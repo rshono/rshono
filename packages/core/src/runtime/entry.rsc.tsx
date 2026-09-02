@@ -169,8 +169,17 @@ function cspNonce(c: Context): string | undefined {
  *
  * `publicUrl(c)` rather than `c.req.url`, so it honours `trustProxy` and compares against the origin the
  * browser actually used — which behind a proxy, `rshono dev`'s included, is not the one the server was reached
- * on. The cost is that an app deliberately accepting *form* posts to an action from another origin of its own
- * cannot, `csrf()`'s allowlist included; that is what an `{ type: 'endpoint' }` route is for.
+ * on.
+ *
+ * **The cost is wider than "an action you meant to allow".** This runs on content type alone, before the body
+ * is read — `parseRenderRequest` calls any form-content-type POST with no `x-rsc-action` header a
+ * `form-action`, because deciding otherwise would mean buffering an untrusted body to look for a `$ACTION_*`
+ * field. So a **page route cannot accept any cross-site form post at all**, whether or not an action is in
+ * it: a SAML ACS callback, OIDC `response_mode=form_post`, and most payment-gateway returns all arrive in
+ * exactly this shape and are all refused, `csrf()`'s allowlist included. Refusing before parsing is the right
+ * trade — the alternative is reading a body from anyone who asks — but it is a real limitation and the 403
+ * and the README both say so. An `{ type: 'endpoint' }` route is the way to accept one: those call the app
+ * handler directly and never reach `renderPage`, so they never reach this.
  */
 function refusesCrossSiteForm(c: Context): boolean {
   const site = c.req.header('sec-fetch-site');
@@ -470,7 +479,15 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       // JavaScript off. Unlike the client-initiated one it carries no custom header, so it is also the only
       // action shape a browser can be made to send from another site: see `refusesCrossSiteForm`.
       if (refusesCrossSiteForm(c)) {
-        return c.text('Forbidden: cross-site form post to a server action', 403, { vary: RSC_VARY_HEADER });
+        // Named for what was actually refused. The check runs before the body is read — it has to, since
+        // knowing whether a post carries an action means buffering an untrusted body — so "to a server
+        // action" claimed something this code cannot know, and said it to a caller whose post very often
+        // has no action in it at all.
+        return c.text(
+          "Forbidden: cross-site form post to a page route — a page route cannot accept one, because a form post to a page is how a server action is called. Use an { type: 'endpoint' } route.",
+          403,
+          { vary: RSC_VARY_HEADER },
+        );
       }
       let formData: FormData;
       let decodedAction: (() => Promise<unknown>) | null;

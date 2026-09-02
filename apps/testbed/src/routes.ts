@@ -86,6 +86,16 @@ export const routes = defineRoutes({
     },
     {
       type: 'endpoint',
+      // A cross-site form post — the arrival shape of SAML ACS, OIDC `response_mode=form_post` and most
+      // payment-gateway returns. A page route refuses every one of those, before the body is read, because
+      // a form post to a page is how a server action is called. An endpoint is the documented way to take
+      // one: it calls its handler directly and never reaches the page renderer.
+      path: '/api/acs',
+      method: 'post',
+      server: () => import('./acs'),
+    },
+    {
+      type: 'endpoint',
       path: '/api/boom',
       server: () => import('./boom'),
     },
