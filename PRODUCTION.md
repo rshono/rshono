@@ -23,7 +23,7 @@ running production server — nothing here is inferred from reading alone.
 | **M2** | *Any* cross-site form POST to a page route is refused, message blames a server action | Reword the 403 + README line | Code + docs |
 | ~~**M3**~~ | ~~A malformed action body is a 500 + error-tracker page, not a 400~~ | ~~Wrap the decode~~ — **fixed** | **Code**  |
 | **M4** | `notFound()` always costs a full document load on a soft navigation | State it in the README                       | Docs      |
-| **L1** | Two shapes of dead route pass the shadow check                     | Normalise the key                            | Code      |
+| ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~ | ~~Normalise the key~~ — **fixed** | Code      |
 | **L2** | An unknown CLI flag prints a raw Node stack trace                  | Wrap `parseArgs`                             | Code      |
 | **L3** | `HOST` is read, then silently dropped by `rshono dev`              | Scope the doc, or warn                       | Docs      |
 | **L4** | Prerendered documents bake in a build-time CSP nonce               | Prerender without a nonce                    | Code      |
@@ -297,7 +297,7 @@ therefore costs a document load, and that `redirect()` does not.
 
 ---
 
-# L1 — Two shapes of dead route pass the shadow check
+# ~~L1 — Two shapes of dead route pass the shadow check~~ ✅ FIXED
 
 ### Issue
 

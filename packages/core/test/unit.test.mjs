@@ -2181,8 +2181,47 @@ describe('validateRoutesModule', () => {
     rejects([{ ...endpoint, path: '/' }, page], /already answers GET, POST \//, 'an endpoint shadows a page at the same path too');
   });
 
+  test('sees a dead route whose path is spelled differently from the one that shadows it', () => {
+    // The check used to key on the literal path string, so a dead route only had to be spelled differently
+    // to pass — exactly the build-exits-0-with-an-unreachable-route case it exists to prevent. Every pair
+    // below was confirmed against Hono 4.13 directly: the second route never wins for any request.
+    const at = (path) => ({ ...page, path });
+    for (const [table, expected, what] of [
+      [[at('/u/:id'), at('/u/:name')], /routes\[1\] \("\/u\/:name"\) would never run/, "a parameter's name is not part of the pattern"],
+      [[at('/posts/:y/:m'), at('/posts/:a/:b')], /routes\[1\] .* would never run/, 'two parameters, both renamed'],
+      [[at('/a/*'), at('/a/b')], /routes\[1\] \("\/a\/b"\) would never run/, 'a wildcard registered ahead of a concrete path'],
+      [[at('/a/*'), at('/a')], /routes\[1\] \("\/a"\) would never run/, 'a trailing wildcard answers its bare prefix too'],
+      [[at('/*'), at('/anything')], /routes\[1\] .* would never run/, 'a root wildcard claims everything after it'],
+      [[at('/u/:id/*'), at('/u/:name/x')], /routes\[1\] .* would never run/, 'both mechanisms at once'],
+      [[at('/a/*/c'), at('/a/:id/c')], /routes\[1\] .* would never run/, 'a `*` before the last segment is one segment, like a parameter'],
+      [[at('/a/:id?'), at('/a')], /routes\[1\] \("\/a"\) would never run/, 'an optional parameter answers the path without it'],
+    ]) {
+      rejects(table, expected, what);
+    }
+
+    // And says why, since two paths that look different reading as one route is the confusing part.
+    rejects([at('/u/:id'), at('/u/:name')], /Hono matches on the pattern, not the spelling/);
+    // An exact duplicate needs no explaining, so it does not get the sentence.
+    assert.throws(
+      () => validateRoutesModule([at('/u/:id'), at('/u/:id')]),
+      (error) => !error.message.includes('not the spelling'),
+      'an exact duplicate is self-explanatory',
+    );
+  });
+
   test('leaves a route that still answers something alone', () => {
     for (const table of [
+      // A `{regex}` constraint *is* part of the pattern, so these are two routes and both can answer:
+      // `/a/7` goes to the first and `/a/xy` to the second.
+      [{ ...page, path: '/a/:id{[0-9]+}' }, { ...page, path: '/a/:name' }],
+      // Specific-behind-generic is the dead one; generic behind specific still answers everything else.
+      [{ ...page, path: '/a/b' }, { ...page, path: '/a/*' }],
+      // The wildcard's boundary is the `/` — `/a/*` does not answer `/ab`.
+      [{ ...page, path: '/a/*' }, { ...page, path: '/ab' }],
+      // `/a/:id?` answers `/a` as well as `/a/x`, so a bare `/a` ahead of it leaves it half its work.
+      [{ ...page, path: '/a' }, { ...page, path: '/a/:id?' }],
+      // A wildcard claims one subtree, not the table.
+      [{ ...page, path: '/a/*' }, { ...page, path: '/b/c' }],
       // One path split across two methods — an ordinary thing to write.
       [
         { ...endpoint, method: 'get' },
