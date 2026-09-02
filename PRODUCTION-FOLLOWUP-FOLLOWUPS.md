@@ -89,7 +89,7 @@ that will not evaluate takes every action with it.
 
 ---
 
-# G2 — H1's justification for a textual substitution was wrong about DefinePlugin
+# ~~G2 — H1's justification for a textual substitution was wrong about DefinePlugin~~ ✅ CORRECTED
 
 **Severity: nit.** A wrong sentence that made a real risk look already-taken.
 
@@ -113,9 +113,27 @@ did — F8 was filed as a nit on that basis.
 ### Fix — done
 
 F8 replaced the substitution with a scan that skips comments, strings and templates, and both comments now
-say what DefinePlugin actually does. Recorded here because the error was in the _review_, not in the code:
-the same claim appears in `PRODUCTION.md`'s H1 section, which is a historical document and is left as
-written.
+say what DefinePlugin actually does. What was left was the claim itself, still standing in `PRODUCTION.md`'s
+H1 section — so it is **struck through there and answered with a correction**, which is what that document
+already does with the four other supporting details it got wrong. Its header now says five.
+
+**Measured rather than asserted**, since the whole point of this item is a claim that was believed and never
+checked. A throwaway app with a `'use client'` component holding both shapes:
+
+```tsx
+const LITERAL = 'set process.env.NODE_ENV before starting';
+const READ = process.env.NODE_ENV;
+```
+
+built for production, gives in **both** bundles:
+
+```
+"data-literal":"set process.env.NODE_ENV before starting","data-read":"production"
+```
+
+The client chunk is DefinePlugin's work alone and the string survives it, which is the claim. The server
+bundle is the SSR layer, where the env-shadow loader substitutes, and the string survives there too — so F8's
+scan holds in a real build and not only in its unit tests, while the read it exists for is still inlined.
 
 ---
 

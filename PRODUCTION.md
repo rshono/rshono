@@ -8,9 +8,10 @@ running production server — nothing here is inferred from reading alone.
 **Verified.** 2026-09-02 at `78650f2` — all 14 findings re-reproduced from scratch.
 
 > **All 14 findings are real. None is struck as a non-bug.**
-> Four _supporting details_ were wrong and are struck through where they appear: M1's README
-> attribution, L4's nonce count, L5's coverage branch figure, and two line numbers (L1, L5). None
-> changes a verdict.
+> Five _supporting details_ were wrong and are struck through where they appear: M1's README
+> attribution, L4's nonce count, L5's coverage branch figure, two line numbers (L1, L5), and H1's
+> comparison of its own substitution with DefinePlugin's — see the correction under H1. None changes a
+> verdict.
 
 ---
 
@@ -106,7 +107,15 @@ shadows the binding — two lines:
 
 The substituted value is the one the prelude's `env` literal already carries, so the env shadow's
 security property is unchanged. The substitution is textual, like the prelude insertion beside it —
-the same class of risk as DefinePlugin's own, which every other module already gets.
+~~the same class of risk as DefinePlugin's own, which every other module already gets.~~
+
+> **Correction — DefinePlugin does not carry that risk.** It replaces expressions through the parser's
+> hooks, so it works on the parsed module and cannot reach inside a string literal at all. The risk was this
+> loader's alone: a `process.env.NODE_ENV` in a string or a comment in an SSR-layer module was rewritten too.
+> Nothing shipped wrong — React's entry wrappers branch in code, which is why the measurements below stand —
+> but "someone else already takes this risk" is what got the fix filed as a nit. It is closed: the
+> substitution now walks comments, strings and templates and leaves them alone
+> ([F8](./PRODUCTION-FOLLOWUPS.md), [G2](./PRODUCTION-FOLLOWUP-FOLLOWUPS.md)).
 
 **Measured with the patch applied, then reverted:**
 
