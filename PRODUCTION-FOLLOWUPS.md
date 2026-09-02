@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1, F2 and F3 have since been fixed too** and are struck through below. F4–F10 are open.
+**F1–F4 have since been fixed too** and are struck through below. F5–F10 are open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -22,7 +22,7 @@ running server, or is marked as reasoning rather than observation.
 | ~~**F1**~~ | ~~A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ — **fixed**   | ~~Medium~~ | New — found via L2    |
 | ~~**F2**~~ | ~~Under a global nonce CSP, prerendered documents are built and never served~~ — **fixed** | ~~Low~~    | Residue of L4         |
 | ~~**F3**~~ | ~~A deploy-drift `loadServerAction` failure is now a silent 400~~ — **fixed**              | ~~Low~~    | Cost of M3            |
-| **F4**     | `decodeFormState` sits outside M3's guard, so one 500 path survives                        | Low        | Cost of M3            |
+| ~~**F4**~~ | ~~`decodeFormState` sits outside M3's guard, so one 500 path survives~~ — **fixed**        | ~~Low~~    | Cost of M3            |
 | **F5**     | The two action `400`s carry no `cache-control` and no `Vary: RSC`                          | Low        | Pre-existing          |
 | **F6**     | The client's "produced no result" branch is now close to unreachable                       | Nit        | Residue of M3         |
 | **F7**     | The coverage number still cannot see the request hot path                                  | Low        | L5 documented it only |
@@ -194,9 +194,9 @@ With the split reverted it answers 400 and says nothing, so the test fails — c
 
 ---
 
-# F4 — `decodeFormState` sits outside M3's guard, so one 500 path survives
+# ~~F4 — `decodeFormState` sits outside M3's guard, so one 500 path survives~~ ✅ FIXED
 
-**Severity: low.** Deliberate, and probably right, but not currently written down anywhere.
+**Severity: low** as written — **the reproduction raised it**: it is the M3 shape again, reachable unauthenticated.
 
 ### Issue
 
@@ -209,11 +209,37 @@ still reaches `reportServerError`. Not reproduced — `decodeFormState` returns 
 string, so it looks defensive — but the shape M3 closed is open here, and the reasoning for leaving it that way
 lives only in this document.
 
-### Fix
+### Fix — done
 
-Confirm whether it is reachable at all with a crafted `$ACTION_KEY`. If it is, the honest answer is a 500 that
-is _not_ reported as a request fault — the action ran, so the request was fine — or a comment at the call site
-saying why the guard stops where it does.
+**It is reachable, and it was worse than "one 500 path survives" suggested.** Reproduced against a running
+server, unauthenticated, with a body React never writes:
+
+```
+$ curl -X POST -H "Origin: $BASE" -F '$ACTION_REF_1=' -F '$ACTION_KEY=k' \
+       -F "\$ACTION_ID_$ID=" -F 'email=crafted@example.com' $BASE/subscribe
+Internal Server Error                                        (500)
+set-cookie: subscribed=crafted%40example.com; Path=/; HttpOnly    # the action ran first
+[error-reporter] request /subscribe #…: Connection closed.
+```
+
+The trick is that the two decoders disagree about which field names the call: `decodeAction` takes the **last**
+`$ACTION_` key it sees, so a `$ACTION_ID_<public id>` placed after a `$ACTION_REF_1` wins there and the action
+runs; `decodeFormState` only ever looks for a `$ACTION_REF_`, finds that one, and throws decoding
+`$ACTION_1:0` metadata nobody wrote. So it is the M3 shape again — an unauthenticated 500, and an
+`[error-reporter]` line per request — just moved past the point where the action has already had its effects.
+
+Which is also why it cannot be a 400: the answer is now the page, whatever this body was. The decode is
+wrapped, `formState` stays `undefined` — precisely what a form _without_ `useActionState` gets — and the page
+renders 200 with the action's effects intact. Silent in production for the same reason `malformedAction` is
+(action ids are public, so reporting is a paging vector), with a `console.warn` in dev, where the plausible
+cause is a React or bundler version whose form fields this does not understand.
+
+Proving it took a fixture: all three of the testbed's forms are the `useActionState` shape, and the
+divergence needs the _other_ one. So `/subscribe` is a form a **server component** wires straight to an action
+— React posts it as a bare `$ACTION_ID_` — which also closes a real coverage gap: nothing exercised that shape
+before, though `actionFormData` in the test helpers had always handled it. Two tests: the ordinary no-JS post
+through that form, and the crafted body, which is a 200 with the cookie set and nothing reported. With the
+guard reverted the second fails as the 500 it used to be.
 
 ---
 

@@ -11,6 +11,12 @@ export const routes = defineRoutes({
       component: () => import('./components/signup'),
     },
     {
+      // A form a server component renders, posted as a single `$ACTION_ID_` field — the no-`useActionState`
+      // shape, which nothing else in this app exercises. See `subscribe` in src/actions.ts.
+      path: '/subscribe',
+      component: () => import('./components/subscribe'),
+    },
+    {
       path: '/crash',
       component: () => import('./components/crash'),
     },

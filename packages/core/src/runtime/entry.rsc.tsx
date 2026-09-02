@@ -543,7 +543,23 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
           reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action error:' });
           throw error;
         }
-        formState = (await decodeFormState(result, formData)) ?? undefined;
+        try {
+          formState = (await decodeFormState(result, formData)) ?? undefined;
+        } catch (error) {
+          // The action has already run, and may well have written something, so this cannot be refused the
+          // way an undecodable body *before* it is — the guard above answers 400 precisely because nothing
+          // has happened yet. What failed here is rebuilding the `useActionState` key from the body's
+          // `$ACTION_REF_` metadata, and a body React wrote always carries it: this is reachable only from a
+          // hand-made one, which pairs a `$ACTION_ID_` React took for the call with `$ACTION_REF_`/
+          // `$ACTION_KEY` fields it did not write. So the page is rendered with no form state, which is
+          // exactly what a form without `useActionState` gets.
+          //
+          // Silent for the same reason `malformedAction` is: action ids are public, so anyone can post one,
+          // and reporting from here would put an unauthenticated caller back in touch with whoever owns the
+          // error tracker — for a request that has already had its effects. In dev it is worth a line, since
+          // there the likely cause is a React or bundler version whose form fields this does not understand.
+          if (isDev) console.warn('[rshono] a form post carried form-state fields that could not be decoded; rendering without them:', error);
+        }
       }
     }
   }

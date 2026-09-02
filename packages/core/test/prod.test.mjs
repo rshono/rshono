@@ -409,6 +409,63 @@ test('progressive-enhancement form action works without JavaScript', async () =>
   assert.match(await res.text(), /Welcome aboard, NoScript Nancy/);
 });
 
+// The other shape React emits, and the one the three `useActionState` forms above never produce: a server
+// component renders `<form action={subscribe}>`, so the body is a single `$ACTION_ID_<id>` field and there is
+// no form state to decode at all.
+test('a form a server component wired straight to an action posts as a bare $ACTION_ID', async () => {
+  const html = await (await fetch(`${base}/subscribe`)).text();
+  assert.match(html, /name="\$ACTION_ID_[0-9a-f]+"/, 'this shape is what the test is about — without it, it proves nothing');
+  assert.doesNotMatch(html, /\$ACTION_KEY/, 'and it carries no useActionState metadata');
+
+  const res = await fetch(`${base}/subscribe`, {
+    method: 'POST',
+    headers: { Origin: base },
+    body: actionFormData(html, { email: 'ada@example.com' }),
+  });
+  assert.equal(res.status, 200);
+  const cookie = res.headers.getSetCookie().find((each) => each.startsWith('subscribed='));
+  assert.ok(cookie, 'the action ran and wrote to the response head');
+
+  // Read back on the next request, which is when a cookie the action set is actually in play.
+  const back = await fetch(`${base}/subscribe`, { headers: { cookie: cookie.split(';')[0] } });
+  // `<!-- -->` is React's separator between static text and an interpolated value.
+  assert.match(await back.text(), /Subscribed as (?:<!-- -->)?ada@example\.com/);
+});
+
+// The form-state decode sits *after* the action has run, so it is the one place in this path that cannot
+// answer 400 — the caller would be told their request was refused by a server that had already acted on it.
+// A body React never writes reaches it: `$ACTION_REF_`/`$ACTION_KEY` fields, which is what `decodeFormState`
+// keys on, alongside a `$ACTION_ID_` that `decodeAction` takes for the call instead. That used to be a 500
+// and an `[error-reporter] request` line, mintable by anyone, since action ids are public.
+test('a form post carrying form-state fields React never wrote renders the page instead of 500ing', async () => {
+  const html = await (await fetch(`${base}/subscribe`)).text();
+  const actionField = html.match(/name="(\$ACTION_ID_[0-9a-f]+)"/)[1];
+
+  const body = new FormData();
+  // Order matters: `decodeAction` takes the *last* `$ACTION_` key it sees, `decodeFormState` only ever looks
+  // for a `$ACTION_REF_`. Neither is given the `$ACTION_1:0` metadata a real `useActionState` post carries.
+  body.set('$ACTION_REF_1', '');
+  body.set('$ACTION_KEY', 'not-a-key-react-wrote');
+  body.set(actionField, '');
+  body.set('email', 'crafted@example.com');
+
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/subscribe`, { method: 'POST', headers: { Origin: base }, body });
+  assert.equal(res.status, 200, 'the action already ran, so there is nothing left to refuse');
+  assert.match(res.headers.get('content-type'), /text\/html/, 'and the page is what comes back');
+  assert.ok(
+    res.headers.getSetCookie().some((cookie) => cookie.startsWith('subscribed=crafted%40example.com')),
+    'the action ran and kept its effects — which is exactly why this cannot be a 4xx',
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
+  assert.doesNotMatch(
+    getOutput().slice(logsBefore),
+    /\[error-reporter\]/,
+    'and nobody is paged: action ids are public, so this would be an unauthenticated way to reach the error tracker',
+  );
+});
+
 test('client-initiated server action mutates and re-renders', async () => {
   const res = await fetch(`${base}/users`, {
     method: 'POST',
