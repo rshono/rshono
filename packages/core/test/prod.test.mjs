@@ -731,6 +731,14 @@ test('prerendered pages build absolute URLs from siteUrl; a dynamic page uses th
   assert.match(flight, /https:\/\/rshono\.example\/docs\/getting-started/, 'useNavigation() reads the URL from this payload');
   assert.doesNotMatch(flight, /http:\/\/localhost/);
 
+  // And the query is frozen out of it with everything else — the same bytes answer every caller, whatever
+  // they asked for. This is the part `PageProps.url` used to send readers to `useNavigation()` over: both
+  // read the one `href` in this payload, so the hook is the same frozen URL rather than a way around it.
+  // `render: 'dynamic'` is the only server-side answer, which is what the JSDoc now says.
+  const withQuery = await (await fetch(`${base}/docs/getting-started?tab=x`, { headers: { RSC: '1' } })).text();
+  assert.doesNotMatch(withQuery, /tab=x/, 'a prerendered payload cannot carry the query the request made');
+  assert.equal(withQuery, flight, 'it is byte-identical to the query-less one — one file, handed to everyone');
+
   const dynamic = await (await fetch(`${base}/whoami`)).text();
   assert.doesNotMatch(dynamic, /rshono\.example/, 'siteUrl is a build-time concern only');
   assert.match(dynamic, /localhost/, 'a dynamic page reflects the request it actually received');

@@ -19,7 +19,7 @@ running production server — nothing here is inferred from reading alone.
 | #      | Issue                                                              | Fix                                          | Kind      |
 | ------ | ------------------------------------------------------------------ | -------------------------------------------- | --------- |
 | ~~**H1**~~ | ~~Server bundles ship React's **development** builds — 2× every target~~ | ~~2-line loader change~~ — **fixed** | **Code**  |
-| **M1** | JSDoc prescribes `useNavigation().url` for a static route's query — it's the same frozen URL | Correct the JSDoc            | Docs      |
+| ~~**M1**~~ | ~~JSDoc prescribes `useNavigation().url` for a static route's query — it's the same frozen URL~~ | ~~Correct the JSDoc~~ — **fixed** | Docs      |
 | **M2** | *Any* cross-site form POST to a page route is refused, message blames a server action | Reword the 403 + README line | Code + docs |
 | ~~**M3**~~ | ~~A malformed action body is a 500 + error-tracker page, not a 400~~ | ~~Wrap the decode~~ — **fixed** | **Code**  |
 | **M4** | `notFound()` always costs a full document load on a soft navigation | State it in the README                       | Docs      |
@@ -126,7 +126,7 @@ mapped frames — but it is most of what those two targets upload, and that is w
 
 ---
 
-# M1 — `useNavigation().url` is wrong on a `render: 'static'` route
+# ~~M1 — `useNavigation().url` is wrong on a `render: 'static'` route~~ ✅ FIXED
 
 ### Issue
 

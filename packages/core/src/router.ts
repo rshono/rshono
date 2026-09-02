@@ -57,9 +57,12 @@ export interface PageProps<Path extends string = string, E extends Env = Env> {
    * `-Proto`). A fresh instance per request, so mutating it is local to the page; it is not
    * serializable, so hand a `'use client'` component `url.href` rather than `url`.
    *
-   * On a `render: 'static'` route this is the build-time URL — rendered once against `siteUrl`, so
-   * `url.searchParams` is always empty. Read the query from `useNavigation().url` in a `'use client'`
-   * component instead, or mark the route `render: 'dynamic'`.
+   * On a `render: 'static'` route this is the build-time URL — rendered once against `siteUrl`, so the
+   * origin is `siteUrl`'s and `url.searchParams` is always empty, on first paint and after a soft
+   * navigation alike. **`useNavigation().url` is the same frozen URL, not a way around it**: the payload
+   * carries one `href` and both readings come from it. Mark the route `render: 'dynamic'` if the page
+   * depends on the query; a `'use client'` component that only wants it after hydration can read
+   * `location.search` in an effect.
    */
   url: URL;
   /** Matched route params for this request, e.g. `{ id: '42' }` for `/profile/:id`. */
