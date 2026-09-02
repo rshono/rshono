@@ -468,15 +468,30 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
         return c.text('Bad Request: unknown server action', 400);
       }
       let args: unknown[];
-      let action: (...actionArgs: unknown[]) => Promise<unknown>;
       try {
         const contentType = request.headers.get('content-type');
         const body = contentType?.startsWith('multipart/form-data') ? await request.formData() : await request.text();
         temporaryReferences = createTemporaryReferenceSet();
         args = await decodeReply<unknown[]>(body, { temporaryReferences });
-        action = loadServerAction(renderRequest.actionId);
       } catch {
         return malformedAction(c);
+      }
+
+      // Outside that guard, deliberately. Everything inside it reads or decodes the *body*, which is the
+      // caller's to get wrong; loading the action is not. The id is one `hasOwn` above proved the manifest
+      // holds, so no client can steer this — what is left is the bundle being incomplete: a chunk
+      // `__webpack_require__` cannot find after a partial deploy, or a module that throws as it evaluates.
+      // A 400 there would tell the one caller in that guard who is *not* at fault that they are, and tell
+      // the operator who needs paging nothing at all.
+      let action: (...actionArgs: unknown[]) => Promise<unknown>;
+      try {
+        action = loadServerAction(renderRequest.actionId);
+      } catch (error) {
+        // Attributed to the action rather than left to the top-level handler's `source: 'request'`: the
+        // request was fine, the deployment is not. Then re-thrown, so the app's `error` page answers 500 —
+        // `reportServerError` de-duplicates, so `onError` reporting it again is a no-op.
+        reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action could not be loaded:' });
+        throw error;
       }
       try {
         returnValue = { ok: true, value: await action(...args) };

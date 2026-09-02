@@ -4,11 +4,22 @@
 // allowlist, a small body cap, trustProxy — in prod-config.test.mjs.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Agent, request } from 'node:http';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { actionFormData, APP_ENV, buildTestbed, clientChunks, TESTBED_DIST, serverActionId, startTestbed, stopServer } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
+import {
+  actionFormData,
+  APP_ENV,
+  buildTestbed,
+  clientChunks,
+  TESTBED_DIR,
+  TESTBED_DIST,
+  serverActionId,
+  startTestbed,
+  stopServer,
+} from './helpers.mjs';
 
 buildTestbed();
 const { base, child, getOutput } = await startTestbed('start');
@@ -624,6 +635,69 @@ test('an action request that fails before the action runs is refused outright, n
   assert.equal(res.status, 400, 'a body the server cannot decode is the caller being wrong');
   assert.doesNotMatch(res.headers.get('content-type'), /text\/x-component/, 'nothing was rendered, so there is no payload to send');
   assert.match(await res.text(), /Bad Request: malformed server action request/);
+});
+
+// The third case that guard can see, and the only one that is not the caller's fault. The id has already
+// passed `Object.hasOwn(serverManifest, …)`, so no client can steer this: what is left is the deployment
+// missing part of itself, and answering 400 would blame the one caller in that guard who was right while
+// telling the operator who needs paging nothing at all.
+//
+// Reached by breaking a copy of the build the way a partial deploy does — the manifest entry for one action
+// is pointed at a module id the bundle does not hold, which is what React's own "older or newer deployment"
+// message is about. It cannot be done with a fixture: Rspack concatenates every `'use server'` module in the
+// app into one server module, so an action module that throws as it evaluates takes *all* of them with it.
+test('an action whose module cannot be loaded is a reported 500, not a silent 400', async () => {
+  // Inside the testbed, because the copy is imported and `src/server.ts` pulls in an ordinary `node_modules`
+  // dependency the node preset leaves external — from `os.tmpdir()` there is nothing above it to resolve.
+  const sandbox = mkdtempSync(join(TESTBED_DIR, 'drift-'));
+  const reported = [];
+  const console_ = { log: console.log, error: console.error };
+  try {
+    cpSync(join(TESTBED_DIST, 'server'), join(sandbox, 'dist', 'server'), { recursive: true });
+    const mainFile = join(sandbox, 'dist', 'server', 'main.mjs');
+    const actionId = serverActionId('Logging out');
+    const original = readFileSync(mainFile, 'utf8');
+    // `"<id>":{"id":"3860","name":…}` — the module the manifest sends `loadServerAction` to.
+    const patched = original.replaceAll(new RegExp(`("${actionId}":\\{"id":")[^"]+"`, 'g'), '$1chunk-that-went-missing"');
+    assert.notEqual(patched, original, 'the server manifest is not in the shape this test breaks — update the patch');
+    writeFileSync(mainFile, patched);
+
+    // The node runtime binds a port as the bundle evaluates, and nothing exported can close it again; this is
+    // the flag it checks for the prerender pass, which drives `app.fetch` directly for the same reason.
+    process.env.RSHONO_PRERENDER = '1';
+    let bundle;
+    try {
+      bundle = await import(pathToFileURL(mainFile).href);
+    } finally {
+      delete process.env.RSHONO_PRERENDER;
+    }
+
+    // In-process, so the app's own `onServerError` reports through this console rather than a child's stdout.
+    console.log = (...args) => reported.push(args.join(' '));
+    console.error = (...args) => reported.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' '));
+    let res;
+    try {
+      res = await bundle.app.fetch(
+        new Request('https://rshono.example/dashboard', {
+          method: 'POST',
+          headers: { Origin: 'https://rshono.example', 'x-rsc-action': actionId, RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
+          body: '[]',
+        }),
+      );
+      await res.text();
+    } finally {
+      Object.assign(console, console_);
+    }
+
+    assert.equal(res.status, 500, 'a bundle missing the action’s module is the server being broken, not the caller');
+    assert.match(res.headers.get('content-type'), /text\/x-component/, 'the client is holding a live tree, so it gets the error page as a payload');
+    const logged = reported.join('\n');
+    assert.match(logged, /server action could not be loaded/, 'the operator gets the real error');
+    assert.match(logged, /\[error-reporter\] action \/dashboard/, 'attributed to the action, not to the request that was fine');
+    assert.doesNotMatch(logged, /\[error-reporter\] request \/dashboard/, 'and reported once, whatever stages it crosses');
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('onServerError sees the errors the framework catches, tagged by source, without replacing the log', async () => {

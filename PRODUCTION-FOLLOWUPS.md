@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1 and F2 have since been fixed too** and are struck through below. F3–F10 are open.
+**F1, F2 and F3 have since been fixed too** and are struck through below. F4–F10 are open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -21,7 +21,7 @@ running server, or is marked as reasoning rather than observation.
 | ---------- | ------------------------------------------------------------------------------------------ | ---------- | --------------------- |
 | ~~**F1**~~ | ~~A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ — **fixed**   | ~~Medium~~ | New — found via L2    |
 | ~~**F2**~~ | ~~Under a global nonce CSP, prerendered documents are built and never served~~ — **fixed** | ~~Low~~    | Residue of L4         |
-| **F3**     | A deploy-drift `loadServerAction` failure is now a silent 400                              | Low        | Cost of M3            |
+| ~~**F3**~~ | ~~A deploy-drift `loadServerAction` failure is now a silent 400~~ — **fixed**              | ~~Low~~    | Cost of M3            |
 | **F4**     | `decodeFormState` sits outside M3's guard, so one 500 path survives                        | Low        | Cost of M3            |
 | **F5**     | The two action `400`s carry no `cache-control` and no `Vary: RSC`                          | Low        | Pre-existing          |
 | **F6**     | The client's "produced no result" branch is now close to unreachable                       | Nit        | Residue of M3         |
@@ -150,7 +150,7 @@ response never carries the marker. A build with no nonce policy prints exactly w
 
 ---
 
-# F3 — A deploy-drift `loadServerAction` failure is now a silent 400
+# ~~F3 — A deploy-drift `loadServerAction` failure is now a silent 400~~ ✅ FIXED
 
 **Severity: low.** A deliberate trade M3 made, worth writing down rather than rediscovering.
 
@@ -168,11 +168,29 @@ silent 400 with nothing in the log.
 Rare, and it needs a broken deployment to reach. But it is the one case in that guard that an operator would
 want paged about, and it is now the one case they will not be.
 
-### Fix
+### Fix — done
 
-Either leave it (a broken deploy has louder symptoms) or split the guard: everything that reads or decodes the
-_body_ answers 400, and `loadServerAction` keeps its own `catch` that reports and 500s. The `hasOwn` check
-above it is what makes the split safe — a client cannot reach the second branch with an id of its choosing.
+The guard is split. Everything that reads or decodes the _body_ still answers 400; `loadServerAction` now has
+a `catch` of its own that reports the error as `source: 'action'` — the request was fine, the deployment is
+not — and re-throws, so the app's `error` page answers 500. `reportServerError` de-duplicates, so `onError`
+reporting it again as `source: 'request'` is a no-op. The `hasOwn` check above is what makes the split safe: a
+client cannot reach the second branch with an id of its choosing.
+
+Reading `loadServerAction` in `react-server-dom-rspack@0.1.0` makes the case stronger than the finding did.
+It is three lines, and none of them can fail because of the caller: a falsy `.id` on a manifest entry
+(React's _"older or newer deployment"_ message, which is about the **manifest**, not the request),
+`__webpack_require__` on a module the bundle does not hold, and an export that is not a function. All three
+are the deployment being incomplete.
+
+**Tested, which took some doing.** The obvious fixture — a `'use server'` module that throws as it evaluates,
+the action-side twin of the testbed's `/unloadable` page — turns out to break _every_ action in the app:
+Rspack concatenates all of an app's `'use server'` modules into a single server module, so all of their ids
+resolve to one `__webpack_require__` and one evaluation. That is worth knowing on its own and is recorded in
+[`PRODUCTION-FOLLOWUP-FOLLOWUPS.md`](./PRODUCTION-FOLLOWUP-FOLLOWUPS.md). So the test breaks a **copy** of the
+build instead, the way a partial deploy does: one action's manifest entry is pointed at a module id the bundle
+does not hold, and the patched bundle is imported and driven through `app.fetch`. It answers 500 with the
+error page, `[rshono] server action could not be loaded:` in the log and one `[error-reporter] action …` line.
+With the split reverted it answers 400 and says nothing, so the test fails — checked in both directions.
 
 ---
 
