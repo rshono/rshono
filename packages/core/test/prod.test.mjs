@@ -1046,7 +1046,11 @@ test('an action body that will not decode is a 400, and never pages the error tr
     { what: 'garbage body', headers: { 'x-rsc-action': id, 'content-type': 'text/plain' }, body: 'oops' },
     { what: 'empty body', headers: { 'x-rsc-action': id, 'content-type': 'text/plain' }, body: '' },
     { what: 'bogus multipart', headers: { 'x-rsc-action': id, 'content-type': 'multipart/form-data; boundary=zz' }, body: 'garbage' },
-    { what: 'unknown $ACTION_ID in the form branch', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: '$ACTION_ID_deadbeef=1' },
+    {
+      what: 'unknown $ACTION_ID in the form branch',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: '$ACTION_ID_deadbeef=1',
+    },
   ];
 
   for (const { what, headers, body } of shapes) {

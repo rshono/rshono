@@ -23,6 +23,11 @@ Options:
   -d, --deploy <name> platform to build for: ${DEPLOY_TARGETS.join(' | ')} (default: node)
   -h, --help          show this help
   -v, --version       print the version
+
+Environment:
+  PORT                port to listen on, unless --port is given
+  HOST                address \`start\` binds to (default 0.0.0.0); \`dev\` always binds 127.0.0.1
+  RSHONO_DEPLOY       platform to build for, unless --deploy is given
 `;
 
 /** {@link parsePort}, reported the way the CLI reports every other bad input: one line, no stack. */
@@ -93,6 +98,14 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'dev':
+      // `HOST` belongs to `start`. The dev server binds loopback unconditionally — its source maps embed the
+      // original source of `'use server'` modules — and `DevOptions` has no `host` field to pass one to, so
+      // the drop is structural rather than conditional. Said out loud because the variable is read a few
+      // lines up and the README lists it under all three commands: `HOST=0.0.0.0 rshono dev` used to do
+      // nothing, with nothing to notice.
+      if (host !== undefined) {
+        console.warn('rshono: HOST is ignored by `rshono dev`, which always binds 127.0.0.1 — it applies to `rshono start`.');
+      }
       return (await import('./dev.js')).devCommand({ rootDir, port, config });
     case 'build':
       return (await import('./build.js')).buildCommand({

@@ -216,9 +216,7 @@ function assertNothingIsShadowed(routes: readonly Route[]): void {
       const why = claimants.some((claimant) => claimant.path === route.path)
         ? ''
         : ' Hono matches on the pattern, not the spelling — a parameter’s name is not part of it, and a trailing `*` answers its whole subtree, the bare prefix included.';
-      fail(
-        `src/routes.ts: ${name} would never run — ${by} already answers ${verbs} ${route.path}, and Hono matches in registration order.${why}`,
-      );
+      fail(`src/routes.ts: ${name} would never run — ${by} already answers ${verbs} ${route.path}, and Hono matches in registration order.${why}`);
     }
     for (const method of methods) {
       for (const key of keys) {

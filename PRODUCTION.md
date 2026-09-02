@@ -361,7 +361,7 @@ Wrap `parseArgs` and print `rshono: <message>` plus `HELP`, matching the other t
 
 ---
 
-# L3 — `HOST` is read by the CLI, then silently dropped by `rshono dev`
+# ~~L3 — `HOST` is read by the CLI, then silently dropped by `rshono dev`~~ ✅ FIXED
 
 ### Issue
 

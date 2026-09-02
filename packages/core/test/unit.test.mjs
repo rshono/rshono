@@ -2213,15 +2213,30 @@ describe('validateRoutesModule', () => {
     for (const table of [
       // A `{regex}` constraint *is* part of the pattern, so these are two routes and both can answer:
       // `/a/7` goes to the first and `/a/xy` to the second.
-      [{ ...page, path: '/a/:id{[0-9]+}' }, { ...page, path: '/a/:name' }],
+      [
+        { ...page, path: '/a/:id{[0-9]+}' },
+        { ...page, path: '/a/:name' },
+      ],
       // Specific-behind-generic is the dead one; generic behind specific still answers everything else.
-      [{ ...page, path: '/a/b' }, { ...page, path: '/a/*' }],
+      [
+        { ...page, path: '/a/b' },
+        { ...page, path: '/a/*' },
+      ],
       // The wildcard's boundary is the `/` — `/a/*` does not answer `/ab`.
-      [{ ...page, path: '/a/*' }, { ...page, path: '/ab' }],
+      [
+        { ...page, path: '/a/*' },
+        { ...page, path: '/ab' },
+      ],
       // `/a/:id?` answers `/a` as well as `/a/x`, so a bare `/a` ahead of it leaves it half its work.
-      [{ ...page, path: '/a' }, { ...page, path: '/a/:id?' }],
+      [
+        { ...page, path: '/a' },
+        { ...page, path: '/a/:id?' },
+      ],
       // A wildcard claims one subtree, not the table.
-      [{ ...page, path: '/a/*' }, { ...page, path: '/b/c' }],
+      [
+        { ...page, path: '/a/*' },
+        { ...page, path: '/b/c' },
+      ],
       // One path split across two methods — an ordinary thing to write.
       [
         { ...endpoint, method: 'get' },

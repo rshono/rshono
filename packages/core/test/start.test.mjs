@@ -103,6 +103,47 @@ describe('`rshono start` and the port', () => {
       assert.match(result.stderr, /rshono: invalid --port/);
     });
   }
+
+  test('hands HOST to the bundle, which is the command it belongs to', () => {
+    // The counterpart to the `rshono dev` warning: `start` is where `HOST` does something, and it reaches
+    // the bundle as the environment variable the listener reads.
+    const bundle = 'console.log("HOST=" + JSON.stringify(process.env.HOST));\n';
+    assert.match(start(projectWith({ deploy: 'node', bundle }), { env: { HOST: '0.0.0.0' } }).stdout, /HOST="0\.0\.0\.0"/);
+  });
+});
+
+describe('HOST belongs to `start`, and `dev` says so', () => {
+  // `cli/index.ts` reads `HOST` for both, but `DevOptions` has no `host` field and `dev.ts` binds
+  // `hostname: '127.0.0.1'` unconditionally — a structural drop, not a conditional one. Binding dev to
+  // loopback is right (its source maps embed `'use server'` source); doing it in silence was not, with the
+  // README listing `HOST` under all three commands.
+  //
+  // Run in an empty directory, so `dev` fails on the missing `src/routes.ts` a moment later and the command
+  // exits instead of serving. The warning is printed before that, which is the whole point: it comes from
+  // the dispatch, ahead of anything dev does.
+  const dev = (env) =>
+    spawnSync(process.execPath, [CLI, 'dev'], {
+      cwd: mkdtempSync(join(tmpdir(), 'rshono-nohost-')),
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, ...env },
+    });
+
+  test('warns that `rshono dev` ignores it', () => {
+    const result = dev({ HOST: '0.0.0.0' });
+    assert.match(result.stderr, /HOST is ignored by `rshono dev`/, 'setting it must not be a silent no-op');
+    assert.match(result.stderr, /always binds 127\.0\.0\.1/, 'and the message has to say what it does instead');
+    assert.match(result.stderr, /applies to `rshono start`/, 'and where the variable does work');
+  });
+
+  test('says nothing when it is not set', () => {
+    assert.doesNotMatch(dev({ HOST: undefined }).stderr, /HOST/, 'a warning nobody asked for is noise on every dev start');
+  });
+
+  test('is listed in the help, where it was missing entirely', () => {
+    const help = spawnSync(process.execPath, [CLI, '--help'], { cwd: tmpdir(), encoding: 'utf8', timeout: 30_000 });
+    assert.match(help.stdout, /HOST\s+address `start` binds to/, 'the one setting with no flag needs the help to mention it');
+  });
 });
 
 describe('the CLI reports a bad flag the way it reports every other bad input', () => {

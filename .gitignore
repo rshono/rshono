@@ -3,6 +3,9 @@ dist/
 # `rshono dev`'s build output, kept apart from `dist/` so the two commands cannot overwrite each other.
 .rshono/
 .vercel/
+# Scaffolded into the project by the first `--deploy cloudflare` build and then left alone — so it is a
+# contributor's local file, and the cloudflare suite asserts on the one the build writes.
+apps/*/wrangler.jsonc
 *.tsbuildinfo
 .DS_Store
 .env*
