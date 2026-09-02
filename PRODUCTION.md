@@ -18,7 +18,7 @@ running production server — nothing here is inferred from reading alone.
 
 | #      | Issue                                                              | Fix                                          | Kind      |
 | ------ | ------------------------------------------------------------------ | -------------------------------------------- | --------- |
-| **H1** | Server bundles ship React's **development** builds — 2× every target | 2-line loader change                         | **Code**  |
+| ~~**H1**~~ | ~~Server bundles ship React's **development** builds — 2× every target~~ | ~~2-line loader change~~ — **fixed** | **Code**  |
 | **M1** | JSDoc prescribes `useNavigation().url` for a static route's query — it's the same frozen URL | Correct the JSDoc            | Docs      |
 | **M2** | *Any* cross-site form POST to a page route is refused, message blames a server action | Reword the 403 + README line | Code + docs |
 | **M3** | A malformed action body is a 500 + error-tracker page, not a 400   | Wrap the decode                              | **Code**  |
@@ -34,7 +34,7 @@ code fixes) → M1, M2, M4, L3 (documentation) → L5 (polish).
 
 ---
 
-# H1 — Server bundles ship React's development builds
+# ~~H1 — Server bundles ship React's development builds~~ ✅ FIXED
 
 **Severity: high.** The one finding that costs something on every deploy.
 

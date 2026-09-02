@@ -343,6 +343,10 @@ export function createConfigs(options: RspackConfigOptions): [RspackOptions, Rsp
               options: {
                 prelude: `const process = Object.assign(Object.create(globalThis.process ?? Object.prototype), { env: ${JSON.stringify(publicEnv(isDev))} }); `,
                 layer: Layers.ssr,
+                // The prelude's binding hides `process.env.NODE_ENV` from DefinePlugin, which is what erases
+                // React's `if (NODE_ENV === 'production')` wrappers. The loader substitutes it back so the
+                // dead half still goes; without it the SSR layer ships both builds of every React package.
+                nodeEnv: mode,
                 // Only the app's own source is warned about when it reaches `process` through the global
                 // object, which no prelude can shadow — a library feature-detecting `globalThis.process` is
                 // doing nothing wrong and has no app secret to read. The separator is part of the prefix so

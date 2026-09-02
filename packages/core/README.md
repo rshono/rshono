@@ -265,6 +265,12 @@ Every target streams, which is the bar a new one has to clear.
 - **Streaming is the fragile part of a serverless target, and it fails silently** — `supportsResponseStreaming`
   on Vercel, `streamifyResponse` plus a `RESPONSE_STREAM` Function URL on Lambda. Getting those right is what
   the presets are for.
+- **Most of what `vercel` and `aws-lambda` upload is the source map.** `dist/server/main.mjs.map` is roughly
+  three quarters of `dist/server`, and both targets take the whole directory — `vercel` copies it into the
+  function, the `aws-lambda` handoff is "zip `dist/`". That is deliberate: the map is what turns the
+  `onServerError` funnel from minified frames into real ones, and it is never served to anyone. But it is
+  upload weight rather than cold-start weight — nothing parses it unless a stack trace is being mapped — so
+  delete it from the package if size matters more to you than readable production traces.
 - **Prerendered pages are never CDN-served**: one URL answers with a document or a flight payload depending on
   the `RSC` request header, and a path-keyed CDN cannot choose. `/_static` and `public/` do go straight to the
   CDN.

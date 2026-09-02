@@ -872,6 +872,25 @@ test('no unguarded reference to process survives into the client bundle', () => 
   );
 });
 
+test('no development build of React reaches the server bundle', () => {
+  // Every React entry is a runtime branch on `process.env.NODE_ENV`, and DefinePlugin erases the dead half —
+  // except in the SSR layer, where `env-shadow-loader`'s prelude declares a module-scope `process` and
+  // DefinePlugin, which respects lexical scope, stops substituting. Both halves were bundled: six development
+  // builds, about half of `main.mjs`. The loader hands `process.env.NODE_ENV` back before shadowing it.
+  //
+  // Asserted against the source map's module list rather than the bundle text, because the entry wrappers'
+  // own source — `require('./cjs/…development.js')` inside a dead `else` — is in `sourcesContent` either way.
+  // It was size and cold start rather than behaviour: the prelude's env says `production`, so the right build
+  // always ran. On `cloudflare` it was half the Worker size budget.
+  const map = JSON.parse(readFileSync(join(TESTBED_DIST, 'server', 'main.mjs.map'), 'utf8'));
+  const development = map.sources.filter((source) => /\/cjs\/.*\.development\.js$/.test(source));
+  assert.deepEqual(development, [], 'a development React build cannot run in a production bundle — it is dead weight');
+  assert.ok(
+    map.sources.some((source) => /\/cjs\/react-dom-server\.node\.production\.js$/.test(source)),
+    'the production renderer still has to be there — an empty match would pass the assertion above for the wrong reason',
+  );
+});
+
 test('the server bundle ships a source map and the client bundle does not', () => {
   // The asymmetry is the whole decision. A server map never leaves the server and is what turns the
   // `onServerError` funnel — the error-tracker integration — from minified frames into real ones. A client map

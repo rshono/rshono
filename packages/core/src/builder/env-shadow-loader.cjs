@@ -62,6 +62,16 @@ const MENTIONS_PROCESS = /\bprocess\b/;
 const GLOBAL_PROCESS = /\b(?:globalThis|global|self)\s*(?:\?\.|\.)?\s*(?:process\b|\[\s*(['"`])process\1\s*\])/;
 
 /**
+ * A free `process.env.NODE_ENV` read — the one expression the prelude has to hand back to the optimiser.
+ *
+ * The lookbehind rejects a member read off something else (`this.process.env.NODE_ENV`, `foo.process…`) and a
+ * longer identifier (`myprocess`); the trailing `\b` rejects `NODE_ENVIRONMENT`. That is the same shape
+ * DefinePlugin substitutes, minus the shapes it also declines — an optional chain and a computed key are left
+ * alone here exactly as they are left alone there.
+ */
+const FREE_NODE_ENV = /(?<![.$\w])process\.env\.NODE_ENV\b/g;
+
+/**
  * Shadows `process.env` with the PUBLIC_-only view inside SSR-layer modules, so a secret read from a
  * `'use client'` component renders empty on the server rather than leaking into the HTML stream — and SSR
  * keeps agreeing with hydration, which sees the same view via DefinePlugin.
@@ -74,7 +84,7 @@ module.exports = function envShadowLoader(source) {
   // Two steps rather than the regex alone: this loader sees every module in the bundle, and most of them do
   // not contain the substring at all, which `includes` settles far more cheaply than a scan for word breaks.
   if (!source.includes('process') || !MENTIONS_PROCESS.test(source)) return source;
-  const { prelude, layer, appSrcPrefix } = this.getOptions();
+  const { prelude, layer, appSrcPrefix, nodeEnv } = this.getOptions();
   if (!this._module) {
     throw new Error(
       "[rshono] env-shadow-loader could not read the module's layer (Rspack's `this._module` is unavailable). " +
@@ -95,6 +105,19 @@ module.exports = function envShadowLoader(source) {
       ),
     );
   }
+
+  // Hand `process.env.NODE_ENV` back to the optimiser before the prelude takes it away. DefinePlugin — the
+  // pass that erases `if (process.env.NODE_ENV === 'production')` and everything on the dead side of it —
+  // respects lexical scope, and the prelude below declares a module-scope `process`. So without this, every
+  // React entry wrapper in this layer stays a runtime branch and *both* halves are bundled: six development
+  // builds of react / react-dom / react-server-dom-rspack, about half of `dist/server/main.mjs`.
+  //
+  // Substituting is not a behaviour change. `NODE_ENV` is the one key of the prelude's own `env` literal that
+  // is not read from the host environment — it is this build's mode — so the value written here is the value
+  // the shadow would have returned anyway, and the shadow's security property is untouched. Textual, like the
+  // prelude insertion it sits beside: a `process.env.NODE_ENV` inside a string literal is rewritten too, which
+  // is the same class of risk DefinePlugin's own substitution carries for every other module in the bundle.
+  if (nodeEnv) source = source.replace(FREE_NODE_ENV, JSON.stringify(nodeEnv));
 
   const prologue = source.match(DIRECTIVE_PROLOGUE)[0];
   return prologue + prelude + source.slice(prologue.length);

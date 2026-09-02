@@ -1802,13 +1802,24 @@ describe('the security-middleware build warning', () => {
 });
 
 describe('the env-shadow prelude', () => {
-  /** The prelude the builder actually generates, read off the rule that carries it. */
-  function generatedPrelude() {
-    const [, serverConfig] = createConfigs({ rootDir: MINIMAL_APP_DIR, isDev: false, config: {}, preset: NODE_PRESET });
+  /** The loader options the builder actually generates, read off the rule that carries them. */
+  function generatedOptions({ isDev = false } = {}) {
+    const [, serverConfig] = createConfigs({ rootDir: MINIMAL_APP_DIR, isDev, config: {}, preset: NODE_PRESET });
     const rule = serverConfig.module.rules.find((entry) => entry.use?.[0]?.loader?.includes('env-shadow-loader'));
     assert.ok(rule, 'the SSR env-shadow rule has to be in the server config');
-    return rule.use[0].options.prelude;
+    return rule.use[0].options;
   }
+
+  const generatedPrelude = () => generatedOptions().prelude;
+
+  test('tells the loader the mode it is building for, so the prelude does not cost dead-code elimination', () => {
+    // Without this the SSR layer bundles React's development builds beside the production ones — the prelude
+    // shadows `process`, and DefinePlugin will not substitute through a local binding. The two have to agree:
+    // the value the loader writes is the value the prelude's own `env` carries.
+    assert.equal(generatedOptions({ isDev: false }).nodeEnv, 'production');
+    assert.equal(generatedOptions({ isDev: true }).nodeEnv, 'development');
+    assert.match(generatedOptions({ isDev: false }).prelude, /"NODE_ENV":"production"/);
+  });
 
   test('shadows env while leaving the rest of process reachable', () => {
     // The prelude replaces the whole `process` binding for the module it rewrites, and `react-dom/server` is in
@@ -1843,10 +1854,10 @@ describe('env-shadow-loader', () => {
    * The slice of Rspack's loader context this loader reads. `layer` is the layer the *module* is in, and
    * `resourcePath` decides whether a module counts as the app's own source for the warning below.
    */
-  const run = (source, { layer = 'ssr', resourcePath = join(APP_SRC, 'component.tsx'), warnings } = {}) =>
+  const run = (source, { layer = 'ssr', resourcePath = join(APP_SRC, 'component.tsx'), warnings, nodeEnv } = {}) =>
     envShadowLoader.call(
       {
-        getOptions: () => ({ prelude: PRELUDE, layer: 'ssr', appSrcPrefix: APP_SRC + sep }),
+        getOptions: () => ({ prelude: PRELUDE, layer: 'ssr', appSrcPrefix: APP_SRC + sep, nodeEnv }),
         _module: { layer },
         resourcePath,
         emitWarning: (warning) => warnings?.push(warning.message),
@@ -1947,6 +1958,42 @@ describe('env-shadow-loader', () => {
   test('prepends to a module with no prologue at all', () => {
     const source = 'export const x = process.env.SECRET;';
     assert.equal(run(source), PRELUDE + source);
+  });
+
+  test('substitutes NODE_ENV before the prelude hides it from DefinePlugin', () => {
+    // The prelude declares a module-scope `process`, and DefinePlugin respects lexical scope — so every
+    // `if (process.env.NODE_ENV === 'production')` in this layer stayed a runtime branch and React's
+    // development builds were bundled beside the production ones. Substituting first hands the optimiser the
+    // one expression it needs back. Not a behaviour change: `NODE_ENV` is the build's mode, so the literal
+    // written here is the value the shadow would have returned anyway.
+    assert.equal(
+      run("if (process.env.NODE_ENV === 'production') { a(); } else { b(); }", { nodeEnv: 'production' }),
+      `${PRELUDE}if ("production" === 'production') { a(); } else { b(); }`,
+    );
+    assert.equal(run('export const x = process.env.NODE_ENV;', { nodeEnv: 'development' }), `${PRELUDE}export const x = "development";`);
+  });
+
+  test('substitutes NODE_ENV only in the layer it shadows, and only when asked', () => {
+    const source = 'export const x = process.env.NODE_ENV;';
+    // The RSC layer gets no prelude, so DefinePlugin still reaches it there and this loader must not touch it.
+    assert.equal(run(source, { layer: 'rsc', nodeEnv: 'production' }), source);
+    // And with no `nodeEnv` configured the loader is the shadow and nothing more.
+    assert.equal(run(source), PRELUDE + source);
+  });
+
+  test('leaves NODE_ENV read off something other than the free process binding alone', () => {
+    // The same shapes DefinePlugin itself declines. Substituting a member read off another object would be
+    // rewriting an unrelated expression, and the shadow still answers all of these correctly at runtime.
+    // Asserted on the value not appearing rather than on the exact output, because `myprocess` never gets a
+    // prelude either — `\bprocess\b` turns it away one gate earlier.
+    for (const source of [
+      'export const x = this.process.env.NODE_ENV;',
+      'export const x = config.process.env.NODE_ENV;',
+      'export const x = myprocess.env.NODE_ENV;',
+      'export const x = process.env.NODE_ENVIRONMENT;',
+    ]) {
+      assert.ok(run(source, { nodeEnv: 'production' }).includes(source), `"${source}" must survive unrewritten`);
+    }
   });
 
   test('fails the build rather than shipping unshadowed when it cannot read the layer', () => {
