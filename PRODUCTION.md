@@ -24,7 +24,7 @@ running production server — nothing here is inferred from reading alone.
 | ~~**M3**~~ | ~~A malformed action body is a 500 + error-tracker page, not a 400~~ | ~~Wrap the decode~~ — **fixed** | **Code**  |
 | **M4** | `notFound()` always costs a full document load on a soft navigation | State it in the README                       | Docs      |
 | ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~ | ~~Normalise the key~~ — **fixed** | Code      |
-| **L2** | An unknown CLI flag prints a raw Node stack trace                  | Wrap `parseArgs`                             | Code      |
+| ~~**L2**~~ | ~~An unknown CLI flag prints a raw Node stack trace~~ | ~~Wrap `parseArgs`~~ — **fixed** | Code      |
 | **L3** | `HOST` is read, then silently dropped by `rshono dev`              | Scope the doc, or warn                       | Docs      |
 | **L4** | Prerendered documents bake in a build-time CSP nonce               | Prerender without a nonce                    | Code      |
 | **L5** | Five smaller things — see below                                    | Assorted                                     | Polish    |
@@ -330,7 +330,7 @@ wildcard shape needs the key to be wildcard-aware, and a line in the doc comment
 
 ---
 
-# L2 — An unknown CLI flag prints a raw Node stack trace
+# ~~L2 — An unknown CLI flag prints a raw Node stack trace~~ ✅ FIXED
 
 ### Issue
 

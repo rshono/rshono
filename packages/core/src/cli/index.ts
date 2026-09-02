@@ -35,17 +35,39 @@ function readPort(value: string | undefined, source: string): number | undefined
   }
 }
 
+/** `as const` so `parseArgs` can type `values` off the literal `type` fields rather than widening them. */
+const CLI_OPTIONS = {
+  port: { type: 'string', short: 'p' },
+  config: { type: 'string', short: 'c' },
+  deploy: { type: 'string', short: 'd' },
+  help: { type: 'boolean', short: 'h' },
+  version: { type: 'boolean', short: 'v' },
+} as const;
+
+/**
+ * {@link parseArgs}, reported the way the CLI reports every other bad input: one line, then the help.
+ *
+ * A typo'd flag is the likeliest of the three bad inputs and used to get by far the worst output. `parseArgs`
+ * was the first statement of `main`, with nothing between it and the `main().catch` that prints the raw error
+ * object — so `rshono build --porf 3000` answered with nine frames of Node internals, where an unknown
+ * command and an unparseable `--port` each answered with a sentence.
+ *
+ * Node's own message is kept: it names the offending flag, which is the whole content of the error, and
+ * `HELP` beneath it lists the ones that exist. Through {@link exit} rather than `process.exit`, because that
+ * help goes to stdout and a piped stdout drops whatever has not left the buffer.
+ */
+async function readArgs(): Promise<ReturnType<typeof parseArgs<{ options: typeof CLI_OPTIONS; allowPositionals: true }>>> {
+  try {
+    return parseArgs({ options: CLI_OPTIONS, allowPositionals: true });
+  } catch (error) {
+    console.error(`rshono: ${error instanceof Error ? error.message : String(error)}\n`);
+    console.log(HELP);
+    return exit(1);
+  }
+}
+
 async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({
-    options: {
-      port: { type: 'string', short: 'p' },
-      config: { type: 'string', short: 'c' },
-      deploy: { type: 'string', short: 'd' },
-      help: { type: 'boolean', short: 'h' },
-      version: { type: 'boolean', short: 'v' },
-    },
-    allowPositionals: true,
-  });
+  const { values, positionals } = await readArgs();
 
   if (values.version) {
     const require = createRequire(import.meta.url);
