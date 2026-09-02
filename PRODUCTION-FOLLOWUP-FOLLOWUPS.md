@@ -14,18 +14,18 @@ reading rather than observation.
 
 ## Summary
 
-| #      | Issue                                                                             | Severity | Origin                   |
-| ------ | --------------------------------------------------------------------------------- | -------- | ------------------------ |
-| **G1** | One unloadable `'use server'` module disables **every** server action in the app  | Low      | Found while fixing F3    |
-| **G2** | H1's justification for a textual substitution was wrong about DefinePlugin        | Nit      | Cost of H1, found via F8 |
-| **G3** | The browser suite has never run in this environment, and now has a new test in it | Low      | Environment              |
+| #          | Issue                                                                                            | Severity | Origin                   |
+| ---------- | ------------------------------------------------------------------------------------------------ | -------- | ------------------------ |
+| ~~**G1**~~ | ~~One unloadable `'use server'` module disables **every** server action in the app~~ — **fixed** | ~~Low~~  | Found while fixing F3    |
+| **G2**     | H1's justification for a textual substitution was wrong about DefinePlugin                       | Nit      | Cost of H1, found via F8 |
+| **G3**     | The browser suite has never run in this environment, and now has a new test in it                | Low      | Environment              |
 
 ---
 
-# G1 — One unloadable `'use server'` module disables every server action in the app
+# ~~G1 — One unloadable `'use server'` module disables every server action in the app~~ ✅ FIXED
 
-**Severity: low.** Upstream behaviour, not an rshono defect — but it changes what a partial deploy looks like,
-and nothing says it anywhere.
+**Severity: low.** The bundling is upstream and stays as it is. What the framework could do about it — find it
+at build time instead of on the first click — it now does.
 
 ### Issue
 
@@ -56,10 +56,36 @@ graph is also what makes an action call one lookup. What it changes is the shape
 - A test for a single broken action cannot be written as a fixture. `prod.test.mjs` breaks a copy of the
   build's server manifest instead, which is the one way to reach a single id.
 
-### Fix
+### Fix — done
 
-None proposed for the framework. Worth a line in the deployment docs if the "chunks can go missing between
-deploys" story is ever written up: for server actions it is all or nothing.
+"Nothing to fix in rshono" was too quick. The bundling is upstream, but the reason this reached production at
+all is that **a build never touched these modules**: nothing on the server imports one until an action is
+called, since a `'use client'` component that calls one gets a `createServerReference` stub. Every other
+module an app owns is loaded by `assertRouteModules` during the build. This was the hole.
+
+So the build loads them too. `checkRouteModules` — now `checkAppModules`, since it is no longer only routes —
+follows the route pass with the app's server actions, one `loadServerAction` per _module_ rather than per id:
+that is the granularity of the failure, and evaluating a module that throws once per action would repeat
+whatever it did before throwing. The remaining ids in a module that loaded are then cache hits, so they are
+checked too — `loadServerAction` also refuses an export that is not a function.
+
+```
+  ⚠ the module holding 1 of the app's 1 server action(s) could not be loaded at build time — this module cannot be evaluated
+    Calling one of those actions loads that module first, so if it fails the same way at run time, each of them answers 500.
+```
+
+A **warning**, and the build still exits 0, for the same reason `assertRouteModules` warns about a page
+module: a module can legitimately decline to evaluate in a build — one that reads a secret out of the
+environment, say — and a build is not where that gets decided. Entries declaring `chunks` are skipped, since
+`loadServerAction` is a bare `__webpack_require__` and a module in an unloaded chunk would fail here for a
+reason that says nothing about the app.
+
+Both sides are tested: `minimal-app.test.mjs` builds a throwaway app whose action module throws and asserts
+the warning and the exit code, and `prod.test.mjs` asserts the testbed's build — six actions that all load —
+says nothing at all. A check that cannot be quiet is one every app learns to ignore.
+
+The README's server-actions section now states the shape as well: one module for the whole graph, so a module
+that will not evaluate takes every action with it.
 
 ---
 

@@ -21,7 +21,8 @@ import {
   stopServer,
 } from './helpers.mjs';
 
-buildTestbed();
+/** What that build printed — asserted on by the server-action check below. */
+const buildOutput = buildTestbed();
 const { base, child, getOutput } = await startTestbed('start');
 after(() => stopServer(child));
 
@@ -401,6 +402,14 @@ test('the client runtime ships whole, with its dev-only detail compiled out', ()
     sources.every((source) => !source.includes('Component stack:')),
     'the dev-only stack rendering must be compiled out of the production bundle',
   );
+});
+
+// The other half of the build-time action check, which minimal-app.test.mjs exercises from the broken side:
+// this app has six actions across two modules and every one of them loads, so the build must say nothing.
+// A check that cannot be quiet is one every app learns to ignore.
+test('a build says nothing about server actions when they all load', () => {
+  assert.doesNotMatch(buildOutput, /server action\(s\) could not be loaded/, buildOutput);
+  assert.doesNotMatch(buildOutput, /answers 500/);
 });
 
 test('a server action can redirect (POST-redirect-GET) and set a cookie without JavaScript', async () => {

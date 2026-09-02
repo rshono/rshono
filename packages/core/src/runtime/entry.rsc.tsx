@@ -803,12 +803,63 @@ function buildApp(): Hono {
 }
 
 /**
- * Resolves and checks every route's own module — page and endpoint alike, `notFound` and `error` included.
+ * Loads the app's server actions, so a `'use server'` module that cannot be evaluated is a line in the build
+ * log rather than a 500 on the first action anyone calls.
+ *
+ * Nothing on the server imports these modules until an action is called: a `'use client'` component that
+ * calls one gets a `createServerReference` stub, so the only thing holding them is the manifest. That makes
+ * an action module the one part of an app a build never touched — and the failure it hides is not one route,
+ * it is every action that module holds, which in practice is all of them (Rspack compiles the app's whole
+ * `'use server'` graph into a single server module).
+ *
+ * One id per *module*, because that is the granularity of the failure that matters — and evaluating a module
+ * that throws once per action id would repeat whatever it did before throwing. The rest of that module's ids
+ * are then cache hits, so they are checked too: `loadServerAction` also refuses an export that is not a
+ * function, and that is per id.
+ *
+ * Entries declaring `chunks` are skipped. `loadServerAction` is a bare `__webpack_require__`, so a module
+ * that has not been loaded yet would throw here for a reason that says nothing about the app — and every
+ * action this framework has produced sits in the server bundle itself, with no chunks to load.
+ *
+ * A warning, not a failure, for the same reason {@link assertRouteModules} warns: a module can legitimately
+ * decline to evaluate in a build — one that reads a secret out of the environment, say — and a build is not
+ * where that gets decided.
+ */
+function checkServerActions(): void {
+  const entries = Object.entries(__rspack_rsc_manifest__.serverManifest).filter(([, entry]) => (entry.chunks?.length ?? 0) === 0);
+  /** Action ids by the module that holds them, in manifest order. */
+  const byModule = new Map<string, string[]>();
+  for (const [actionId, entry] of entries) byModule.set(entry.id, [...(byModule.get(entry.id) ?? []), actionId]);
+
+  for (const actionIds of byModule.values()) {
+    for (const actionId of actionIds) {
+      try {
+        loadServerAction(actionId);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `  ⚠ the module holding ${actionIds.length} of the app's ${entries.length} server action(s) could not be loaded at build time — ${reason}\n` +
+            `    Calling one of those actions loads that module first, so if it fails the same way at run time, each of them answers 500.`,
+        );
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Everything about the app a build can check without serving a request: every route's own module — page and
+ * endpoint alike, `notFound` and `error` included — and then the server actions, which no route reaches.
+ *
  * Called by `rshono build` once this bundle is imported for the prerender pass, so a route that could never
  * serve a request fails the build rather than answering 500 in production. Exported from here rather than
- * driven from the CLI because the fallback pages are on `routeConfig`, which does not leave this module.
+ * driven from the CLI because both halves read module-scope state — `routeConfig`, and the manifest the RSC
+ * plugin injects — neither of which leaves this bundle.
  */
-export const checkRouteModules = (): Promise<void> => assertRouteModules(routeConfig);
+export const checkAppModules = async (): Promise<void> => {
+  await assertRouteModules(routeConfig);
+  checkServerActions();
+};
 
 export const app = buildApp();
 

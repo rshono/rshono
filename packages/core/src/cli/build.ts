@@ -23,8 +23,8 @@ interface BuildOptions {
 interface ServerBundle {
   app: Hono;
   routes: readonly Route[];
-  /** Resolves every route's own module and checks it — see `assertRouteModules`. */
-  checkRouteModules: () => Promise<void>;
+  /** Resolves every route's own module, and the app's server actions, and checks them — see `checkAppModules`. */
+  checkAppModules: () => Promise<void>;
 }
 
 function importServerBundle(distDir: string): Promise<ServerBundle> {
@@ -81,7 +81,7 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   // Before anything is rendered: the checks here are the ones a route fails on *every* request, so a build
   // that skipped them would spend the prerender pass on a route it is about to refuse anyway. Without this
   // they ran on first request instead, which meant a page that could never work shipped behind a green build.
-  await bundle.checkRouteModules();
+  await bundle.checkAppModules();
 
   const { written, skipped, flightOnly } = await prerenderStaticRoutes({
     routes: bundle.routes,

@@ -134,6 +134,12 @@ carries a fresh page payload, so server-rendered UI updates after a mutation.
 action. [Server actions docs](https://www.rshono.com/docs/pages#server-actions), and
 [how to use them](https://www.rshono.com/docs/usage).
 
+Rspack compiles an app's whole `'use server'` graph into **one** server module, and calling any action loads
+it — so a module that throws while it evaluates takes every action in the app with it, not just its own.
+Nothing on the server imports these modules until an action is called, which used to make that a green build
+followed by a 500 on the first click. `rshono build` now loads them and warns if one will not, and at run
+time a failure to load is reported as an action fault, not answered as a bad request.
+
 ## Full Hono underneath
 
 - `{ type: 'endpoint' }` routes export a Hono `handler` from a server module.

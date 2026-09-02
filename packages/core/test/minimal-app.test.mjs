@@ -190,6 +190,33 @@ test('a second route claiming a path the table already answers fails the build, 
   );
 });
 
+test("a 'use server' module that cannot be evaluated is a build warning, not a 500 per action", () => {
+  // The one part of an app a build never touched. Nothing on the server imports an action module until an
+  // action is called — a client component that calls one gets a `createServerReference` stub — so a module
+  // that throws as it evaluates used to reach production behind a green build, and then answer 500 for
+  // *every* action it holds, which with Rspack's single-module 'use server' graph is all of them.
+  const dir = appWithRoutes(HOME_AND("  { path: '/actions', component: () => import('./pages/calls-an-action') },\n"));
+  writeFileSync(
+    join(dir, 'src', 'actions.ts'),
+    "'use server';\n\nthrow new Error('this module cannot be evaluated');\n\nexport async function doThing(): Promise<string> {\n  return 'never';\n}\n",
+  );
+  writeFileSync(
+    join(dir, 'src', 'pages', 'action-button.tsx'),
+    "'use client';\n\nimport { doThing } from '../actions';\n\nexport function ActionButton() {\n  return <button onClick={() => void doThing()}>go</button>;\n}\n",
+  );
+  writeFileSync(
+    join(dir, 'src', 'pages', 'calls-an-action.tsx'),
+    'import { ActionButton } from \'./action-button\';\n\nexport default function CallsAnAction() {\n  return (\n    <html lang="en">\n      <body>\n        <ActionButton />\n      </body>\n    </html>\n  );\n}\n',
+  );
+
+  const { status, output } = runCli(dir, ['build']);
+  // A warning, not a failure: a module can legitimately decline to evaluate in a build — one that reads a
+  // secret out of the environment, say — and a build is not where that gets decided.
+  assert.equal(status, 0, `the build must still succeed:\n${output}`);
+  assert.match(output, /the module holding 1 of the app's 1 server action\(s\) could not be loaded at build time — this module cannot be evaluated/);
+  assert.match(output, /each of them answers 500/, 'and says what it means at run time, since nothing else will');
+});
+
 test('the one required file missing is one line, from `build` and from `dev` alike', () => {
   // `src/routes.ts` is the file this whole fixture exists to say is required, so its absence is the likeliest
   // first-run failure there is — and it used to get the worst output of any of them. The `[rshono]` message
