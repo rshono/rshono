@@ -8,7 +8,7 @@ running production server — nothing here is inferred from reading alone.
 **Verified.** 2026-09-02 at `78650f2` — all 14 findings re-reproduced from scratch.
 
 > **All 14 findings are real. None is struck as a non-bug.**
-> Four *supporting details* were wrong and are struck through where they appear: M1's README
+> Four _supporting details_ were wrong and are struck through where they appear: M1's README
 > attribution, L4's nonce count, L5's coverage branch figure, and two line numbers (L1, L5). None
 > changes a verdict.
 
@@ -16,18 +16,18 @@ running production server — nothing here is inferred from reading alone.
 
 ## Summary
 
-| #      | Issue                                                              | Fix                                          | Kind      |
-| ------ | ------------------------------------------------------------------ | -------------------------------------------- | --------- |
-| ~~**H1**~~ | ~~Server bundles ship React's **development** builds — 2× every target~~ | ~~2-line loader change~~ — **fixed** | **Code**  |
-| ~~**M1**~~ | ~~JSDoc prescribes `useNavigation().url` for a static route's query — it's the same frozen URL~~ | ~~Correct the JSDoc~~ — **fixed** | Docs      |
-| ~~**M2**~~ | ~~*Any* cross-site form POST to a page route is refused, message blames a server action~~ | ~~Reword the 403 + README line~~ — **fixed** | Code + docs |
-| ~~**M3**~~ | ~~A malformed action body is a 500 + error-tracker page, not a 400~~ | ~~Wrap the decode~~ — **fixed** | **Code**  |
-| ~~**M4**~~ | ~~`notFound()` always costs a full document load on a soft navigation~~ | ~~State it in the README~~ — **fixed** | Docs      |
-| ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~ | ~~Normalise the key~~ — **fixed** | Code      |
-| ~~**L2**~~ | ~~An unknown CLI flag prints a raw Node stack trace~~ | ~~Wrap `parseArgs`~~ — **fixed** | Code      |
-| ~~**L3**~~ | ~~`HOST` is read, then silently dropped by `rshono dev`~~ | ~~Scope the doc, or warn~~ — **fixed (both)** | Docs      |
-| ~~**L4**~~ | ~~Prerendered documents bake in a build-time CSP nonce~~ | ~~Prerender without a nonce~~ — **fixed** | Code      |
-| ~~**L5**~~ | ~~Five smaller things — see below~~ | ~~Assorted~~ — **all five fixed** | Polish    |
+| #          | Issue                                                                                            | Fix                                           | Kind        |
+| ---------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------- | ----------- |
+| ~~**H1**~~ | ~~Server bundles ship React's **development** builds — 2× every target~~                         | ~~2-line loader change~~ — **fixed**          | **Code**    |
+| ~~**M1**~~ | ~~JSDoc prescribes `useNavigation().url` for a static route's query — it's the same frozen URL~~ | ~~Correct the JSDoc~~ — **fixed**             | Docs        |
+| ~~**M2**~~ | ~~_Any_ cross-site form POST to a page route is refused, message blames a server action~~        | ~~Reword the 403 + README line~~ — **fixed**  | Code + docs |
+| ~~**M3**~~ | ~~A malformed action body is a 500 + error-tracker page, not a 400~~                             | ~~Wrap the decode~~ — **fixed**               | **Code**    |
+| ~~**M4**~~ | ~~`notFound()` always costs a full document load on a soft navigation~~                          | ~~State it in the README~~ — **fixed**        | Docs        |
+| ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~                                               | ~~Normalise the key~~ — **fixed**             | Code        |
+| ~~**L2**~~ | ~~An unknown CLI flag prints a raw Node stack trace~~                                            | ~~Wrap `parseArgs`~~ — **fixed**              | Code        |
+| ~~**L3**~~ | ~~`HOST` is read, then silently dropped by `rshono dev`~~                                        | ~~Scope the doc, or warn~~ — **fixed (both)** | Docs        |
+| ~~**L4**~~ | ~~Prerendered documents bake in a build-time CSP nonce~~                                         | ~~Prerender without a nonce~~ — **fixed**     | Code        |
+| ~~**L5**~~ | ~~Five smaller things — see below~~                                                              | ~~Assorted~~ — **all five fixed**             | Polish      |
 
 **Suggested order:** H1 (biggest win, smallest patch) → M3 (client-reachable 500) → L1, L2, L4 (small
 code fixes) → M1, M2, M4, L3 (documentation) → L5 (polish).
@@ -65,8 +65,11 @@ Worker size budget.
 Every React entry wrapper is a runtime branch:
 
 ```js
-if (process.env.NODE_ENV === 'production') { s = require('./cjs/…production.js'); }
-else                                       { s = require('./cjs/…development.js'); }
+if (process.env.NODE_ENV === 'production') {
+  s = require('./cjs/…production.js');
+} else {
+  s = require('./cjs/…development.js');
+}
 ```
 
 Rspack normally erases the dead half via the DefinePlugin that `mode: 'production'` installs. But
@@ -107,14 +110,14 @@ the same class of risk as DefinePlugin's own, which every other module already g
 
 **Measured with the patch applied, then reverted:**
 
-| target       | before  | after   | change   |
-| ------------ | ------- | ------- | -------- |
+| target       | before  | after   | change     |
+| ------------ | ------- | ------- | ---------- |
 | `node`       | 809,447 | 398,635 | **−50.7%** |
-| `cloudflare` | 793,162 | 383,020 | **−52%** |
-| `vercel`     | 806,314 | 395,592 | **−51%** |
+| `cloudflare` | 793,162 | 383,020 | **−52%**   |
+| `vercel`     | 806,314 | 395,592 | **−51%**   |
 
 All six development modules leave the bundle and `npm test` still passes 303/303 (dev and production
-builds both). Because the patch was the *only* change, this is also what establishes DefinePlugin's
+builds both). Because the patch was the _only_ change, this is also what establishes DefinePlugin's
 lexical-scope behaviour as the cause rather than a correlation.
 
 ### Related — worth a line in the deployment docs
@@ -166,13 +169,13 @@ testbed, is mounted on `/profile/:id`, a dynamic route.
 > **Correction — the original finding also blamed the README; that part was not real.** The misleading advice is in the `PageProps.url`
 > JSDoc **only** (`packages/core/src/router.ts:60-62`). The core README's one line on the subject
 > (`README.md:103`) reads "The same pair reaches a `'use client'` component from `useNavigation()`, so a
-> read moves across the boundary unchanged" — *consistent* with the defect rather than a victim of it.
+> read moves across the boundary unchanged" — _consistent_ with the defect rather than a victim of it.
 > The root `README.md` is a 34-line monorepo index and mentions neither. **So this is a one-JSDoc fix,
 > not a two-document one.**
 
 ### Fix
 
-Correct the JSDoc: on a static route the URL is fixed at build time in *both* places, and
+Correct the JSDoc: on a static route the URL is fixed at build time in _both_ places, and
 `render: 'dynamic'` or a `location`-reading effect are the only ways to see the query.
 
 The alternative — having the client re-provide the live URL after hydration for payloads it knows are
@@ -180,7 +183,7 @@ prerendered — is a real option, but the doc correction is the honest 1.0 answe
 
 ---
 
-# ~~M2 — *Any* cross-site form POST to a page route is refused~~ ✅ FIXED
+# ~~M2 — _Any_ cross-site form POST to a page route is refused~~ ✅ FIXED
 
 ### Issue
 
@@ -208,8 +211,8 @@ untrusted body. Two consequences are simply not written down:
 
 - **The message misattributes.** No server action was involved in the request above.
 - **The limitation is broader than documented.** `refusesCrossSiteForm`'s doc comment says the cost is
-  that "an app deliberately accepting *form* posts to an **action** from another origin of its own
-  cannot". In fact a page route cannot accept *any* cross-site form post — the arrival shape of SAML
+  that "an app deliberately accepting _form_ posts to an **action** from another origin of its own
+  cannot". In fact a page route cannot accept _any_ cross-site form post — the arrival shape of SAML
   ACS, OIDC `response_mode=form_post`, and most payment-gateway returns. The core README has zero
   occurrences of "cross-site", "form post", "SAML" or "form_post".
 
@@ -220,8 +223,8 @@ directly (`entry.rsc.tsx:612`) and never reach `renderPage` — verified, such a
 
 Two small changes:
 
-1. Reword the 403 to name the real constraint — *"cross-site form post to a page route — a page route
-   cannot accept one; use an `{ type: 'endpoint' }` route"*.
+1. Reword the 403 to name the real constraint — _"cross-site form post to a page route — a page route
+   cannot accept one; use an `{ type: 'endpoint' }` route"_.
 2. Add the limitation, and the endpoint escape hatch, to the README's limitations list.
 
 ---
@@ -265,7 +268,7 @@ throw synchronously, for a manifest entry whose module will not load.
 ### Issue
 
 For a flight fetch, `renderComponent` returns at `entry.rsc.tsx:346` —
-`return c.body(releaseWhenDone(rscStream, release), …)` — *before* awaiting anything, so the response is
+`return c.body(releaseWhenDone(rscStream, release), …)` — _before_ awaiting anything, so the response is
 committed as `200 text/x-component` the instant it is returned. `shellFlushed` is still `false` when
 `onError` fires, so the control signal is written into the payload as a digest and no status change is
 possible.
@@ -281,7 +284,7 @@ below, which is still soft. **That asymmetry is the part worth naming explicitly
 
 This is deliberate, self-healing, and tested (`test/prod.test.mjs:264` asserts `flight.status === 200`
 and a `/RSHONO_NOT_FOUND/` payload). What is missing is the user-facing statement of the cost. The
-README (`packages/core/README.md:305`) frames the whole subject as *late* signals:
+README (`packages/core/README.md:305`) frames the whole subject as _late_ signals:
 
 > **`redirect()` and `notFound()` must be reached before the page shell is sent.** […] Called from a
 > `<Suspense>` boundary that resolves later, the signal can no longer be a 3xx or a 404.
@@ -320,8 +323,8 @@ GET /a/b       with /a/* then /a/b                 → the WILDCARD        (/a/b
 ```
 
 Both are exactly the failure this validator exists to prevent: a build that exits 0 with a route in it
-that can never answer. The doc comment above the function does discuss a catch-all registered *behind*
-a route, but not a wildcard registered *ahead* of a concrete path.
+that can never answer. The doc comment above the function does discuss a catch-all registered _behind_
+a route, but not a wildcard registered _ahead_ of a concrete path.
 
 ### Fix
 
@@ -408,7 +411,7 @@ $ grep -c nonce dist/ssg/docs/getting-started/index.rsc
 There are two cases, and both are confirmed:
 
 - **Global nonce policy → dead bytes.** These files are never served. Against a running
-  `TESTBED_CSP=1` server, two successive requests return *different* nonces (`2Kx2vfeWuHcz…`,
+  `TESTBED_CSP=1` server, two successive requests return _different_ nonces (`2Kx2vfeWuHcz…`,
   `Pw2wiWO/SOy/…`), neither the baked one, under `cache-control: private, no-cache` — the
   rendered-per-request signature, not the `public, max-age=300` a disk-served page carries. So
   `mustRenderForNonce` (`entry.rsc.tsx:563`) behaves correctly, and the cost is dead bytes plus a build
@@ -429,7 +432,7 @@ removes the whole question.
 
 # ~~L5 — Smaller things~~ ✅ ALL FIVE FIXED
 
-### `getRequestContext().env` snapshots `process.env` per *process*, not per request
+### `getRequestContext().env` snapshots `process.env` per _process_, not per request
 
 `context.ts:76` memoises `{ ...process.env }` in a module-level `envSnapshot`. The public JSDoc at
 `context.ts:312` says "Computed once and cached", which reads as per-request; the process-wide half is
@@ -477,14 +480,14 @@ production stack traces readable.
 ### The coverage gate measures less than it appears to
 
 `test:coverage` gates on lines ≥ 82 / branches ≥ 90 / functions ≥ 75 over `dist/**` and reports
-83.44 / ~~91.65~~ **91.39** / 78.42 — but only modules loaded *in this process* appear.
+83.44 / ~~91.65~~ **91.39** / 78.42 — but only modules loaded _in this process_ appear.
 `entry.rsc.js`, `entry.client.js`, `entry.ssr.js`, `boundaries.js`, `navigation.js` and every
 `deploy/*/runtime.js` have **zero** occurrences anywhere in the report, because they only ever execute
 inside the bundled testbed in a child process. The whole `runtime/` section is just `context.js`,
 `control.js`, `flight-inject.js`, `hot-update.js`, `request.js` and `validate-entries.js`; `deploy/`
 lists only `build-marker.js`, `presets.js` and the `cloudflare` / `vercel` `build.js` files.
 
-The request hot path *is* covered — thoroughly, by the e2e suites — but not by this number, which sits
+The request hot path _is_ covered — thoroughly, by the e2e suites — but not by this number, which sits
 1.4 points above its floor (83.44 vs 82; branches 91.39 vs 90) and is one refactor away from failing
 for no reason.
 
@@ -510,10 +513,10 @@ Verified against a real build and server, and behaving as documented:
   wrote.
 - **Path safety.** `/_static/../../package.json`, `/_static/..%2f..%2fpackage.json`,
   `/_static/%2e%2e/%2e%2e/package.json` and `/../package.json` all 404.
-  `/docs/..%2f..%2fpackage.json` is a prerender *miss* that falls through to SSR, which is the
+  `/docs/..%2f..%2fpackage.json` is a prerender _miss_ that falls through to SSR, which is the
   documented design.
 - **Action-id handling.** `__proto__` and `constructor` as action ids → `400 Bad Request: unknown server
-  action`, not a prototype lookup.
+action`, not a prototype lookup.
 - **Header floor.** `nosniff` / `Referrer-Policy` / `X-Frame-Options` on every response including error
   and 404 paths; `Vary: RSC` and `private, no-cache` on page content types only; `text/plain` 404s and
   500s carry an explicit `cache-control` of their own.

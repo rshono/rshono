@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1–F8 have since been fixed too** and are struck through below. F9 and F10 are open.
+**F1–F9 have since been fixed too** and are struck through below. F10 is open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -27,7 +27,7 @@ running server, or is marked as reasoning rather than observation.
 | ~~**F6**~~ | ~~The client's "produced no result" branch is now close to unreachable~~ — **superseded**  | ~~Nit~~    | Residue of M3         |
 | ~~**F7**~~ | ~~The coverage number still cannot see the request hot path~~ — **measured**               | ~~Low~~    | L5 documented it only |
 | ~~**F8**~~ | ~~The `NODE_ENV` substitution added by H1 is textual, not syntactic~~ — **fixed**          | ~~Nit~~    | Cost of H1            |
-| **F9**     | `prettier --check` fails on five files and nothing in CI runs it                           | Nit        | Pre-existing          |
+| ~~**F9**~~ | ~~`prettier --check` fails on five files and nothing in CI runs it~~ — **fixed**           | ~~Nit~~    | Pre-existing          |
 | **F10**    | The shadow check compares regex constraints as text                                        | Nit        | Limit of L1           |
 
 **Also worth knowing:** the Playwright suite could not be run in this environment — see
@@ -408,7 +408,7 @@ testbed's server bundle is still ~400 KB with **no** development React in it —
 
 ---
 
-# F9 — `prettier --check` fails on five files and nothing in CI runs it
+# ~~F9 — `prettier --check` fails on five files and nothing in CI runs it~~ ✅ FIXED
 
 **Severity: nit.** Pre-existing; verified against `14d385d`, before any of this work.
 
@@ -428,10 +428,27 @@ matrix and never Prettier. So the formatter is advisory, and the tree has drifte
 
 The files this work touched were run through Prettier and the tree is back to exactly those five.
 
-### Fix
+### Fix — done
 
-Add `format:check` and a CI step, then fix the five — or drop Prettier from the repo's story, since a formatter
-nothing enforces is a formatter that will keep being out of date.
+`format:check` (`prettier --check .`) is a root script and a step in the `lint` job, beside `pnpm lint`. The
+workflow's path filter gains `.prettierrc.json` and `.prettierignore`, on the same reasoning `eslint.config.mjs`
+is already there: one config governs every package, so a change to it is a change to all of them.
+
+The five split three and two:
+
+- **Formatted** — `packages/core/src/runtime/entry.client.tsx`, `packages/core/test/cloudflare.test.mjs` and
+  `PRODUCTION.md`. All three are hand-written and the changes are cosmetic: one long `throw` wrapped, one call
+  broken over its arguments, and markdown emphasis and table padding normalised.
+- **Ignored** — `packages/benchmarks/apps/next/next-env.d.ts` and `apps/website/content/benchmarks.md`. Neither
+  is written by a person: Next.js rewrites the first on every build, and `site:publish` copies the second out
+  of `results/latest.md`, which `.prettierignore` already excludes one directory earlier. Formatting them
+  would last until the next generator run, and a formatter and a generator arguing over the same bytes is how
+  a check like this starts being ignored.
+
+`prettier --check .` is now clean over the whole tree, and `npm test` still passes 329/329. One limit worth
+naming: the check runs the whole tree, but this workflow only _starts_ for the paths at the top of the file,
+so a change confined to the website is still formatted by whoever runs `pnpm format` rather than by CI. That
+is the path filter's existing trade, not a new one — the comment in `ci.yml` now says so.
 
 ---
 

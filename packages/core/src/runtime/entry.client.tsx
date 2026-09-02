@@ -545,7 +545,9 @@ async function main() {
       // failure is on the server and its log is where the error is. Below that it is still the defensive
       // floor for a payload shaped by another deployment or replaced by a proxy — reading `.ok` off it used
       // to hand the caller `Cannot read properties of undefined`.
-      throw new Error('[rshono] the server action produced no result — the request failed around it and the server answered with a page instead. Its log has the error.');
+      throw new Error(
+        '[rshono] the server action produced no result — the request failed around it and the server answered with a page instead. Its log has the error.',
+      );
     }
     if (!result.ok) throw result.error;
     return result.value;

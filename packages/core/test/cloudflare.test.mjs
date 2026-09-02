@@ -199,10 +199,14 @@ describe('serving from a Worker', () => {
     // answers instead; it is fetched once per isolate, which is why it is allowed in the list below.
     const asked = [];
     const counting = { fetch: (request) => (asked.push(new URL(request.url).pathname), ASSETS.fetch(request)) };
-    const res = await worker.fetch(new Request(`${ORIGIN}/docs/never-prerendered`), { ASSETS: counting, ...APP_ENV }, {
-      waitUntil() {},
-      passThroughOnException() {},
-    });
+    const res = await worker.fetch(
+      new Request(`${ORIGIN}/docs/never-prerendered`),
+      { ASSETS: counting, ...APP_ENV },
+      {
+        waitUntil() {},
+        passThroughOnException() {},
+      },
+    );
     await res.text();
 
     assert.equal(res.status, 200, 'the route still renders per request');
