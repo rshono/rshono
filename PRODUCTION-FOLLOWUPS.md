@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1–F7 have since been fixed too** and are struck through below. F8–F10 are open.
+**F1–F8 have since been fixed too** and are struck through below. F9 and F10 are open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -26,7 +26,7 @@ running server, or is marked as reasoning rather than observation.
 | ~~**F5**~~ | ~~The two action `400`s carry no `cache-control` and no `Vary: RSC`~~ — **fixed**          | ~~Low~~    | Pre-existing          |
 | ~~**F6**~~ | ~~The client's "produced no result" branch is now close to unreachable~~ — **superseded**  | ~~Nit~~    | Residue of M3         |
 | ~~**F7**~~ | ~~The coverage number still cannot see the request hot path~~ — **measured**               | ~~Low~~    | L5 documented it only |
-| **F8**     | The `NODE_ENV` substitution added by H1 is textual, not syntactic                          | Nit        | Cost of H1            |
+| ~~**F8**~~ | ~~The `NODE_ENV` substitution added by H1 is textual, not syntactic~~ — **fixed**          | ~~Nit~~    | Cost of H1            |
 | **F9**     | `prettier --check` fails on five files and nothing in CI runs it                           | Nit        | Pre-existing          |
 | **F10**    | The shadow check compares regex constraints as text                                        | Nit        | Limit of L1           |
 
@@ -367,9 +367,9 @@ tooling alone.
 
 ---
 
-# F8 — The `NODE_ENV` substitution added by H1 is textual, not syntactic
+# ~~F8 — The `NODE_ENV` substitution added by H1 is textual, not syntactic~~ ✅ FIXED
 
-**Severity: nit.** Called out in the code, repeated here so it is on a list.
+**Severity: nit** — and the comparison it rested on was wrong, which is what made it worth doing.
 
 ### Issue
 
@@ -378,13 +378,33 @@ the binding. The regex is anchored — a negative lookbehind rejects `this.proce
 and `\b` rejects `NODE_ENVIRONMENT` — but it is still a text substitution, so a `process.env.NODE_ENV` inside a
 string literal or a template in an SSR-layer module would be rewritten too.
 
-The same class of risk DefinePlugin carries for every other module in the bundle, which is why it was
-acceptable. It is not the same _size_ of risk, because this one is hand-rolled.
+The loader's own comment called that "the same class of risk DefinePlugin's own substitution carries for every
+other module in the bundle". **That is not true**: DefinePlugin works on the parsed module — it replaces
+expressions through the parser's hooks — so it cannot rewrite the inside of a string at all. The risk was
+this loader's alone.
 
-### Fix
+### Fix — done
 
-If it ever matters, do the substitution in the swc rule beside it as a real visitor rather than a regex. Until
-then the unit tests cover the shapes that are substituted and the four that are declined.
+Not an swc visitor: a scanner. The substitution regex now matches the places the same text can sit _without_
+being code — a line comment, a block comment, a string, a template — ahead of the target itself, and the
+replacer hands everything that is not the target straight back:
+
+```js
+source.replace(NODE_ENV_SCAN, (match) => (match.startsWith('process') ? literal : match));
+```
+
+Comments are matched ahead of strings on purpose: an apostrophe in one (`// don't`) would otherwise open a
+string that swallows the code after it, which is the trap this kind of scan falls into.
+
+It is a scanner and not a parser, so two things stay outside it: a regex literal spelled with unescaped dots
+(`/process.env.NODE_ENV/`), and an interpolation inside a template, which is consumed with the template
+around it. The first is the residual risk and a strange thing to write; the second only declines a
+substitution that would have been valid, costing bytes and changing nothing. **Any position the scan gets
+wrong leaves the text exactly as the bare `.replace()` did**, so it cannot be worse than what it replaced.
+
+Seven cases in the unit tests, beside the shapes that were already covered. H1's win is unchanged: the
+testbed's server bundle is still ~400 KB with **no** development React in it — the map has zero
+`*.development.js` sources — because React's entry wrappers branch in code, not in a string.
 
 ---
 

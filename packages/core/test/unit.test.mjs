@@ -2013,6 +2013,27 @@ describe('env-shadow-loader', () => {
     assert.equal(run('export const x = process.env.NODE_ENV;', { nodeEnv: 'development' }), `${PRELUDE}export const x = "development";`);
   });
 
+  test('substitutes code, and leaves the same text alone in a comment, a string or a template', () => {
+    // The substitution is textual where DefinePlugin's is not: DefinePlugin works on the parsed module and so
+    // cannot reach inside a string, and without a scan that walks the same tokens an SSR-layer module saying
+    // `throw new Error('set process.env.NODE_ENV')` would ship with its message rewritten.
+    const cases = [
+      ["throw new Error('set process.env.NODE_ENV first');", "throw new Error('set process.env.NODE_ENV first');"],
+      ['const s = "process.env.NODE_ENV";', 'const s = "process.env.NODE_ENV";'],
+      ['const t = `read process.env.NODE_ENV`;', 'const t = `read process.env.NODE_ENV`;'],
+      ['const x = 1; // process.env.NODE_ENV', 'const x = 1; // process.env.NODE_ENV'],
+      ['const x = 1; /* process.env.NODE_ENV */', 'const x = 1; /* process.env.NODE_ENV */'],
+      // An apostrophe in a comment must not open a string that swallows the code after it — the trap this
+      // kind of scan falls into, and why comments are matched ahead of strings.
+      ["const a = 1; // don't\nconst x = process.env.NODE_ENV;", 'const a = 1; // don\'t\nconst x = "production";'],
+      // …and an escaped quote must not close a string early, for the same reason.
+      ["const s = 'a\\'b'; const x = process.env.NODE_ENV;", "const s = 'a\\'b'; const x = \"production\";"],
+    ];
+    for (const [source, expected] of cases) {
+      assert.equal(run(source, { nodeEnv: 'production' }), PRELUDE + expected, source);
+    }
+  });
+
   test('substitutes NODE_ENV only in the layer it shadows, and only when asked', () => {
     const source = 'export const x = process.env.NODE_ENV;';
     // The RSC layer gets no prelude, so DefinePlugin still reaches it there and this loader must not touch it.
