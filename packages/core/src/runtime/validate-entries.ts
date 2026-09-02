@@ -193,6 +193,15 @@ function covers(prefix: string, key: string): boolean {
  * twice under two spellings, and a wildcard registered *ahead* of a concrete path — `/a/*` then `/a/b` —
  * where the second can never be reached. The doc comment above used to discuss only the opposite order, a
  * catch-all registered behind a route, which is the case that is fine.
+ *
+ * **Where the line is drawn**, for whoever widens this next. A `{regex}` constraint is kept in the key and
+ * compared as text, so `/a/:id{[0-9]+}` then `/a/:n{[0-9]+}` is caught and `/a/:id{[0-9]+}` then
+ * `/a/:id{\d+}` is not — the second pair is equivalent, and the later route is dead, and this accepts it.
+ * Deciding regex equivalence in general is undecidable-adjacent and not a route validator's job. The same
+ * goes for a constraint containing a `/`, which the key carries through unchanged rather than interpreting.
+ * Both leave the error on the safe side: an unreachable route slips through, and a route that can still
+ * answer is never refused. Anything added here should keep that asymmetry — a false refusal fails a build
+ * that was correct, which is much worse than the hole it would close.
  */
 function assertNothingIsShadowed(routes: readonly Route[]): void {
   /** `"<method> <key>"` → the first route answering it. */

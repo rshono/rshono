@@ -2270,6 +2270,23 @@ describe('validateRoutesModule', () => {
     );
   });
 
+  test('compares a {regex} constraint as text, and stops there', () => {
+    const at = (path) => ({ ...page, path });
+    // Kept in the key, because a constraint *is* part of the pattern — so two spellings of one constraint
+    // are one route and the second is dead.
+    rejects([at('/a/:id{[0-9]+}'), at('/a/:n{[0-9]+}')], /routes\[1\] .* would never run/, 'the same constraint under two parameter names');
+    rejects(
+      [at('/a/:id{a/b}'), at('/a/:n{a/b}')],
+      /routes\[1\] .* would never run/,
+      'a constraint holding a slash is carried through, not interpreted',
+    );
+
+    // And this is the line: `[0-9]+` and `\d+` are the same language, the second route is dead, and the check
+    // accepts it. Deciding regex equivalence is not a route validator's job, and the failure mode is the
+    // safe one — an unreachable route slips through, a route that can still answer is never refused.
+    assert.doesNotThrow(() => validateRoutesModule([at('/a/:id{[0-9]+}'), at('/a/:id{\\d+}')]));
+  });
+
   test('leaves a route that still answers something alone', () => {
     for (const table of [
       // A `{regex}` constraint *is* part of the pattern, so these are two routes and both can answer:

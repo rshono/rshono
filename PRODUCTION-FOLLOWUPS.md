@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1–F9 have since been fixed too** and are struck through below. F10 is open.
+**F1–F10 have since been fixed too** and are struck through below. Nothing here is open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -17,18 +17,18 @@ running server, or is marked as reasoning rather than observation.
 
 ## Summary
 
-| #          | Issue                                                                                      | Severity   | Origin                |
-| ---------- | ------------------------------------------------------------------------------------------ | ---------- | --------------------- |
-| ~~**F1**~~ | ~~A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ — **fixed**   | ~~Medium~~ | New — found via L2    |
-| ~~**F2**~~ | ~~Under a global nonce CSP, prerendered documents are built and never served~~ — **fixed** | ~~Low~~    | Residue of L4         |
-| ~~**F3**~~ | ~~A deploy-drift `loadServerAction` failure is now a silent 400~~ — **fixed**              | ~~Low~~    | Cost of M3            |
-| ~~**F4**~~ | ~~`decodeFormState` sits outside M3's guard, so one 500 path survives~~ — **fixed**        | ~~Low~~    | Cost of M3            |
-| ~~**F5**~~ | ~~The two action `400`s carry no `cache-control` and no `Vary: RSC`~~ — **fixed**          | ~~Low~~    | Pre-existing          |
-| ~~**F6**~~ | ~~The client's "produced no result" branch is now close to unreachable~~ — **superseded**  | ~~Nit~~    | Residue of M3         |
-| ~~**F7**~~ | ~~The coverage number still cannot see the request hot path~~ — **measured**               | ~~Low~~    | L5 documented it only |
-| ~~**F8**~~ | ~~The `NODE_ENV` substitution added by H1 is textual, not syntactic~~ — **fixed**          | ~~Nit~~    | Cost of H1            |
-| ~~**F9**~~ | ~~`prettier --check` fails on five files and nothing in CI runs it~~ — **fixed**           | ~~Nit~~    | Pre-existing          |
-| **F10**    | The shadow check compares regex constraints as text                                        | Nit        | Limit of L1           |
+| #           | Issue                                                                                      | Severity   | Origin                |
+| ----------- | ------------------------------------------------------------------------------------------ | ---------- | --------------------- |
+| ~~**F1**~~  | ~~A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ — **fixed**   | ~~Medium~~ | New — found via L2    |
+| ~~**F2**~~  | ~~Under a global nonce CSP, prerendered documents are built and never served~~ — **fixed** | ~~Low~~    | Residue of L4         |
+| ~~**F3**~~  | ~~A deploy-drift `loadServerAction` failure is now a silent 400~~ — **fixed**              | ~~Low~~    | Cost of M3            |
+| ~~**F4**~~  | ~~`decodeFormState` sits outside M3's guard, so one 500 path survives~~ — **fixed**        | ~~Low~~    | Cost of M3            |
+| ~~**F5**~~  | ~~The two action `400`s carry no `cache-control` and no `Vary: RSC`~~ — **fixed**          | ~~Low~~    | Pre-existing          |
+| ~~**F6**~~  | ~~The client's "produced no result" branch is now close to unreachable~~ — **superseded**  | ~~Nit~~    | Residue of M3         |
+| ~~**F7**~~  | ~~The coverage number still cannot see the request hot path~~ — **measured**               | ~~Low~~    | L5 documented it only |
+| ~~**F8**~~  | ~~The `NODE_ENV` substitution added by H1 is textual, not syntactic~~ — **fixed**          | ~~Nit~~    | Cost of H1            |
+| ~~**F9**~~  | ~~`prettier --check` fails on five files and nothing in CI runs it~~ — **fixed**           | ~~Nit~~    | Pre-existing          |
+| ~~**F10**~~ | ~~The shadow check compares regex constraints as text~~ — **documented**                   | ~~Nit~~    | Limit of L1           |
 
 **Also worth knowing:** the Playwright suite could not be run in this environment — see
 [Not verified here](#not-verified-here) at the end. Run it before tagging.
@@ -452,7 +452,7 @@ is the path filter's existing trade, not a new one — the comment in `ci.yml` n
 
 ---
 
-# F10 — The shadow check compares regex constraints as text
+# ~~F10 — The shadow check compares regex constraints as text~~ ✅ DOCUMENTED
 
 **Severity: nit.** A deliberate limit of L1, recorded so it is not mistaken for an oversight.
 
@@ -471,10 +471,23 @@ Deciding regex equivalence in general is not something a route validator should 
 is the safe one: a dead route that slips through, never a live route wrongly refused. The same applies to a
 constraint containing `/`, which the key round-trips unchanged rather than trying to interpret.
 
-### Fix
+### Fix — done
 
-None proposed. Worth a line in `assertNothingIsShadowed`'s doc comment so the next person to widen it knows
-where the line was drawn and why.
+Both cases re-confirmed against the built validator, along with the slash-in-a-constraint one:
+
+```
+/a/:id{[0-9]+}  then  /a/:n{[0-9]+}   → REFUSED    identical text, caught
+/a/:id{[0-9]+}  then  /a/:id{\d+}     → ACCEPTED   equivalent, and the second route is dead
+/a/:id{[0-9]+}  then  /a/:name        → ACCEPTED   genuinely two routes, both answer
+/a/:id{a/b}     then  /a/:n{a/b}      → REFUSED    a constraint holding a slash still hashes alike
+```
+
+`assertNothingIsShadowed`'s doc comment now says where the line is and, more usefully, **which way it must
+lean**: an unreachable route slipping through is the acceptable failure, a live route wrongly refused is not,
+because that fails a build that was correct. Anything added here has to keep that asymmetry.
+
+A test records it too — the two refusals and the accepted equivalence in one case — so the behaviour is
+pinned rather than left to be rediscovered as a bug.
 
 ---
 
