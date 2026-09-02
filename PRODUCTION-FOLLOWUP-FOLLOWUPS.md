@@ -137,9 +137,10 @@ scan holds in a real build and not only in its unit tests, while the read it exi
 
 ---
 
-# G3 — The browser suite has never run in this environment, and now has a new test in it
+# ~~G3 — The browser suite has never run in this environment, and now has a new test in it~~ ✅ RUN, GREEN
 
-**Severity: low.** Not a defect — a gap in what could be verified, carried forward from the previous round.
+**Severity: low.** Not a defect — a gap in what could be verified. It has now been closed by running it
+somewhere that can.
 
 ### Issue
 
@@ -152,7 +153,18 @@ payload, expecting the client's "produced no result" notice. It is modelled on t
 uses the same `page.route` / `route.fulfill` shape, and `playwright test --list` parses the file (28 tests).
 Its body has not been observed to run.
 
-### Fix
+### Fix — done
 
-Run `pnpm --filter @rshono/core test:browser` before tagging. If it is red, the new test is the first place
-to look — everything else in the suite is unchanged by this work.
+**The maintainer ran `pnpm --filter @rshono/core test:browser` outside this sandbox and every test passed**,
+the 28th — F6's new one — included. So the one piece of this work that had been written but never executed
+has now been observed: an action POST answered with an ordinary page payload does surface the client's
+"produced no result" error, and the page stays up around it.
+
+That also settles the two items carried since the previous round: **M3**'s `text/plain` 400 is handled by
+`payloadResponse` as reasoned, and **M2**'s reworded 403 breaks nothing client-side. The
+[Not verified here](./PRODUCTION-FOLLOWUPS.md#not-verified-here) section of the previous document is updated
+to say so.
+
+Chromium still segfaults in this sandbox, which is a property of the sandbox and not of the code. The rule
+stands for the next round of work: anything written for that suite here is written blind, and has to be run
+somewhere else before it counts.

@@ -37,8 +37,8 @@ re-checked the same way afterwards, and the ten findings of the review above wit
 | ~~**F9**~~  | ~~`prettier --check` fails on five files and nothing in CI runs it~~ — **fixed**           | ~~Nit~~    | Pre-existing          |
 | ~~**F10**~~ | ~~The shadow check compares regex constraints as text~~ — **documented**                   | ~~Nit~~    | Limit of L1           |
 
-**Also worth knowing:** the Playwright suite could not be run in this environment — see
-[Not verified here](#not-verified-here) at the end. Run it before tagging.
+**Also worth knowing:** the Playwright suite could not be run in this environment. It has since been run
+elsewhere and passed — see [Not verified here](#not-verified-here) at the end, which now records that.
 
 ---
 
@@ -318,10 +318,10 @@ covered: the server half in `prod.test.mjs`, which asserts the drift reply is a 
 `"returnValue":"$undefined"` — the branch's precondition — and the client half by a new Playwright test that
 answers an action POST with an ordinary page payload and expects the notice to say the result is missing.
 
-**The Playwright test has not been run here** (Chromium still segfaults in this sandbox — see
-[Not verified here](#not-verified-here)). It is modelled on the 413 test two above it and uses the same
-`page.route` / `route.fulfill` shape, and the spec parses (`playwright test --list` sees 28 tests), but it
-has not been observed to pass.
+**That Playwright test could not be run here** — Chromium segfaults in this sandbox — so it was written
+against the 413 test two above it and checked only as far as `playwright test --list` would go. **It has
+since been run elsewhere and passes**, along with the rest of the suite; see
+[Not verified here](#not-verified-here).
 
 ---
 
@@ -498,9 +498,13 @@ pinned rather than left to be rediscovered as a bug.
 
 ---
 
-# Not verified here
+# Not verified here — since verified
 
-**The Playwright suite did not run.** `pnpm --filter @rshono/core test:browser` cannot execute in this
+> **Settled.** The maintainer ran `pnpm --filter @rshono/core test:browser` outside this environment and
+> **every test passed**, including the one F6 added blind. Everything below is what was outstanding before
+> that run; it is kept because the sandbox limitation is still real for the next round of work.
+
+**The Playwright suite did not run here.** `pnpm --filter @rshono/core test:browser` cannot execute in this
 environment: Chromium segfaults on launch, every failure being
 
 ```
