@@ -2304,8 +2304,11 @@ describe('exit', () => {
     assert.equal(drained.stderr.length, bytes + 1, 'every byte written must reach the pipe');
 
     // The same write without the helper, so the assertion above is measuring the drain and not a pipe
-    // that was never small enough to matter on this machine.
-    const cut = spawnWriting(bytes, 'process.exit(1);');
-    assert.ok(cut.stderr.length < bytes, `a bare process.exit is what truncates (${cut.stderr.length} bytes)`);
+    // that was never small enough to matter on this machine. Only POSIX: a write to a pipe is synchronous
+    // on Windows, so there is nothing there for a bare exit to drop and nothing for the drain to rescue.
+    if (process.platform !== 'win32') {
+      const cut = spawnWriting(bytes, 'process.exit(1);');
+      assert.ok(cut.stderr.length < bytes, `a bare process.exit is what truncates (${cut.stderr.length} bytes)`);
+    }
   });
 });
