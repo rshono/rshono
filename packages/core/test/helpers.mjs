@@ -41,11 +41,11 @@ export const APP_ENV = {
  * `csrf()`, `bodyLimit()`, `secureHeaders()` — is read from the environment at start instead, and
  * needs no build of its own.
  */
-export function buildApp(dir, { config, args = [] } = {}) {
+export function buildApp(dir, { config, args = [], env = {} } = {}) {
   const result = spawnSync(process.execPath, [CLI, 'build', ...(config ? ['--config', config] : []), ...args], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, ...APP_ENV },
+    env: { ...process.env, ...APP_ENV, ...env },
     timeout: 180_000,
   });
   if (result.status !== 0) {
@@ -54,8 +54,8 @@ export function buildApp(dir, { config, args = [] } = {}) {
   return result.stdout;
 }
 
-export function buildTestbed(config) {
-  return buildApp(TESTBED_DIR, { config });
+export function buildTestbed(config, { env } = {}) {
+  return buildApp(TESTBED_DIR, { config, env });
 }
 
 /**

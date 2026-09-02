@@ -5,14 +5,21 @@
 // baked into the server bundle. The rest is middleware, so the testbed reads its profile from the
 // environment and one build serves every permutation — which is the point of having moved them.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { buildTestbed, FIXTURES_DIR, startTestbed, stopServer } from './helpers.mjs';
+import { buildTestbed, FIXTURES_DIR, startTestbed, stopServer, TESTBED_DIST } from './helpers.mjs';
 
 // One build for the whole file, with the only config setting under test here baked in. The suites
 // below differ by environment alone. Serialised with the rest of the suite by
 // `--test-concurrency=1`, so this never races another file over `dist/`.
-before(() => buildTestbed(join(FIXTURES_DIR, 'trust-proxy.config.mjs')));
+//
+// Built *with* `TESTBED_CSP`, which the bundle itself is indifferent to — `src/server.ts` reads it at
+// start, so the compiled output is identical either way. What it changes is the prerender pass, which runs
+// the app's middleware in the build process: `secureHeaders()` mints a nonce there too. That is the one
+// build-time consequence of a runtime setting anywhere in the testbed, and the reason the pass has to ask
+// for a document without one — see the prerendered-nonce test below.
+before(() => buildTestbed(join(FIXTURES_DIR, 'trust-proxy.config.mjs'), { env: { TESTBED_CSP: '1' } }));
 
 /** Serves the already-built testbed under `env` for the enclosing suite. */
 function serve(env) {
@@ -91,6 +98,21 @@ describe('a hardened server.ts', () => {
     assert.match(res.headers.get('cache-control') ?? '', /public/, 'still served from disk under CSP');
     assert.ok(res.headers.get('etag'));
     assert.doesNotMatch(await res.text(), /nonce/, 'and it carries no nonce to go stale');
+  });
+
+  test('a prerendered document carries no nonce, even from a build whose middleware minted one', async () => {
+    // The prerender pass renders through the app's full middleware, so under a nonce policy `secureHeaders()`
+    // minted one at *build* time and it was stamped into the file that ships — one frozen value, repeated in
+    // every copy. Which of two bad things followed depended on the policy's scope. Global, as here: the file
+    // is never served at all (the request has a nonce, so the document is re-rendered), so it was dead bytes
+    // under a build reporting pages the deployment would never read. Scoped to some other path: nothing
+    // forces a re-render, and the stale build-time nonce ships and is picked up as `__webpack_nonce__`.
+    //
+    // Read off disk rather than over HTTP, because under this suite's global policy the served document is
+    // always a fresh render — the bytes under test are exactly the ones no request here returns.
+    const document = readFileSync(join(TESTBED_DIST, 'ssg', 'docs', 'getting-started', 'index.html'), 'utf8');
+    assert.ok(document.includes('<title>'), 'the page was prerendered — otherwise there is nothing to assert about');
+    assert.doesNotMatch(document, /nonce/, 'a nonce is per request; a prerendered file is not, so it must carry none');
   });
 
   test("csrf()'s origin handler lets the app's allowlist through, and nothing else", async () => {

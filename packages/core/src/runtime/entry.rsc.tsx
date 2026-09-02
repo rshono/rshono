@@ -106,14 +106,34 @@ export type RscPayload = {
 const actionResults = new WeakMap<Context, ActionResult>();
 
 /**
+ * Whether this process is `rshono build`'s prerender pass rather than a server answering requests.
+ *
+ * Set by `build.ts` before it imports the app bundle, which inlines its own copy of the module graph — so
+ * `process.env` is what crosses that boundary, the same channel `runtime/context.ts` and the `node` runtime
+ * already read. Unforgeable from outside: it is an environment variable of the build process, and a deployed
+ * server never has one.
+ */
+const prerendering = typeof process !== 'undefined' && !!process.env?.RSHONO_PRERENDER;
+
+/**
  * The per-request CSP nonce, if the app asked for one.
  *
  * The framework never mints it: `secureHeaders()` does, when its policy contains the `NONCE`
  * placeholder, and stores it here — so all the framework does is stamp the value into the render. It is
  * readable from a route handler because `secureHeaders` resolves its directives before `next()`.
+ *
+ * Always `undefined` while prerendering, because a nonce is per request and a prerendered file is not. The
+ * pass renders through the app's full middleware, so `secureHeaders()` mints one at *build* time and it was
+ * stamped into the document that ships — frozen, and identical in every copy. Which of two bad things that
+ * caused depended on the app's policy: under a global nonce policy the file was never served (the request
+ * has a nonce of its own, so `mustRenderForNonce` renders it fresh) and the build reported prerendering
+ * pages the deployment would never read; under a policy scoped to some other path, `secureHeaders` never ran
+ * on this one, nothing forced a re-render, and the stale build-time nonce shipped — picked up by the client
+ * as `__webpack_nonce__`. Asking for the document without a nonce is what the flight variant already gets,
+ * and it settles both.
  */
 function cspNonce(c: Context): string | undefined {
-  return c.get('secureHeadersNonce');
+  return prerendering ? undefined : c.get('secureHeadersNonce');
 }
 
 /**

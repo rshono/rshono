@@ -26,7 +26,7 @@ running production server — nothing here is inferred from reading alone.
 | ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~ | ~~Normalise the key~~ — **fixed** | Code      |
 | ~~**L2**~~ | ~~An unknown CLI flag prints a raw Node stack trace~~ | ~~Wrap `parseArgs`~~ — **fixed** | Code      |
 | **L3** | `HOST` is read, then silently dropped by `rshono dev`              | Scope the doc, or warn                       | Docs      |
-| **L4** | Prerendered documents bake in a build-time CSP nonce               | Prerender without a nonce                    | Code      |
+| ~~**L4**~~ | ~~Prerendered documents bake in a build-time CSP nonce~~ | ~~Prerender without a nonce~~ — **fixed** | Code      |
 | **L5** | Five smaller things — see below                                    | Assorted                                     | Polish    |
 
 **Suggested order:** H1 (biggest win, smallest patch) → M3 (client-reachable 500) → L1, L2, L4 (small
@@ -388,7 +388,7 @@ Either scope the README line — "`HOST` applies to `start`; `dev` always binds 
 
 ---
 
-# L4 — Prerendered documents bake in a build-time CSP nonce
+# ~~L4 — Prerendered documents bake in a build-time CSP nonce~~ ✅ FIXED
 
 ### Issue
 
