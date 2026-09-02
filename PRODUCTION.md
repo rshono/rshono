@@ -25,7 +25,7 @@ running production server — nothing here is inferred from reading alone.
 | ~~**M4**~~ | ~~`notFound()` always costs a full document load on a soft navigation~~ | ~~State it in the README~~ — **fixed** | Docs      |
 | ~~**L1**~~ | ~~Two shapes of dead route pass the shadow check~~ | ~~Normalise the key~~ — **fixed** | Code      |
 | ~~**L2**~~ | ~~An unknown CLI flag prints a raw Node stack trace~~ | ~~Wrap `parseArgs`~~ — **fixed** | Code      |
-| **L3** | `HOST` is read, then silently dropped by `rshono dev`              | Scope the doc, or warn                       | Docs      |
+| ~~**L3**~~ | ~~`HOST` is read, then silently dropped by `rshono dev`~~ | ~~Scope the doc, or warn~~ — **fixed (both)** | Docs      |
 | ~~**L4**~~ | ~~Prerendered documents bake in a build-time CSP nonce~~ | ~~Prerender without a nonce~~ — **fixed** | Code      |
 | **L5** | Five smaller things — see below                                    | Assorted                                     | Polish    |
 
