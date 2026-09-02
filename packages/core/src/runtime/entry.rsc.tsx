@@ -493,7 +493,7 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       let decodedAction: (() => Promise<unknown>) | null;
       try {
         formData = await request.formData();
-        decodedAction = await decodeAction(formData, __rspack_rsc_manifest__.serverManifest);
+        decodedAction = await decodeAction(formData);
       } catch {
         return malformedAction(c);
       }
@@ -511,7 +511,7 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
           reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action error:' });
           throw error;
         }
-        formState = (await decodeFormState(result, formData, __rspack_rsc_manifest__.serverManifest)) ?? undefined;
+        formState = (await decodeFormState(result, formData)) ?? undefined;
       }
     }
   }

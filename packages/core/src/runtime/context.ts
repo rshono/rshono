@@ -309,7 +309,13 @@ export class RequestContext<E extends Env = Env> {
 
   /**
    * Environment for the request: process env vars, merged on a bindings platform with the bindings, which
-   * win on conflict. Computed once and cached.
+   * win on conflict.
+   *
+   * The `process.env` half is snapshotted **once per process**, not per request — enumerating it crosses
+   * into the host environment, and doing that on every request is a cost with nothing to show for it. So a
+   * `process.env` mutation made after the first `ctx.env` read anywhere in the process is never seen here.
+   * Read `process.env` directly if you have one. The bindings half is per request, since it comes off the
+   * request's own Hono context.
    *
    * Bindings are merged **only where the platform supplies them** — `deploy: 'cloudflare'`, today. Hono's
    * `c.env` is whatever the host passed as the second argument to `app.fetch`, and off Workers that is the

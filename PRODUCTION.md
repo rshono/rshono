@@ -27,7 +27,7 @@ running production server — nothing here is inferred from reading alone.
 | ~~**L2**~~ | ~~An unknown CLI flag prints a raw Node stack trace~~ | ~~Wrap `parseArgs`~~ — **fixed** | Code      |
 | ~~**L3**~~ | ~~`HOST` is read, then silently dropped by `rshono dev`~~ | ~~Scope the doc, or warn~~ — **fixed (both)** | Docs      |
 | ~~**L4**~~ | ~~Prerendered documents bake in a build-time CSP nonce~~ | ~~Prerender without a nonce~~ — **fixed** | Code      |
-| **L5** | Five smaller things — see below                                    | Assorted                                     | Polish    |
+| ~~**L5**~~ | ~~Five smaller things — see below~~ | ~~Assorted~~ — **all five fixed** | Polish    |
 
 **Suggested order:** H1 (biggest win, smallest patch) → M3 (client-reachable 500) → L1, L2, L4 (small
 code fixes) → M1, M2, M4, L3 (documentation) → L5 (polish).
@@ -427,7 +427,7 @@ removes the whole question.
 
 ---
 
-# L5 — Smaller things
+# ~~L5 — Smaller things~~ ✅ ALL FIVE FIXED
 
 ### `getRequestContext().env` snapshots `process.env` per *process*, not per request
 

@@ -381,6 +381,15 @@ Every target streams, which is the bar a new one has to clear.
 soft navigation, `useNavigation`, client-initiated actions, boundary fallbacks and the fatal overlay — the
 client runtime, which no amount of asserting on HTML can reach.
 
+`test:coverage` gates the build tooling, **not the request hot path** — worth knowing before reading anything
+into the number. Node measures what this process loads, and the modules that answer a request only ever run
+inside the bundled testbed in a child process: `entry.rsc`, `entry.client`, `entry.ssr`, `boundaries`,
+`navigation` and every `deploy/*/runtime` appear nowhere in the report, and `runtime/` in it means `context`,
+`control`, `flight-inject`, `hot-update`, `request` and `validate-entries` alone. Those absent modules are the
+most thoroughly tested code in the package — by the e2e suites above, over HTTP, which is the only way to test
+them at all. So the percentage covers the builder, the CLI, the deploy build steps and the pure runtime
+helpers; treat its floors as a ratchet on those, and never as a statement about the framework as a whole.
+
 ## How it works
 
 Two coordinated Rspack compilers, using native RSC support (`rspack.experiments.rsc`):
