@@ -533,9 +533,11 @@ async function main() {
     const result = payload.returnValue;
     if (!result) {
       // A payload that is not this action's own reply: the server rendered a page in its place. An action
-      // that had already run has its result carried across (see `actionResults` in entry.rsc.tsx), so
-      // reaching here means the request failed before it ran at all — an undecodable body, most likely.
-      // Reading `.ok` off it used to hand the caller `Cannot read properties of undefined`.
+      // that had already run has its result carried across (see `actionResults` in entry.rsc.tsx), and the
+      // ways a request can fail *before* it runs are all refused ahead of any render now — an unknown id or
+      // an undecodable body is a 400, which `payloadResponse` turns into an error of its own before this.
+      // So this is the defensive floor: a payload shaped by another deployment, or a proxy that replaced
+      // one. Reading `.ok` off it used to hand the caller `Cannot read properties of undefined`.
       throw new Error('[rshono] the server action produced no result — the request failed around it and the server answered with a page instead. Its log has the error.');
     }
     if (!result.ok) throw result.error;

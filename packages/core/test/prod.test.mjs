@@ -605,20 +605,25 @@ test('an action whose page then fails to load still gets its result back', async
   assert.match(payload, /Something went wrong/, 'and the page it comes with is the app’s error page');
 });
 
-test('an action request that fails before the action runs answers with a payload carrying no result', async () => {
-  // The other half: nothing ran, so there is nothing to carry. What matters is that the reply is still a
-  // payload the client can decode — it is what lets the runtime say so, instead of reading `.ok` off it.
+test('an action request that fails before the action runs is refused outright, not answered with a page', async () => {
+  // The other half of the pair above. Nothing ran, so there is nothing to carry — and rather than render a
+  // page around that absence, the framework refuses the request. It used to answer 500 with an error-page
+  // payload, which made a malformed body indistinguishable from a server fault: same status, same rendered
+  // page, and an `[error-reporter]` line for a caller who was simply wrong.
+  //
+  // `text/plain` rather than a payload is deliberate and the client is built for it: `payloadResponse` gates
+  // on the content type precisely so a non-payload reply becomes an error naming the status and the body,
+  // which is more than the resultless payload ever said. It is the same shape the unknown-action-id 400
+  // already had.
   const res = await fetch(`${base}/users`, {
     method: 'POST',
     headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
     body: 'not-a-flight-reply',
   });
 
-  assert.equal(res.status, 500);
-  assert.match(res.headers.get('content-type'), /text\/x-component/);
-  const payload = await res.text();
-  assert.doesNotMatch(payload, /"returnValue":\{/, 'the action never ran, so no result may be invented for it');
-  assert.match(payload, /Something went wrong/);
+  assert.equal(res.status, 400, 'a body the server cannot decode is the caller being wrong');
+  assert.doesNotMatch(res.headers.get('content-type'), /text\/x-component/, 'nothing was rendered, so there is no payload to send');
+  assert.match(await res.text(), /Bad Request: malformed server action request/);
 });
 
 test('onServerError sees the errors the framework catches, tagged by source, without replacing the log', async () => {
@@ -1016,6 +1021,37 @@ test('an action id the app does not export is a 400, not a fault or a prototype 
     assert.equal(res.status, 400, `"${id}" must be rejected as a bad request`);
   }
   assert.doesNotMatch(getOutput().slice(logsBefore), /TypeError/, 'an unknown action id must not fault into a stack trace');
+});
+
+test('an action body that will not decode is a 400, and never pages the error tracker', async () => {
+  // The decode used to sit outside the `try` that guards the action call, so a body React could not read
+  // escaped to `onError` as a `request` fault: a 500, the app's error page, and an `[error-reporter]` line
+  // per request. Action ids are public — bare string literals in `dist/static/chunks/*.js` — so that was an
+  // unauthenticated way for anyone to mint 500s and page whoever owns the error tracker.
+  //
+  // A malformed body is the same class of thing as the unknown-action-id 400 beside it: the caller is wrong,
+  // not the server. Each shape below fails in a different place — `request.text()`, `decodeReply`,
+  // `request.formData()`, and `decodeAction`'s own reference lookup for the form branch.
+  const id = serverActionId('Add user');
+  const logsBefore = getOutput().length;
+  const shapes = [
+    { what: 'garbage body', headers: { 'x-rsc-action': id, 'content-type': 'text/plain' }, body: 'oops' },
+    { what: 'empty body', headers: { 'x-rsc-action': id, 'content-type': 'text/plain' }, body: '' },
+    { what: 'bogus multipart', headers: { 'x-rsc-action': id, 'content-type': 'multipart/form-data; boundary=zz' }, body: 'garbage' },
+    { what: 'unknown $ACTION_ID in the form branch', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: '$ACTION_ID_deadbeef=1' },
+  ];
+
+  for (const { what, headers, body } of shapes) {
+    const res = await fetch(`${base}/users`, { method: 'POST', headers: { Origin: base, ...headers }, body });
+    const text = await res.text();
+    assert.equal(res.status, 400, `${what} must be a bad request, not a server fault`);
+    assert.match(text, /Bad Request: malformed server action request/, `${what} should say which kind of bad request it is`);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+  const logged = getOutput().slice(logsBefore);
+  assert.doesNotMatch(logged, /\[error-reporter\]/, 'a client sending a bad body must not reach the error tracker');
+  assert.doesNotMatch(logged, /request error/, 'nor be logged as a request fault');
 });
 
 test('the body-size cap covers endpoint routes and the server sub-app, not just actions', async () => {

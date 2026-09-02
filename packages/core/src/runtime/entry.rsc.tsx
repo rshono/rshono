@@ -389,6 +389,23 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
   });
 }
 
+/**
+ * The answer to an action request whose body could not be read or decoded — a malformed request, the same
+ * class of thing as the unknown-action-id 400 beside it, and answered the same way.
+ *
+ * Deliberately silent. Action ids are public — they are bare string literals in the client chunks — so
+ * anyone can post a valid id with a body that will not decode, and while that reached `reportServerError` it
+ * was an unauthenticated way to page whoever owns the error tracker, once per request. Nothing here is the
+ * server being wrong, so there is nothing to report; the status is the whole message.
+ *
+ * The text says no more than that on purpose: which of `text()`, `formData()`, `decodeReply` or
+ * `decodeAction` gave up is React's or undici's internal shape, and repeating it back would describe the
+ * framework's decoding to a caller who cannot act on it.
+ */
+function malformedAction(c: Context): Response {
+  return c.text('Bad Request: malformed server action request', 400);
+}
+
 async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageComponent>>): Promise<Response> {
   const request = c.req.raw;
   const renderRequest = parseRenderRequest(request);
@@ -404,11 +421,17 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       if (!Object.hasOwn(__rspack_rsc_manifest__.serverManifest, renderRequest.actionId)) {
         return c.text('Bad Request: unknown server action', 400);
       }
-      const contentType = request.headers.get('content-type');
-      const body = contentType?.startsWith('multipart/form-data') ? await request.formData() : await request.text();
-      temporaryReferences = createTemporaryReferenceSet();
-      const args = await decodeReply<unknown[]>(body, { temporaryReferences });
-      const action = loadServerAction(renderRequest.actionId);
+      let args: unknown[];
+      let action: (...actionArgs: unknown[]) => Promise<unknown>;
+      try {
+        const contentType = request.headers.get('content-type');
+        const body = contentType?.startsWith('multipart/form-data') ? await request.formData() : await request.text();
+        temporaryReferences = createTemporaryReferenceSet();
+        args = await decodeReply<unknown[]>(body, { temporaryReferences });
+        action = loadServerAction(renderRequest.actionId);
+      } catch {
+        return malformedAction(c);
+      }
       try {
         returnValue = { ok: true, value: await action(...args) };
       } catch (error) {
@@ -429,8 +452,14 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       if (refusesCrossSiteForm(c)) {
         return c.text('Forbidden: cross-site form post to a server action', 403, { vary: RSC_VARY_HEADER });
       }
-      const formData = await request.formData();
-      const decodedAction = await decodeAction(formData, __rspack_rsc_manifest__.serverManifest);
+      let formData: FormData;
+      let decodedAction: (() => Promise<unknown>) | null;
+      try {
+        formData = await request.formData();
+        decodedAction = await decodeAction(formData, __rspack_rsc_manifest__.serverManifest);
+      } catch {
+        return malformedAction(c);
+      }
       if (decodedAction) {
         let result: unknown;
         try {
