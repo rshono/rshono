@@ -4,14 +4,21 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1–F10 have since been fixed too** and are struck through below. Nothing here is open.
+**F1–F10 are now fixed too** and are struck through below — nothing here is open. Two of them turned out to
+be more than the finding said: **F4** was an unauthenticated 500 of exactly the shape M3 closed, one step
+further down the same path, and **F6** stopped being true while it was open, because F3 gave its branch a
+reachable cause again. What fixing this lot turned up in turn is in
+[`PRODUCTION-FOLLOWUP-FOLLOWUPS.md`](./PRODUCTION-FOLLOWUP-FOLLOWUPS.md).
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
-**Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
-`typecheck` clean · `eslint packages/core` clean · coverage **85.30 / 92.25 / 80.24** against floors of
-82 / 90 / 75 (was 83.44 / 91.39 / 78.42)
-**Verified.** 2026-09-02, written at `b86a3f5`. Each item below was reproduced against a real build and a
-running server, or is marked as reasoning rather than observation.
+**Baseline now.** `npm test` **330/330** pass (303 at the review, 320 when this document was written, 322
+when F1 landed) · `typecheck` clean · `eslint .` clean · `prettier --check .` clean, and enforced in CI
+(F9) · coverage **84.95 / 92.13 / 79.28** against floors of 82 / 90 / 75 — down a fraction from 85.30 /
+92.25 / 80.24 because the new code in `build.ts` and `ssg.ts` only runs in a child process, which is F7 in
+one line.
+**Verified.** 2026-09-02, written at `b86a3f5`, F1–F10 fixed in `49e1c9b..`. Each item below was reproduced
+against a real build and a running server, or is marked as reasoning rather than observation. Every fix was
+re-checked the same way afterwards, and the ten findings of the review above with it.
 
 ---
 
