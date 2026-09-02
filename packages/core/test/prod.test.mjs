@@ -758,6 +758,7 @@ test('an action whose module cannot be loaded is a reported 500, not a silent 40
     console.log = (...args) => reported.push(args.join(' '));
     console.error = (...args) => reported.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' '));
     let res;
+    let payload;
     try {
       res = await bundle.app.fetch(
         new Request('https://rshono.example/dashboard', {
@@ -766,13 +767,16 @@ test('an action whose module cannot be loaded is a reported 500, not a silent 40
           body: '[]',
         }),
       );
-      await res.text();
+      payload = await res.text();
     } finally {
       Object.assign(console, console_);
     }
 
     assert.equal(res.status, 500, 'a bundle missing the action’s module is the server being broken, not the caller');
     assert.match(res.headers.get('content-type'), /text\/x-component/, 'the client is holding a live tree, so it gets the error page as a payload');
+    // Carrying no result, because the action never ran — which is the one reachable cause of the client
+    // runtime's "the server action produced no result" error. See the branch in entry.client.tsx.
+    assert.match(payload, /"returnValue":"\$undefined"/, 'nothing ran, so there is no result to carry across');
     const logged = reported.join('\n');
     assert.match(logged, /server action could not be loaded/, 'the operator gets the real error');
     assert.match(logged, /\[error-reporter\] action \/dashboard/, 'attributed to the action, not to the request that was fine');

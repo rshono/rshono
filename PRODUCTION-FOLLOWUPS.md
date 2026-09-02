@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1–F5 have since been fixed too** and are struck through below. F6–F10 are open.
+**F1–F6 have since been fixed too** and are struck through below. F7–F10 are open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -24,7 +24,7 @@ running server, or is marked as reasoning rather than observation.
 | ~~**F3**~~ | ~~A deploy-drift `loadServerAction` failure is now a silent 400~~ — **fixed**              | ~~Low~~    | Cost of M3            |
 | ~~**F4**~~ | ~~`decodeFormState` sits outside M3's guard, so one 500 path survives~~ — **fixed**        | ~~Low~~    | Cost of M3            |
 | ~~**F5**~~ | ~~The two action `400`s carry no `cache-control` and no `Vary: RSC`~~ — **fixed**          | ~~Low~~    | Pre-existing          |
-| **F6**     | The client's "produced no result" branch is now close to unreachable                       | Nit        | Residue of M3         |
+| ~~**F6**~~ | ~~The client's "produced no result" branch is now close to unreachable~~ — **superseded**  | ~~Nit~~    | Residue of M3         |
 | **F7**     | The coverage number still cannot see the request hot path                                  | Low        | L5 documented it only |
 | **F8**     | The `NODE_ENV` substitution added by H1 is textual, not syntactic                          | Nit        | Cost of H1            |
 | **F9**     | `prettier --check` fails on five files and nothing in CI runs it                           | Nit        | Pre-existing          |
@@ -281,9 +281,9 @@ which is its business and not this rule's.
 
 ---
 
-# F6 — The client's "produced no result" branch is now close to unreachable
+# ~~F6 — The client's "produced no result" branch is now close to unreachable~~ ✅ SUPERSEDED BY F3
 
-**Severity: nit.**
+**Severity: nit** — and no longer true: F3 gave the branch a reachable cause again.
 
 ### Issue
 
@@ -297,11 +297,24 @@ action that ran has its result carried across by `actionResults`; and `redirect(
 two lines above. The comment is corrected and the branch is kept as a defensive floor for a payload shaped by
 another deployment or replaced by a proxy.
 
-### Fix
+### Fix — done
 
-Nothing, unless you would rather it were gone. Recorded so the next reader does not spend the time working out
-what reaches it, and so nobody deletes it as dead code without noticing it is load-bearing against a
-_mismatched_ server rather than this one.
+**F3 changed the answer while this was still open.** A `loadServerAction` failure is a 500 again, and a
+client-initiated action is answered with the `error` page — a flight payload, so it reaches
+`createFromFetch` rather than `payloadResponse`, and it carries no `returnValue`, because nothing ran. That
+is exactly this branch. So it is not a defensive floor against a mismatched server any more: it is what a
+caller sees when a partial deploy has taken the action's module with it, and the message it throws — the
+failure is the server's and its log has the error — is right for that case.
+
+The comment says so now, in place of the "no route to it that this codebase produces" it had. Both halves are
+covered: the server half in `prod.test.mjs`, which asserts the drift reply is a payload carrying
+`"returnValue":"$undefined"` — the branch's precondition — and the client half by a new Playwright test that
+answers an action POST with an ordinary page payload and expects the notice to say the result is missing.
+
+**The Playwright test has not been run here** (Chromium still segfaults in this sandbox — see
+[Not verified here](#not-verified-here)). It is modelled on the 413 test two above it and uses the same
+`page.route` / `route.fulfill` shape, and the spec parses (`playwright test --list` sees 28 tests), but it
+has not been observed to pass.
 
 ---
 
@@ -419,6 +432,13 @@ runtime consumes, so **run it before tagging**:
   client handles this through `payloadResponse`, which gates on the content type precisely so a non-payload
   reply becomes a readable error — and `client-runtime.spec.mjs:197` already covers exactly that shape with a 413. The reasoning is sound and the covering test is unchanged, but it has not been _observed_ to pass.
 - **M2** only changes the text of a 403 that no client-side code parses.
+- **F6** adds a Playwright test of its own — an action POST answered with an ordinary page payload, expecting
+  the "produced no result" notice. Written against the 413 test two above it, and `playwright test --list`
+  parses it (28 tests in the file), but its body has not run either. It is the only _new_ browser test in
+  this work, so it is the one to look at first if the suite is red.
+- **F4** changes a crafted form post from a 500 to a 200 that renders the page. No client-side code is
+  involved — that shape only arrives from a non-browser client — and the browser suite drives the
+  `useActionState` forms, which are unaffected.
 
-Everything else in this work is server-side, build-side or documentation, and is covered by the 320 tests that
+Everything else in this work is server-side, build-side or documentation, and is covered by the 328 tests that
 did run.

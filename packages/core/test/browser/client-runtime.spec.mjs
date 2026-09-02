@@ -217,6 +217,30 @@ test.describe('server actions', () => {
     await expect(page.getByText('Ada Lovelace')).toBeVisible();
   });
 
+  test('an action answered with an ordinary page payload says its result is missing', async ({ page }) => {
+    await page.goto('/users');
+
+    // A *valid* payload that is not this action's reply — which is what the server sends when it fails
+    // before the action runs: `loadServerAction` throwing for a module a partial deploy left behind is
+    // answered with the `error` page, as a flight payload with no `returnValue` in it. Stood in for by the
+    // page's own payload, which has that shape and, unlike a hand-written one, still renders: the tree has
+    // to survive the swap for the form to be there to show the error.
+    const pagePayload = await (await page.request.get('/users', { headers: { RSC: '1' } })).text();
+    await page.route('**/users', async (route, request) => {
+      if (request.method() !== 'POST') return route.continue();
+      await route.fulfill({ status: 200, contentType: 'text/x-component;charset=utf-8', body: pagePayload });
+    });
+
+    await page.getByPlaceholder('Grace Hopper').fill('Grace Hopper');
+    await page.getByPlaceholder('grace@example.com').fill('grace@example.com');
+    await page.getByRole('button', { name: 'Add user' }).click();
+
+    // Without this branch the caller gets `Cannot read properties of undefined (reading 'ok')`, which says
+    // nothing about where to look. The message points at the server's log, which is where the error is.
+    await expect(page.locator('.notice.error')).toContainText('produced no result');
+    await expect(page.getByText('Ada Lovelace')).toBeVisible();
+  });
+
   test('a rejected action surfaces its message instead of tearing down the page', async ({ page }) => {
     await page.goto('/users');
 
