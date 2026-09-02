@@ -16,7 +16,7 @@ import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from 
 import { appendVary, etagMatches } from '../dist/server/headers.js';
 import { loadConfig } from '../dist/server/load-config.js';
 import { parsePort, resolveServerConfig } from '../dist/server/server-config.js';
-import { createPageCache, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
+import { createPageCache, PRERENDER_NONCE_HEADER, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
 import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
@@ -1229,6 +1229,46 @@ describe('prerenderStaticRoutes', () => {
       assert.ok(await readPrerendered(ssgDir, requestPath), `${requestPath} must be served from the build`);
       assert.ok(await readPrerendered(ssgDir, requestPath, 'flight'), `${requestPath} must soft-navigate from the build`);
     }
+  });
+
+  // A page under a nonce-based CSP is prerendered in half: the flight payload is served from disk, the
+  // document is re-rendered per request because it has to carry a fresh nonce. The build used to report all
+  // three testbed pages as "prerendered" while the deployment read the documents of none of them.
+  test('reports a page whose document a CSP nonce will re-render as flight-only, and says so once', async () => {
+    const ssgDir = tempDir();
+    const warnings = [];
+    const warn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    let result;
+    try {
+      result = await prerenderStaticRoutes({
+        ssgDir,
+        routes: [
+          { path: '/nonced', render: 'static', component: async () => ({ default: () => null }) },
+          { path: '/plain', render: 'static', component: async () => ({ default: () => null }) },
+        ],
+        // The framework marks the document it rendered when the app minted a nonce for that path — what
+        // `secureHeaders({ …NONCE })` does on every request, and so at build time too.
+        fetch: (request) => {
+          const response = okResponse(request);
+          if (new URL(request.url).pathname === '/nonced' && request.headers.get('RSC') !== '1') {
+            response.headers.set(PRERENDER_NONCE_HEADER, '1');
+          }
+          return response;
+        },
+      });
+    } finally {
+      console.warn = warn;
+    }
+
+    assert.deepEqual(result.written, ['/nonced', '/plain'], 'both pages are still prerendered — the flight payload is served');
+    assert.deepEqual(result.flightOnly, ['/nonced'], 'only the page under the nonce is half-served');
+    assert.match(warnings.join('\n'), /1 page\(s\) mint a CSP nonce/, 'and the build says so');
+    assert.equal(warnings.filter((line) => line.includes('mint a CSP nonce')).length, 1, 'once, not per page');
+
+    // Written all the same: the policy may be off where this is deployed, and then the document is served.
+    assert.ok(await readPrerendered(ssgDir, '/nonced'), 'the document is still on disk');
+    assert.ok(await readPrerendered(ssgDir, '/nonced', 'flight'), 'and so is the payload that will be read');
   });
 
   test('fails the build for a value it cannot store as one file, rather than writing a page nothing serves', async () => {

@@ -4,7 +4,7 @@ Everything in [`PRODUCTION.md`](./PRODUCTION.md) is fixed and struck through —
 This is what fixing it turned up: things that were not in the review, or that the fixes themselves left
 behind. Nothing here blocks 1.0.0.
 
-**F1 has since been fixed too** and is struck through below. F2–F10 are open.
+**F1 and F2 have since been fixed too** and are struck through below. F3–F10 are open.
 
 **Environment.** `@rshono/core@1.0.0-rc.19` · Rspack 2.2.2 · React 19.2.8 · Hono 4.13.5 · Node 22.22.2
 **Baseline now.** `npm test` **322/322** pass (was 303 at the review, 320 when this document was written) ·
@@ -17,18 +17,18 @@ running server, or is marked as reasoning rather than observation.
 
 ## Summary
 
-| #          | Issue                                                                                    | Severity   | Origin                |
-| ---------- | ---------------------------------------------------------------------------------------- | ---------- | --------------------- |
-| ~~**F1**~~ | ~~A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ — **fixed** | ~~Medium~~ | New — found via L2    |
-| **F2**     | Under a global nonce CSP, prerendered documents are built and never served               | Low        | Residue of L4         |
-| **F3**     | A deploy-drift `loadServerAction` failure is now a silent 400                            | Low        | Cost of M3            |
-| **F4**     | `decodeFormState` sits outside M3's guard, so one 500 path survives                      | Low        | Cost of M3            |
-| **F5**     | The two action `400`s carry no `cache-control` and no `Vary: RSC`                        | Low        | Pre-existing          |
-| **F6**     | The client's "produced no result" branch is now close to unreachable                     | Nit        | Residue of M3         |
-| **F7**     | The coverage number still cannot see the request hot path                                | Low        | L5 documented it only |
-| **F8**     | The `NODE_ENV` substitution added by H1 is textual, not syntactic                        | Nit        | Cost of H1            |
-| **F9**     | `prettier --check` fails on five files and nothing in CI runs it                         | Nit        | Pre-existing          |
-| **F10**    | The shadow check compares regex constraints as text                                      | Nit        | Limit of L1           |
+| #          | Issue                                                                                      | Severity   | Origin                |
+| ---------- | ------------------------------------------------------------------------------------------ | ---------- | --------------------- |
+| ~~**F1**~~ | ~~A `[rshono]` failure from `dev` or `build` still prints a raw Node stack~~ — **fixed**   | ~~Medium~~ | New — found via L2    |
+| ~~**F2**~~ | ~~Under a global nonce CSP, prerendered documents are built and never served~~ — **fixed** | ~~Low~~    | Residue of L4         |
+| **F3**     | A deploy-drift `loadServerAction` failure is now a silent 400                              | Low        | Cost of M3            |
+| **F4**     | `decodeFormState` sits outside M3's guard, so one 500 path survives                        | Low        | Cost of M3            |
+| **F5**     | The two action `400`s carry no `cache-control` and no `Vary: RSC`                          | Low        | Pre-existing          |
+| **F6**     | The client's "produced no result" branch is now close to unreachable                       | Nit        | Residue of M3         |
+| **F7**     | The coverage number still cannot see the request hot path                                  | Low        | L5 documented it only |
+| **F8**     | The `NODE_ENV` substitution added by H1 is textual, not syntactic                          | Nit        | Cost of H1            |
+| **F9**     | `prettier --check` fails on five files and nothing in CI runs it                           | Nit        | Pre-existing          |
+| **F10**    | The shadow check compares regex constraints as text                                        | Nit        | Limit of L1           |
 
 **Also worth knowing:** the Playwright suite could not be run in this environment — see
 [Not verified here](#not-verified-here) at the end. Run it before tagging.
@@ -94,7 +94,7 @@ fail.
 
 ---
 
-# F2 — Under a global nonce CSP, prerendered documents are built and never served
+# ~~F2 — Under a global nonce CSP, prerendered documents are built and never served~~ ✅ FIXED
 
 **Severity: low.** L4's other half — the one it could not fix from where it sat.
 
@@ -118,12 +118,35 @@ payload carries no nonce — so this is half a page each, not a whole one.)
 That the document cannot be prerendered under a nonce CSP is correct and unavoidable. Being told it was
 prerendered is the part that is wrong.
 
-### Fix
+### Fix — done
 
-The prerender pass can tell: it renders through the app's own middleware, so `c.get('secureHeadersNonce')` is
-set during the pass even though `cspNonce` now masks it. Have the pass notice a nonce on a path it is
-prerendering and warn once — _"`/docs/*` mints a CSP nonce, so its prerendered documents will be re-rendered
-per request; only the flight payloads will be served"_ — and count those pages honestly in the summary line.
+The pass can tell, but not from where it sits: it runs `bundle.app.fetch`, and the middleware that mints the
+nonce lives inside the server bundle, which inlines its own copy of the module graph — so nothing
+`prerenderStaticRoutes` can import reaches it. So the fact travels the one channel a render already has: a
+response header, `x-rshono-prerender-nonce`, set by `entry.rsc.tsx` on a **document** it rendered while
+`c.get('secureHeadersNonce')` was set. Read unmasked there on purpose: `cspNonce` hides the value so none is
+stamped into a file, and _whether one exists_ is exactly what decides that file's fate. The header is set only
+while `RSHONO_PRERENDER` is in the environment, so it never reaches a deployed response, and never reaches
+disk either, since the pass stores the body alone.
+
+The build now says it, once, and marks the pages it applies to:
+
+```
+  ⚠ 3 page(s) mint a CSP nonce, so the framework re-renders their document per request:
+    only the flight payload is served from disk. The documents are written anyway, in case the policy is
+    off where this is deployed. Marked "flight only" in the summary below.
+  • prerendered 3 static page(s): /docs/getting-started (flight only), /docs/deployment (flight only), /docs/caf%C3%A9 (flight only)
+```
+
+The documents are still written, deliberately: whether a nonce is minted is a request-time decision, and an
+app is free to switch its policy on from the environment — the testbed does exactly that — so a build that saw
+one is not proof the deployment has one. Dropping the file would cost a page its prerender on the strength of
+a guess; keeping it costs bytes that are free the moment the policy is off.
+
+Covered from both ends: a unit test drives `prerenderStaticRoutes` with a fetch that sets the header on one
+path of two, and `prod-config.test.mjs` asserts the label on the output of a **real** `TESTBED_CSP=1` build —
+the whole path, from `secureHeaders()` in the app's middleware to the line a person reads — plus that a served
+response never carries the marker. A build with no nonce policy prints exactly what it printed before.
 
 ---
 

@@ -22,6 +22,20 @@ export const VARIANTS = {
 } as const satisfies Record<PrerenderVariant, { file: string; headers: Record<string, string>; contentType: string }>;
 
 /**
+ * How a build-time document render tells the prerender pass that the app minted a CSP nonce for its path.
+ *
+ * The other half of the same contract as {@link VARIANTS}, and it exists because the pass cannot see the
+ * request it made: it renders through the app's own middleware inside the server bundle, in a module graph of
+ * its own, and keeps the body alone. What it needs to know is whether a *request* for this path will mint a
+ * nonce, because a document that will is one the framework re-renders per request — so the file the pass is
+ * about to write is one no deployment will read, and saying "prerendered" about it is a lie by omission.
+ *
+ * Set only while `RSHONO_PRERENDER` is in the environment, which is `rshono build`'s own process, so it never
+ * reaches a deployed response; and never stored, since only the body is.
+ */
+export const PRERENDER_NONCE_HEADER = 'x-rshono-prerender-nonce';
+
+/**
  * The index the build leaves beside the pages, naming every file it wrote — one `files` array of
  * {@link ssgFilePath} names.
  *

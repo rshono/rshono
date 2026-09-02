@@ -4,6 +4,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { isPageRoute, type PageRoute, type Route } from '../router.js';
 import {
   createPageCache,
+  PRERENDER_NONCE_HEADER,
   ssgFilePath,
   SSG_MANIFEST_FILE,
   toPrerenderedPage,
@@ -131,6 +132,12 @@ interface PrerenderOptions {
 export interface PrerenderResult {
   written: string[];
   skipped: string[];
+  /**
+   * The subset of {@link written} whose *document* the deployment will not serve, because the app mints a CSP
+   * nonce on that path — see {@link PRERENDER_NONCE_HEADER}. Their flight payloads are served from disk like
+   * any other, so these are half-prerendered pages rather than skipped ones, and the caller says so.
+   */
+  flightOnly: string[];
 }
 
 /**
@@ -178,7 +185,7 @@ async function mapBounded<T, R>(items: readonly T[], limit: number, run: (item: 
  * pass renders a page exactly as a request does, so per request it will throw again: skipping it prints
  * "will SSR per request" over a route that will 500 forever, and exits 0.
  */
-type RenderedVariant = { ok: true; body: Uint8Array } | { ok: false; reason: string; failed: boolean };
+type RenderedVariant = { ok: true; body: Uint8Array; nonced: boolean } | { ok: false; reason: string; failed: boolean };
 
 async function renderVariant(fetch: PrerenderOptions['fetch'], url: string, variant: PrerenderVariant): Promise<RenderedVariant> {
   const response = await fetch(new Request(url, { headers: VARIANTS[variant].headers }));
@@ -189,7 +196,8 @@ async function renderVariant(fetch: PrerenderOptions['fetch'], url: string, vari
   // Bytes, not `response.text()`. That is a *non-fatal* UTF-8 decode, so every byte of a binary row in a
   // flight payload — `emitChunk` puts raw typed-array bytes on the wire — becomes U+FFFD, and writing the
   // string back out spends three real bytes on each one. The page is then prerendered and unparseable.
-  return { ok: true, body: new Uint8Array(await response.arrayBuffer()) };
+  // The header is the framework saying this render minted a CSP nonce; on a flight payload it is never set.
+  return { ok: true, body: new Uint8Array(await response.arrayBuffer()), nonced: response.headers.get(PRERENDER_NONCE_HEADER) !== null };
 }
 
 /** A path the pass will render, resolved far enough that nothing left can fail the build. */
@@ -213,6 +221,8 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
 
   const written: string[] = [];
   const skipped: string[] = [];
+  /** Pages whose document was written and will never be read — see {@link PrerenderResult.flightOnly}. */
+  const flightOnly: string[] = [];
   /** Every file written, as the reader names it — {@link writeManifest}. */
   const files: string[] = [];
 
@@ -278,7 +288,7 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
     if (!document.ok) {
       // A 5xx fails the build instead of being warned about — see {@link RenderedVariant}.
       if (!document.failed) warnings.push(`  ⚠ "${path}" rendered ${document.reason} at build time — skipping, will SSR per request.`);
-      return { path, ok: false as const, files: [], warnings, failure: document.failed ? document.reason : undefined };
+      return { path, ok: false as const, files: [], warnings, failure: document.failed ? document.reason : undefined, nonced: false };
     }
 
     // Both representations of a page share its directory and differ only in the file name.
@@ -305,7 +315,7 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
       warnings.push(`  ⚠ "${path}" produced no flight payload (${flight.reason}) — soft navigations to it will render per request.`);
     }
 
-    return { path, ok: true as const, files: wrote, warnings, failure: undefined };
+    return { path, ok: true as const, files: wrote, warnings, failure: undefined, nonced: document.nonced };
   });
 
   // Folded back in target order rather than completion order, so a concurrent pass writes the same manifest
@@ -320,6 +330,7 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
     }
     files.push(...outcome.files);
     written.push(outcome.path);
+    if (outcome.nonced) flightOnly.push(outcome.path);
   }
 
   // Raised together, and in target order, so which of several failing pages is reported does not depend on
@@ -334,9 +345,25 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
     );
   }
 
+  // After the failure check, so a build that is about to stop does not spend three lines on advice. Once
+  // rather than per page: under a global nonce policy this is every static page in the app, and the same
+  // sentence repeated a hundred times says no more than one does — the caller's summary line is what names
+  // them, marked there.
+  //
+  // The documents are written all the same. Whether a nonce is minted is a request-time decision, and an
+  // app is free to switch its policy on from the environment, so a build that saw one is not proof the
+  // deployment has one — dropping the file would cost a page its prerender on the strength of a guess.
+  if (flightOnly.length > 0) {
+    console.warn(
+      `  ⚠ ${flightOnly.length} page(s) mint a CSP nonce, so the framework re-renders their document per request:\n` +
+        `    only the flight payload is served from disk. The documents are written anyway, in case the policy is\n` +
+        `    off where this is deployed. Marked "flight only" in the summary below.`,
+    );
+  }
+
   // Only where the app has static routes at all: an empty manifest would be a store, and a build with
   // nothing to prerender should leave no `ssg/` directory for a preset to carry around.
   if (staticRoutes.length > 0) writeManifest(ssgDir, files);
 
-  return { written, skipped };
+  return { written, skipped, flightOnly };
 }

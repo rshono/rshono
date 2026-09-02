@@ -51,7 +51,10 @@ export function buildApp(dir, { config, args = [], env = {} } = {}) {
   if (result.status !== 0) {
     throw new Error(`build failed (${result.status}):\n${result.stdout}\n${result.stderr}`);
   }
-  return result.stdout;
+  // Both streams, the way {@link runCli} returns them: a build says what it did on stdout and warns about it
+  // on stderr, and a test asserting on what the build said wants the pair. Concatenated rather than
+  // interleaved — which of them a line landed on is not what any of these assert.
+  return `${result.stdout ?? ''}${result.stderr ?? ''}`;
 }
 
 export function buildTestbed(config, { env } = {}) {

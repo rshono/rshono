@@ -19,7 +19,11 @@ import { buildTestbed, FIXTURES_DIR, startTestbed, stopServer, TESTBED_DIST } fr
 // the app's middleware in the build process: `secureHeaders()` mints a nonce there too. That is the one
 // build-time consequence of a runtime setting anywhere in the testbed, and the reason the pass has to ask
 // for a document without one — see the prerendered-nonce test below.
-before(() => buildTestbed(join(FIXTURES_DIR, 'trust-proxy.config.mjs'), { env: { TESTBED_CSP: '1' } }));
+/** What that build printed — asserted on by the prerender/nonce test below. */
+let buildOutput = '';
+before(() => {
+  buildOutput = buildTestbed(join(FIXTURES_DIR, 'trust-proxy.config.mjs'), { env: { TESTBED_CSP: '1' } });
+});
 
 /** Serves the already-built testbed under `env` for the enclosing suite. */
 function serve(env) {
@@ -53,6 +57,9 @@ describe('a hardened server.ts', () => {
     const ssg = await fetch(`${app.base}/docs/getting-started`);
     assert.ok(ssg.headers.get('content-security-policy'), 'SSG route missing CSP header');
     assert.match(await ssg.text(), /nonce="/);
+    // The header the prerender pass reads that fact off (`PRERENDER_NONCE_HEADER`) belongs to the build
+    // process alone — a served response must never carry it.
+    assert.equal(ssg.headers.get('x-rshono-prerender-nonce'), null, 'a build-time marker leaked onto a served response');
   });
 
   test('two requests get two nonces — the value is per request, not per build', async () => {
@@ -113,6 +120,21 @@ describe('a hardened server.ts', () => {
     const document = readFileSync(join(TESTBED_DIST, 'ssg', 'docs', 'getting-started', 'index.html'), 'utf8');
     assert.ok(document.includes('<title>'), 'the page was prerendered — otherwise there is nothing to assert about');
     assert.doesNotMatch(document, /nonce/, 'a nonce is per request; a prerendered file is not, so it must carry none');
+  });
+
+  test('the build says which documents its own nonce policy will re-render, rather than calling them prerendered', async () => {
+    // The other half of the same fact, and the half a build log used to get wrong: under this app's global
+    // nonce policy none of these documents is ever read, and the summary line said "prerendered 3 static
+    // page(s)" about all three. The pass learns it from the render itself — the framework marks a build-time
+    // document it minted a nonce for — so this asserts the whole path, from `secureHeaders()` in the app's
+    // middleware through to the line a person reads.
+    assert.match(buildOutput, /page\(s\) mint a CSP nonce/, 'the build has to say why, once');
+    assert.match(buildOutput, /only the flight payload is served from disk/);
+    const summary = buildOutput.split('\n').find((line) => line.includes('prerendered') && line.includes('static page(s)'));
+    assert.ok(summary, `no prerender summary line in:\n${buildOutput}`);
+    for (const path of ['/docs/getting-started', '/docs/deployment']) {
+      assert.ok(summary.includes(`${path} (flight only)`), `${path} is served from disk as a payload only, and the summary must say so:\n${summary}`);
+    }
   });
 
   test("csrf()'s origin handler lets the app's allowlist through, and nothing else", async () => {

@@ -29,6 +29,7 @@ import { routes as userRoutes } from '@rshono/routes';
 import * as serverAppModule from '@rshono/server-app';
 import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent, type PageProps, type Route } from '../router.js';
 import { appendVary, etagMatches } from '../server/headers.js';
+import { PRERENDER_NONCE_HEADER } from '../server/prerendered.js';
 import { beginPageRender, getRequestContext, publicUrl, readParams, reportServerError, runWithContext } from './context.js';
 import { isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
 import { renderHTML } from './entry.ssr.js';
@@ -134,6 +135,21 @@ const prerendering = typeof process !== 'undefined' && !!process.env?.RSHONO_PRE
  */
 function cspNonce(c: Context): string | undefined {
   return prerendering ? undefined : c.get('secureHeadersNonce');
+}
+
+/**
+ * The build-time half of `mustRenderForNonce`, as a header on the document the prerender pass asked for —
+ * {@link PRERENDER_NONCE_HEADER}, where the contract is written down.
+ *
+ * {@link cspNonce} masks the nonce so none is stamped into a file, but *whether one was minted* is exactly
+ * what decides that file's fate: a request for this path will mint its own, so the document is re-rendered
+ * per request and the copy on disk is never read. Read here rather than through `cspNonce` for that reason —
+ * this is the one place the unmasked value is the answer.
+ *
+ * Empty on a deployed server: `prerendering` is an environment variable of the build process.
+ */
+function prerenderNonceHeader(c: Context): Record<string, string> | null {
+  return prerendering && c.get('secureHeadersNonce') !== undefined ? { [PRERENDER_NONCE_HEADER]: '1' } : null;
 }
 
 /**
@@ -415,6 +431,7 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
   }
   return c.body(ssrResult.stream, (ssrResult.status ?? opts.status ?? 200) as ContentfulStatusCode, {
     'content-type': 'text/html;charset=utf-8',
+    ...prerenderNonceHeader(c),
   });
 }
 

@@ -83,13 +83,21 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   // they ran on first request instead, which meant a page that could never work shipped behind a green build.
   await bundle.checkRouteModules();
 
-  const { written, skipped } = await prerenderStaticRoutes({
+  const { written, skipped, flightOnly } = await prerenderStaticRoutes({
     routes: bundle.routes,
     fetch: (request) => bundle.app.fetch(request),
     ssgDir,
     siteUrl: config.siteUrl,
   });
-  if (written.length > 0) console.log(`  • prerendered ${written.length} static page(s): ${written.join(', ')}`);
+  if (written.length > 0) {
+    // Marked per page rather than counted separately, so the line answers the question a reader has about
+    // each name in it: is this page served from disk? A page under a CSP nonce is half of one — its flight
+    // payload is, its document is re-rendered per request — and saying "prerendered" alone would claim more
+    // than the build did. The warning above says why, once.
+    const nonced = new Set(flightOnly);
+    const label = (path: string) => (nonced.has(path) ? `${path} (flight only)` : path);
+    console.log(`  • prerendered ${written.length} static page(s): ${written.map(label).join(', ')}`);
+  }
   if (skipped.length > 0) console.log(`  • skipped ${skipped.length} (will SSR per request)`);
 
   // Before `finalize`, so a preset that copies `dist/` into a platform layout takes it along.

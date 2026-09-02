@@ -214,7 +214,9 @@ server.use(secureHeaders({ contentSecurityPolicy: { scriptSrc: ["'self'", NONCE]
 
 `create-rshono` scaffolds the first two. Under `rshono dev` the framework widens `script-src` with
 `'unsafe-eval'` for React Refresh — never in a build — so one policy serves both, and a route with a
-nonce in play falls back to rendering per request. Everything else Hono ships works the same way:
+nonce in play falls back to rendering its _document_ per request: fixed bytes cannot carry a fresh nonce.
+Its flight payload has no nonce to go stale and is still served from disk, so `rshono build` marks such a
+page `(flight only)` rather than counting it as fully prerendered. Everything else Hono ships works the same way:
 `cors`, `basicAuth`, `jwt`, `timeout`, `requestId`, `ipRestriction`. A middleware that rejects by
 throwing an `HTTPException` keeps its own status rather than becoming the 500 page.
 [Middleware docs](https://www.rshono.com/docs/hono#security-middleware) · [Hono](https://hono.dev/docs).
