@@ -804,6 +804,15 @@ function buildApp(): Hono {
           renderComponent(c, await loadErrorPage(), { status: 500, isRsc, errorInfo, returnValue: actionResults.get(c) }),
         );
       } catch (renderError) {
+        // A `redirect()` is not a render failure, and this is the one catch on that path that used to treat
+        // it as one — a 500 and a misleading line in the app's error tracker, where the `notFound` page's
+        // identical branch answers the redirect. Nothing is committed yet and the branch that answers it
+        // cannot fail, which is the same reasoning as there.
+        //
+        // `notFound()` is deliberately **not** honoured here: it would render the `notFound` page from
+        // inside the error path, which can fail in its turn and has nowhere left to escalate to. It stays
+        // reported.
+        if (renderError instanceof RedirectSignal) return respondToControlSignal(c, renderError);
         reportServerError(renderError, { source: 'request', hono: c, message: '[rshono] the error page failed to render:' });
       }
     }

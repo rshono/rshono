@@ -823,6 +823,38 @@ test('onServerError sees the errors the framework catches, tagged by source, wit
   assert.doesNotMatch(logged, /#undefined/, 'the Hono context must carry the middleware variables, not an empty one');
 });
 
+// `?boom=` makes the testbed's error page fail on demand too, the same way its 404 page does; see
+// components/500.tsx. The two pages are siblings and the framework has to treat their signals alike.
+test('an error page that redirects is honoured, not reported as a failure', async () => {
+  const logsBefore = getOutput().length;
+  for (const path of ['/crash?render=1&boom=redirect', '/api/boom?boom=redirect', '/unloadable?boom=redirect']) {
+    const res = await fetch(`${base}${path}`, { headers: { Accept: 'text/html' }, redirect: 'manual' });
+    assert.equal(res.status, 303, `${path}: a redirect from the error page is a redirect`);
+    assert.match(res.headers.get('location') ?? '', /\/users$/, path);
+  }
+  // The flight half is unchanged and is not this branch: an error page rendered as a payload has its
+  // response committed the instant the render hands its stream back, so the signal rides the payload as a
+  // digest and the client pushes the location. Asserted because the two representations having *different*
+  // mechanisms for the same redirect is the kind of thing that reads like a bug in six months.
+  const flight = await fetch(`${base}/unloadable?boom=redirect`, { headers: { RSC: '1' } });
+  assert.equal(flight.status, 500, 'the payload keeps the error page’s status — it is already committed');
+  assert.match(await flight.text(), /RSHONO_REDIRECT;303;%2Fusers/, 'and carries the redirect as a digest for the client to act on');
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+  assert.doesNotMatch(getOutput().slice(logsBefore), /the error page failed to render/, 'and not a render failure in the app’s error tracker');
+});
+
+test('an error page that throws notFound() stays a reported 500 — it has nowhere left to escalate to', async () => {
+  // The asymmetry is deliberate: honouring this one would render the `notFound` page from inside the
+  // error path, which can fail in its turn, and Hono calls `onError` inside its own catch.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?render=1&boom=notfound`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  assert.match(await res.text(), /500 — Internal Server Error/, 'the framework document answers when the error page will not');
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.match(getOutput().slice(logsBefore), /the error page failed to render/, 'and it is reported');
+});
+
 test('an SSR-only failure is reported as `ssr`, once, and the error page answers it', async () => {
   // The other half of the report rule. A `'use client'` component that throws on the server fails SSR on
   // a payload the RSC layer never saw a problem with, so nothing has reported it — and this is the source
