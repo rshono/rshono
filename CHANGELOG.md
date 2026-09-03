@@ -149,6 +149,20 @@ two refuse a build that succeeds today, on purpose.
 
 ### Fixed
 
+- **A thrown non-`Error` reaches the `error` page.** Hono's dispatcher hands `app.onError` only what is
+  `instanceof Error` and re-throws everything else, so `throw 'a plain string'` — or a rejected string, or a
+  thrown object — rejected `app.fetch` and was answered outside the app entirely: a bodiless 500 with no
+  `error` page, nothing on stderr, no `onServerError` report, and, because nothing below the response floor
+  ever unwound, not even `x-content-type-options`, `referrer-policy` or `x-frame-options`. A throw that was
+  merely written badly therefore answered strictly worse than a real `Error` beside it, and
+  `RouteConfig.error` promises the page for a throw from "an endpoint, a server action, or middleware" — all
+  three reachable this way. Anything that is not an `Error` is now wrapped in one carrying it as `cause`,
+  with the value named in the message; an `Error` of any kind is untouched, which is what keeps the control
+  signals, the payload stand-ins and the report de-duplication intact. An endpoint and a page route convert
+  at their own handler, so the app's middleware unwinds over the `error` page exactly as it does for an
+  `Error`; a *middleware* that throws a non-`Error` reaches the page too, but everything registered outside
+  it is skipped, which no framework-side change could alter.
+
 - **One fault is reported once.** `reportServerError` keeps a WeakSet so a fault crossing several stages is
   reported once, and it held everywhere except a thrown page component: an app wired to Sentry got the real
   error as `render` and then a message-free duplicate as `ssr`, because the WeakSet keys on object identity

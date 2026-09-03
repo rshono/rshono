@@ -632,6 +632,58 @@ test('a thrown endpoint renders the error page from routes.ts, redacted, in both
   }
 });
 
+test('a thrown non-Error is answered exactly as a thrown Error is', async () => {
+  // Hono's `compose` hands `onError` only what is `instanceof Error` and re-throws everything else, which
+  // rejected `app.fetch` and left `@hono/node-server` to answer from outside the app: a bodiless 500 with no
+  // `error` page, nothing on stderr, no `onServerError` report, and — because nothing below the response
+  // floor ever unwound — not one of the baseline security headers either. `throw 'a plain string'` therefore
+  // answered strictly worse than the `Error` beside it, for a reason no app author could see.
+  const logsBefore = getOutput().length;
+  for (const { name, headers, contentType } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/api/boom?throw=plain`, { headers: { Accept: 'text/html', ...headers } });
+    assert.equal(res.status, 500, `${name}: a non-Error throw is a 500 with a body, not a bodiless one`);
+    assert.match(res.headers.get('content-type'), new RegExp(contentType), `${name}: the client must get something it can swap in`);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff', `${name}: the response floor must unwind over the error page`);
+    assert.equal(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin', `${name}: and set the rest of the floor`);
+    assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN', `${name}: framing protection included`);
+    // The conversion happens at the route's own dispatch level rather than at the backstop above the app's
+    // middleware, which is what keeps this header here: a middleware's half after `await next()` runs for a
+    // thrown non-Error exactly as it does for a thrown `Error`.
+    assert.ok(res.headers.get('x-response-time'), `${name}: the app's own middleware must unwind too`);
+    const body = await res.text();
+    assert.match(body, /Something went wrong/, `${name}: the app's error page answers`);
+    assert.doesNotMatch(body, /a plain string/, `${name}: the thrown value is redacted in prod like any other detail`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
+  // Reported once, and the wrapper names the value: the message is all an error tracker gets to see, since
+  // the wrapper's own stack starts inside the framework. The value itself rides along as `cause`.
+  assert.match(
+    getOutput().slice(logsBefore),
+    /\[error-reporter\] request \/api\/boom #[^:]+: \[rshono\] a non-Error value was thrown: "a plain string"/,
+    'a converted throw is reported like any other request fault',
+  );
+});
+
+test('a non-Error thrown from middleware reaches the error page, at the cost of the middleware outside it', async () => {
+  // The third source `RouteConfig.error` promises the page for, and the one the route-level conversion
+  // cannot reach — this is what the backstop just inside the response floor is for.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/api/health?throw=middleware`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  assert.match(await res.text(), /Something went wrong/, 'the app’s error page answers a middleware throw');
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff', 'and the response floor still sets its headers');
+  // The documented cost, pinned so it cannot change unnoticed: the middleware that threw is the one whose
+  // post-`next()` half is skipped, and everything registered outside it unwinds past — including the timer
+  // that would otherwise have set this. Nothing short of a change in `compose` could do better.
+  assert.equal(res.headers.get('x-response-time'), null, 'middleware registered outside the throw does not unwind');
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.match(
+    getOutput().slice(logsBefore),
+    /\[error-reporter\] request \/api\/health #[^:]+: \[rshono\] a non-Error value was thrown: "a plain string thrown from middleware"/,
+    'and it is reported, with the value named',
+  );
+});
+
 test('a page that throws in render answers with the app’s error page, not the framework document', async () => {
   // The commonest 500 an app has, and the one path the `error` page used to be unreachable from: SSR
   // fails before a byte of the shell is sent, so nothing is committed and the failure reaches

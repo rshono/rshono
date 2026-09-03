@@ -594,6 +594,43 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
   });
 }
 
+/**
+ * A thrown value as an `Error`, because that is what Hono's dispatcher requires before it will hand one to
+ * `app.onError`.
+ *
+ * `compose` routes a rejection to the error handler only when it is `instanceof Error`, and **re-throws
+ * anything else** — which rejects `app.fetch` and leaves the answer to whatever is hosting it. Under
+ * `@hono/node-server` that is a bodiless 500 raised outside the app: no `error` page, nothing on stderr, no
+ * `onServerError` report, and not even the response floor's `x-content-type-options` / `referrer-policy` /
+ * `x-frame-options`, since nothing below it ever unwinds. So `throw 'a plain string'` from an endpoint used
+ * to answer strictly worse than `throw new Error('…')` beside it, and `RouteConfig.error` promises the page
+ * for a throw from "an endpoint, a server action, or middleware" — all three reachable this way.
+ *
+ * The test is `instanceof Error` and nothing wider, deliberately: it has to be the *same* test `compose`
+ * makes, so that what this converts is exactly what Hono would have re-thrown. A duck-typed check would
+ * convert a cross-realm `Error` the dispatcher was about to handle, and leave one it was not.
+ *
+ * Converting only a non-`Error` is also what keeps the rest of the error path intact: both control signals
+ * extend `Error`, `cameFromPayload` reads a `digest` off the thrown object, and `reportServerError`
+ * de-duplicates on its identity — a wrapper around any of those would break all three.
+ *
+ * The value goes on `cause` rather than into the message alone. It is the only thing that carries what the
+ * app actually threw, an error tracker walks it, and the wrapper's own `stack` starts *here*, in the
+ * framework, so it says nothing about where the throw came from.
+ */
+function asError(value: unknown): Error {
+  if (value instanceof Error) return value;
+  let described: string;
+  try {
+    // Quoted for a string, so an empty one is still visible; anything else prints however it prints. A
+    // `toString` that throws in its turn leaves only the type to say, and this must not fail in a catch.
+    described = typeof value === 'string' ? JSON.stringify(value) : String(value);
+  } catch {
+    described = typeof value;
+  }
+  return new Error(`[rshono] a non-Error value was thrown: ${described}`, { cause: value });
+}
+
 function buildApp(): Hono {
   const app = new Hono();
 
@@ -620,6 +657,24 @@ function buildApp(): Hono {
     if (!PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) return;
     appendVary(headers, RSC_VARY_HEADER);
     if (!headers.has('cache-control')) headers.set('cache-control', PAGE_CACHE_CONTROL);
+  });
+
+  // The backstop for {@link asError}, and *second* for a reason: the middleware that throws is the one whose
+  // own half after `await next()` is skipped, so converting in the floor above would buy `onError` at the
+  // cost of the headers that floor exists to set. Here the conversion happens below it, `compose` hands the
+  // `Error` to `onError` at this level, and the floor unwinds over the response that comes back.
+  //
+  // Second also means *above the app's own middleware*, which is what the two conversions further down make
+  // up for: an endpoint or a page route converts at its own handler, so a middleware's post-`next()` half
+  // still runs, exactly as it does for a thrown `Error`. What is left over is a *middleware* that throws a
+  // non-`Error` itself — then everything registered outside it is skipped, and nothing short of a change in
+  // `compose` could do otherwise.
+  app.use(async (c, next) => {
+    try {
+      await next();
+    } catch (error) {
+      throw asError(error);
+    }
   });
 
   // First, so the app's own middleware (`csrf()`, `bodyLimit()`, auth, logging) wraps everything registered
@@ -715,7 +770,11 @@ function buildApp(): Hono {
           return await runWithContext(c, () => renderPage(c, loadPage));
         } catch (error) {
           if (isControlSignal(error)) return runWithContext(c, () => respondToControlSignal(c, error));
-          throw error;
+          // Converted here rather than left to the backstop above the app's middleware, so a page or an
+          // action that throws a non-`Error` reaches `onError` from this route's own dispatch level — which
+          // is where a thrown `Error` reaches it, and so the only place from which a middleware's
+          // post-`next()` half runs. See {@link asError}.
+          throw asError(error);
         }
       };
 
@@ -740,10 +799,16 @@ function buildApp(): Hono {
       const loadEndpoint = once(async () => assertEndpointModule(await route.server(), `"${route.path}"`));
       const handler: Handler = async (c, next) => {
         const endpointHandler = await loadEndpoint();
-        // Hono's `Handler` leaves its return parameter defaulted to `any`, so this hands back exactly what
-        // the app's own handler is declared to return — there is nothing narrower to assert here.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return endpointHandler(c, next);
+        try {
+          // Awaited rather than returned, so a rejection is this frame's to catch: the same conversion the
+          // page route makes, for the same reason. See {@link asError}.
+          // Hono's `Handler` leaves its return parameter defaulted to `any`, so this hands back exactly what
+          // the app's own handler is declared to return — there is nothing narrower to assert here.
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+          return await endpointHandler(c, next);
+        } catch (error) {
+          throw asError(error);
+        }
       };
       // De-duplicated, because `app.on(['GET', 'GET'], …)` registers the path twice. Validation refuses
       // `'all'` inside a list, so a list that reaches here is concrete methods only.
