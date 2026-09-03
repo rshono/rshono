@@ -13,6 +13,7 @@ import { NODE_PRESET } from '../deploy/presets.js';
 import type { DevMessage } from '../runtime/dev-protocol.js';
 import { SERVER_DEFAULTS } from '../server/server-config.js';
 import { createStaticAssetsApp } from '../server/static.js';
+import { exit } from './exit.js';
 
 const WORKER_READY_TIMEOUT_MS = 15_000;
 
@@ -92,7 +93,7 @@ export async function devCommand(options: DevOptions): Promise<void> {
   // Before the `rm` below, not at `serve` where the bind happens — see {@link portAvailable}.
   if (!(await portAvailable(port, '127.0.0.1'))) {
     console.error(`  ✗ port ${port} is already in use`);
-    process.exit(1);
+    return exit(1);
   }
 
   await rm(outDir, { recursive: true, force: true });

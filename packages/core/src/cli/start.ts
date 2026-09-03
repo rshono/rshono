@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readBuildMarker } from '../deploy/build-marker.js';
 import { deployHintFor } from '../deploy/presets.js';
+import { exit } from './exit.js';
 
 interface StartOptions {
   rootDir: string;
@@ -16,7 +17,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const mainPath = join(distDir, 'server', 'main.mjs');
   if (!existsSync(mainPath)) {
     console.error('rshono: no production build found — run `rshono build` first.');
-    process.exit(1);
+    return exit(1);
   }
 
   // A bundle built for a hosting platform has no listener in it, so starting one here would exit silently the
@@ -26,7 +27,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     const hint = deployHintFor(target);
     console.error(`rshono: this build targets ${target}, which \`rshono start\` cannot run${hint ? ` — ${hint}` : '.'}`);
     console.error('  Rebuild for a server with `rshono build --deploy node` to run it here.');
-    process.exit(1);
+    return exit(1);
   }
 
   // Read by the bundle as it evaluates, which is what binds the port — so they have to be set first.

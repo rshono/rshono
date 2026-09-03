@@ -30,16 +30,6 @@ Environment:
   RSHONO_DEPLOY       platform to build for, unless --deploy is given
 `;
 
-/** {@link parsePort}, reported the way the CLI reports every other bad input: one line, no stack. */
-function readPort(value: string | undefined, source: string): number | undefined {
-  try {
-    return parsePort(value, source);
-  } catch (error) {
-    console.error(`rshono: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }
-}
-
 /** `as const` so `parseArgs` can type `values` off the literal `type` fields rather than widening them. */
 const CLI_OPTIONS = {
   port: { type: 'string', short: 'p' },
@@ -93,7 +83,19 @@ async function main(): Promise<void> {
 
   // Precedence: --port flag > PORT env > the command's built-in default. Both sources go through the same
   // parse as the bundle's own, so `PORT=""` means "unset" in the CLI and in the server it starts alike.
-  const port = readPort(values.port, '--port') ?? readPort(process.env.PORT, 'PORT');
+  //
+  // The parse stays synchronous and the exit is here, where the other flag errors are answered, rather than
+  // inside a `readPort` helper of its own. That helper had to reach `process.exit` directly — it is not
+  // `async`, and `exit()` returns a promise — so it was the one bad-input path in the CLI that did not
+  // drain a piped stderr. Making it `async` instead is the trap: `??` on a `Promise` is never nullish, so
+  // `--port` would resolve to a pending promise and `PORT` would stop being read at all.
+  let port: number | undefined;
+  try {
+    port = parsePort(values.port, '--port') ?? parsePort(process.env.PORT, 'PORT');
+  } catch (error) {
+    console.error(`rshono: ${error instanceof Error ? error.message : String(error)}`);
+    return exit(1);
+  }
   const host = process.env.HOST;
 
   switch (command) {

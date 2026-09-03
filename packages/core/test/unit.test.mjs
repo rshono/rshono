@@ -3,11 +3,12 @@
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { scanPageFiles } from '../dist/builder/page-files.js';
 import { checkReactVersions } from '../dist/builder/react-versions.js';
@@ -2550,5 +2551,17 @@ describe('exit', () => {
       const cut = spawnWriting(bytes, 'process.exit(1);');
       assert.ok(cut.stderr.length < bytes, `a bare process.exit is what truncates (${cut.stderr.length} bytes)`);
     }
+  });
+
+  // The helper being right is half of it; every failure path in the CLI reaching it is the other half, and
+  // that is what drifted — four paths printed their one line and called `process.exit` directly, so the
+  // rule held for the paths that had been thought about and not for the ones added since. A structural pin
+  // rather than four spawns, because what matters is that there is no fifth.
+  test('nothing in the CLI calls process.exit except the helper that drains first', () => {
+    const cliDir = fileURLToPath(new URL('../dist/cli/', import.meta.url));
+    const offenders = readdirSync(cliDir)
+      .filter((name) => name.endsWith('.js') && name !== 'exit.js')
+      .filter((name) => /\bprocess\.exit\s*\(/.test(readFileSync(join(cliDir, name), 'utf8')));
+    assert.deepEqual(offenders, [], 'these must `return exit(code)` instead — a piped stderr drops what a bare exit leaves behind');
   });
 });
