@@ -22,6 +22,17 @@ two refuse a build that succeeds today, on purpose.
 
 ### Security
 
+- **The cross-site form refusal no longer reads `x-rsc-action` differently from the classifier that decodes
+  the post.** One decides what is refused, the other what is decoded, and they tested the same header two
+  ways: the refusal asked whether it was _present_, the classifier whether it had a _value_. A POST carrying
+  a present-but-empty `x-rsc-action` therefore fell between them — excluded from the refusal as "the
+  client-initiated shape, which needs a preflight to forge", then dispatched down the form branch, where it
+  ran the action its body carried with the cross-site check skipped. Not reachable from a browser: an empty
+  header is still a header, so a cross-origin `fetch` still needs the preflight the framework never answers,
+  and any app with `csrf()` registered caught it regardless. It mattered because this refusal is the whole of
+  what an app with no `src/server.ts` has, and a predicate that fails open on a shape nothing sends today is
+  one that fails open the day something does. Both now read the value.
+
 - **`getRequestContext().env` no longer merges the platform's own `fetch` argument.** `c.env` is the second
   argument to `app.fetch(request, env)` — the app's bindings on Workers, and on every other target the
   adapter's private state: `{ incoming, outgoing }` on Node and Vercel, the whole invocation on

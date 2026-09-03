@@ -303,6 +303,24 @@ describe('a server.ts with no csrf()', () => {
     });
     assert.equal(own.status, 200, 'a same-origin text/plain post still renders the page');
 
+    // An `x-rsc-action` that is present and empty. The refusal skipped it — `has()` read the header as "the
+    // client-initiated shape, which needs no check" — while the classifier read `get()` and found nothing to
+    // dispatch on, so the request went down the *form* branch and ran whatever action its body carried, with
+    // the check that stands in front of that branch bypassed. Two readings of one header, and the shape that
+    // fell between them was the one nothing is supposed to be able to forge.
+    const empty = await fetch(`${app.base}/subscribe`, {
+      method: 'POST',
+      headers: {
+        Origin: 'https://evil.example',
+        'sec-fetch-site': 'cross-site',
+        'x-rsc-action': '',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'email=pwn@evil.example',
+    });
+    await empty.text();
+    assert.equal(empty.status, 403, 'an empty action header names no action, so this is a form post like any other');
+
     // And the documented remedy works: an endpoint calls the app handler directly, so it never reaches this.
     const endpoint = await post('/api/acs', 'application/x-www-form-urlencoded');
     assert.equal(endpoint.status, 200, 'an endpoint route must be able to receive the post a page route cannot');

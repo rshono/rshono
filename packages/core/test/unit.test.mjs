@@ -21,7 +21,7 @@ import { parsePort, resolveServerConfig } from '../dist/server/server-config.js'
 import { createPageCache, PRERENDER_NONCE_HEADER, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
-import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
+import { asksForRsc, createRscRequest, isActionRequest, isBrowserFormPost, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
 import {
   beginPageRender,
@@ -1859,6 +1859,33 @@ describe('parseRenderRequest', () => {
       'form-action': [false, true],
       'rsc-action': [true, true],
     });
+  });
+
+  test('isBrowserFormPost reads x-rsc-action the same way the classifier does', () => {
+    // The two have to agree about this header, because one decides what is *refused* and the other decides
+    // what is *decoded*: a POST the classifier sends down the form branch must be a POST the cross-site
+    // refusal has already looked at. A present-but-empty `x-rsc-action` was the shape they disagreed on —
+    // `has()` here said "the client-initiated shape, already covered by the preflight it would need", `get()`
+    // there found nothing to dispatch on, and the request ran its action with the check skipped. Not
+    // reachable from a browser, since an empty header still needs that preflight, but a security predicate
+    // that fails open on a shape nothing sends today is one that fails open the day something does.
+    const post = (headers, body = 'x=1') => new Request(BASE, { method: 'POST', headers, body });
+    const formish = { 'content-type': 'application/x-www-form-urlencoded' };
+
+    assert.equal(isBrowserFormPost(post(formish)), true, 'the plain form post');
+    assert.equal(isBrowserFormPost(post({ ...formish, 'x-rsc-action': 'abc' })), false, 'a real action id is the unforgeable shape');
+    assert.equal(isBrowserFormPost(post({ ...formish, 'x-rsc-action': '' })), true, 'an empty one names no action and forges nothing');
+
+    // Stated as the invariant rather than as three cases: every POST the classifier calls a `form-action`
+    // is one this returns true for, so the refusal cannot be routed around by the header the classifier
+    // ignores. `text/plain` is deliberately outside it in the other direction — refused here, never decoded
+    // there — which is why this is a one-way implication.
+    for (const headers of [formish, { ...formish, 'x-rsc-action': '' }, { 'content-type': 'multipart/form-data; boundary=x' }]) {
+      const request = post(headers);
+      if (parseRenderRequest(request).kind === 'form-action') {
+        assert.equal(isBrowserFormPost(request), true, `${JSON.stringify(headers)} decodes as a form action, so it must be checked as one`);
+      }
+    }
   });
 
   test('asksForRsc reads the same header without parsing the rest', () => {

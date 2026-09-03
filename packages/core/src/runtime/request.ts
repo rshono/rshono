@@ -81,9 +81,17 @@ const PLAIN_TEXT_ENCTYPE = /^text\/plain/i;
  *
  * `x-rsc-action` excludes the client-initiated shape, which needs no check of its own: that header is not
  * CORS-safelisted, so a cross-origin caller needs a preflight the framework never answers.
+ *
+ * **The same test {@link parseRenderRequest} makes**, and it has to be: this decides what is *refused* and
+ * that decides what is *decoded*, so a header the two read differently is a request that takes the form path
+ * without passing the form check. A present-but-empty `x-rsc-action` was exactly that — `has` said "the
+ * client-initiated shape, already covered" while `get` was falsy, so the request fell through to
+ * `form-action` and ran the action it carried with the cross-site refusal skipped. Not reachable from a
+ * browser, since an empty header is still a header and still needs the preflight; refused anyway, because a
+ * predicate that fails open on a shape nothing produces today is one bad day from being wrong.
  */
 export function isBrowserFormPost(request: Request): boolean {
-  if (request.method !== 'POST' || request.headers.has(HEADER_ACTION_ID)) return false;
+  if (request.method !== 'POST' || request.headers.get(HEADER_ACTION_ID)) return false;
   const contentType = request.headers.get('content-type') ?? '';
   return FORM_CONTENT_TYPES.test(contentType) || PLAIN_TEXT_ENCTYPE.test(contentType);
 }
