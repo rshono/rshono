@@ -5,8 +5,13 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
-    "declarationMap": true,
+    // No "declarationMap": a .d.ts.map points at ../src/*.ts, and "files" ships "dist" and "bin" only — so 46
+    // of them, 29 KB, resolved to nothing in a consumer's editor and go-to-definition landed on it. The .d.ts
+    // files carry the JSDoc, which is what a reader wants there anyway.
     "sourceMap": true,
+    // Embeds the .ts source in the .js.map, which is what makes a production stack trace readable — the
+    // server map is the onServerError funnel's only way back to real frames, and unlike a declaration map it
+    // needs no file beside it to resolve.
     "inlineSources": true
   },
   "include": ["src"],

@@ -5,14 +5,25 @@
 // baked into the server bundle. The rest is middleware, so the testbed reads its profile from the
 // environment and one build serves every permutation — which is the point of having moved them.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { buildTestbed, FIXTURES_DIR, startTestbed, stopServer } from './helpers.mjs';
+import { buildTestbed, FIXTURES_DIR, startTestbed, stopServer, TESTBED_DIST } from './helpers.mjs';
 
 // One build for the whole file, with the only config setting under test here baked in. The suites
 // below differ by environment alone. Serialised with the rest of the suite by
 // `--test-concurrency=1`, so this never races another file over `dist/`.
-before(() => buildTestbed(join(FIXTURES_DIR, 'trust-proxy.config.mjs')));
+//
+// Built *with* `TESTBED_CSP`, which the bundle itself is indifferent to — `src/server.ts` reads it at
+// start, so the compiled output is identical either way. What it changes is the prerender pass, which runs
+// the app's middleware in the build process: `secureHeaders()` mints a nonce there too. That is the one
+// build-time consequence of a runtime setting anywhere in the testbed, and the reason the pass has to ask
+// for a document without one — see the prerendered-nonce test below.
+/** What that build printed — asserted on by the prerender/nonce test below. */
+let buildOutput = '';
+before(() => {
+  buildOutput = buildTestbed(join(FIXTURES_DIR, 'trust-proxy.config.mjs'), { env: { TESTBED_CSP: '1' } });
+});
 
 /** Serves the already-built testbed under `env` for the enclosing suite. */
 function serve(env) {
@@ -46,6 +57,9 @@ describe('a hardened server.ts', () => {
     const ssg = await fetch(`${app.base}/docs/getting-started`);
     assert.ok(ssg.headers.get('content-security-policy'), 'SSG route missing CSP header');
     assert.match(await ssg.text(), /nonce="/);
+    // The header the prerender pass reads that fact off (`PRERENDER_NONCE_HEADER`) belongs to the build
+    // process alone — a served response must never carry it.
+    assert.equal(ssg.headers.get('x-rshono-prerender-nonce'), null, 'a build-time marker leaked onto a served response');
   });
 
   test('two requests get two nonces — the value is per request, not per build', async () => {
@@ -91,6 +105,36 @@ describe('a hardened server.ts', () => {
     assert.match(res.headers.get('cache-control') ?? '', /public/, 'still served from disk under CSP');
     assert.ok(res.headers.get('etag'));
     assert.doesNotMatch(await res.text(), /nonce/, 'and it carries no nonce to go stale');
+  });
+
+  test('a prerendered document carries no nonce, even from a build whose middleware minted one', async () => {
+    // The prerender pass renders through the app's full middleware, so under a nonce policy `secureHeaders()`
+    // minted one at *build* time and it was stamped into the file that ships — one frozen value, repeated in
+    // every copy. Which of two bad things followed depended on the policy's scope. Global, as here: the file
+    // is never served at all (the request has a nonce, so the document is re-rendered), so it was dead bytes
+    // under a build reporting pages the deployment would never read. Scoped to some other path: nothing
+    // forces a re-render, and the stale build-time nonce ships and is picked up as `__webpack_nonce__`.
+    //
+    // Read off disk rather than over HTTP, because under this suite's global policy the served document is
+    // always a fresh render — the bytes under test are exactly the ones no request here returns.
+    const document = readFileSync(join(TESTBED_DIST, 'ssg', 'docs', 'getting-started', 'index.html'), 'utf8');
+    assert.ok(document.includes('<title>'), 'the page was prerendered — otherwise there is nothing to assert about');
+    assert.doesNotMatch(document, /nonce/, 'a nonce is per request; a prerendered file is not, so it must carry none');
+  });
+
+  test('the build says which documents its own nonce policy will re-render, rather than calling them prerendered', async () => {
+    // The other half of the same fact, and the half a build log used to get wrong: under this app's global
+    // nonce policy none of these documents is ever read, and the summary line said "prerendered 3 static
+    // page(s)" about all three. The pass learns it from the render itself — the framework marks a build-time
+    // document it minted a nonce for — so this asserts the whole path, from `secureHeaders()` in the app's
+    // middleware through to the line a person reads.
+    assert.match(buildOutput, /page\(s\) mint a CSP nonce/, 'the build has to say why, once');
+    assert.match(buildOutput, /only the flight payload is served from disk/);
+    const summary = buildOutput.split('\n').find((line) => line.includes('prerendered') && line.includes('static page(s)'));
+    assert.ok(summary, `no prerender summary line in:\n${buildOutput}`);
+    for (const path of ['/docs/getting-started', '/docs/deployment']) {
+      assert.ok(summary.includes(`${path} (flight only)`), `${path} is served from disk as a payload only, and the summary must say so:\n${summary}`);
+    }
   });
 
   test("csrf()'s origin handler lets the app's allowlist through, and nothing else", async () => {
@@ -206,6 +250,81 @@ describe('a server.ts with no csrf()', () => {
     });
     await res.text();
     assert.notEqual(res.status, 403, 'with no csrf() middleware, a cross-origin action must not be rejected');
+  });
+
+  test('a page route refuses every cross-site form post; an endpoint route is how you take one', async () => {
+    // With `csrf()` off, this is the framework's own check and nothing else. It runs on `Sec-Fetch-Site` and
+    // the request's shape, *before* the body is read, because deciding whether a post carries an action means
+    // buffering an untrusted body to look for a `$ACTION_*` field. So the refusal is not "an action from
+    // another site": it is every cross-site form post to a page, action or no action, which is the arrival
+    // shape of SAML ACS, OIDC `response_mode=form_post` and most payment-gateway returns.
+    const post = (path, contentType) =>
+      fetch(`${app.base}${path}`, {
+        method: 'POST',
+        headers: { Origin: 'https://idp.example', 'sec-fetch-site': 'cross-site', 'content-type': contentType },
+        body: contentType === 'application/json' ? '{}' : 'SAMLResponse=abc',
+      });
+
+    const page = await post('/login', 'application/x-www-form-urlencoded');
+    assert.equal(page.status, 403);
+    const message = await page.text();
+    // The message used to say "to a server action", which this code cannot know and which is wrong for the
+    // post above — there is no action in it. It names the constraint and the way round it instead.
+    assert.match(message, /cross-site form post to a page route/, 'the refusal must name what it actually refused');
+    assert.match(message, /\{ type: 'endpoint' \}/, 'and the escape hatch, which is otherwise undiscoverable');
+    // The same header bag as the framework's other plain-text refusals — see `plainRefusal` in entry.rsc.tsx,
+    // and the test beside the plain 404 in prod.test.mjs. This one used to carry `vary` and no cache policy.
+    assert.equal(page.headers.get('cache-control'), 'private, no-cache', 'a refusal is not something to store');
+    assert.match(page.headers.get('vary') ?? '', /\bRSC\b/);
+
+    // All three `enctype` values a browser form can send, and this is the one that used to be let through:
+    // React never writes `text/plain`, so it is the one shape the framework never decodes as an action — and
+    // keying the refusal on that classification rather than on the shape left it rendering the page. Nothing
+    // could run an action through it, but "refuses every cross-site form post" was not true as written.
+    const plain = await post('/login', 'text/plain');
+    assert.equal(plain.status, 403, 'the third enctype a browser form can post is a form post too');
+    assert.match(await plain.text(), /cross-site form post to a page route/);
+
+    // Keyed on the shape, not on the presence of an action: the same request with a body no browser form can
+    // produce is let through, which is what makes the limitation about form posts rather than about actions.
+    // A cross-origin `application/json` POST needs a preflight the framework never answers, so a browser
+    // cannot make this request at all — only a client that is not a CSRF victim can.
+    const asJson = await post('/login', 'application/json');
+    await asJson.text();
+    assert.notEqual(asJson.status, 403, 'a non-form content type is not the shape a browser can forge');
+
+    // And the widening must not touch a post from the app's own pages. `same-origin` is the label a browser
+    // puts on one, and it settles the question on its own — the page renders, as it did before, and no action
+    // can be decoded out of a `text/plain` body either way.
+    const own = await fetch(`${app.base}/login`, {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'same-origin', 'content-type': 'text/plain' },
+      body: 'not an action',
+    });
+    assert.equal(own.status, 200, 'a same-origin text/plain post still renders the page');
+
+    // An `x-rsc-action` that is present and empty. The refusal skipped it — `has()` read the header as "the
+    // client-initiated shape, which needs no check" — while the classifier read `get()` and found nothing to
+    // dispatch on, so the request went down the *form* branch and ran whatever action its body carried, with
+    // the check that stands in front of that branch bypassed. Two readings of one header, and the shape that
+    // fell between them was the one nothing is supposed to be able to forge.
+    const empty = await fetch(`${app.base}/subscribe`, {
+      method: 'POST',
+      headers: {
+        Origin: 'https://evil.example',
+        'sec-fetch-site': 'cross-site',
+        'x-rsc-action': '',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'email=pwn@evil.example',
+    });
+    await empty.text();
+    assert.equal(empty.status, 403, 'an empty action header names no action, so this is a form post like any other');
+
+    // And the documented remedy works: an endpoint calls the app handler directly, so it never reaches this.
+    const endpoint = await post('/api/acs', 'application/x-www-form-urlencoded');
+    assert.equal(endpoint.status, 200, 'an endpoint route must be able to receive the post a page route cannot');
+    assert.deepEqual(await endpoint.json(), { received: 3 }, 'and the handler must actually see the body');
   });
 });
 

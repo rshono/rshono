@@ -15,7 +15,6 @@ declare module 'react-server-dom-rspack/server' {
   import type { ReactFormState } from 'react-dom/client';
 
   export type TemporaryReferenceSet = WeakMap<any, string>;
-  export type ServerManifest = Record<string, { id: string; name: string; chunks: string[]; async?: boolean }>;
 
   export type ServerEntry<T> = T & {
     entryJsFiles?: string[];
@@ -37,9 +36,13 @@ declare module 'react-server-dom-rspack/server' {
 
   export function loadServerAction(actionId: string): (...args: unknown[]) => Promise<unknown>;
 
-  export function decodeAction(body: FormData, serverManifest: ServerManifest): Promise<() => Promise<unknown>> | null;
+  // One parameter and two, not two and three: both read `__rspack_rsc_manifest__.serverManifest` from the
+  // module scope themselves. The declaration used to invent a trailing `serverManifest` on each, which the
+  // call sites duly passed and JavaScript duly discarded — an unverified guess about a pre-1.0 API, which is
+  // exactly what this file says it does not make.
+  export function decodeAction(body: FormData): Promise<() => Promise<unknown>> | null;
 
-  export function decodeFormState(actionResult: unknown, body: FormData, serverManifest: ServerManifest): Promise<ReactFormState | null>;
+  export function decodeFormState(actionResult: unknown, body: FormData): Promise<ReactFormState | null>;
 }
 
 declare module 'react-server-dom-rspack/client' {

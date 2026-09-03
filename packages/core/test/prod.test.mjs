@@ -4,13 +4,25 @@
 // allowlist, a small body cap, trustProxy — in prod-config.test.mjs.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Agent, request } from 'node:http';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { actionFormData, APP_ENV, buildTestbed, clientChunks, TESTBED_DIST, serverActionId, startTestbed, stopServer } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
+import {
+  actionFormData,
+  APP_ENV,
+  buildTestbed,
+  clientChunks,
+  TESTBED_DIR,
+  TESTBED_DIST,
+  serverActionId,
+  startTestbed,
+  stopServer,
+} from './helpers.mjs';
 
-buildTestbed();
+/** What that build printed — asserted on by the server-action check below. */
+const buildOutput = buildTestbed();
 const { base, child, getOutput } = await startTestbed('start');
 after(() => stopServer(child));
 
@@ -332,6 +344,31 @@ test('non-HTML clients get plain-text 404s, private like the rendered one', asyn
   assert.equal(rendered.headers.get('cache-control'), res.headers.get('cache-control'), 'the two 404s must agree');
 });
 
+// The 404 above and the refusals on the action path are the same kind of answer — the framework declining, in
+// plain text, on a URL that answers in two representations. They used to make three different choices about
+// the header bag, which left whoever added the next one to guess; they all go through `plainRefusal` now.
+// Only the 404 *needs* it (a GET, and heuristically cacheable); for the POST refusals it is consistency. The
+// third refusal, the cross-site form post, is only the framework's own with `csrf()` off — prod-config.test.mjs
+// asserts the same bag on it there.
+test('the framework’s plain-text refusals all carry the same headers', async () => {
+  const post = (body, headers) => fetch(`${base}/users`, { method: 'POST', headers: { Origin: base, ...headers }, body });
+  const refusals = {
+    'unknown action id': await post('[]', { 'x-rsc-action': 'no-such-action', 'content-type': 'text/plain;charset=UTF-8' }),
+    'undecodable action body': await post('not-a-flight-reply', {
+      'x-rsc-action': serverActionId('Add user'),
+      'content-type': 'text/plain;charset=UTF-8',
+    }),
+    'plain 404': await fetch(`${base}/api/definitely-not-an-endpoint`),
+  };
+
+  for (const [name, res] of Object.entries(refusals)) {
+    await res.text();
+    assert.match(res.headers.get('content-type') ?? '', /text\/plain/, `${name}: should be plain text`);
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', `${name}: no shared cache should ever store a refusal`);
+    assert.match(res.headers.get('vary') ?? '', /\bRSC\b/, `${name}: the URL answers in two representations`);
+  }
+});
+
 test('useNavigation() gives a client island server-computed pathname/params/searchParams during SSR (no flicker)', async () => {
   const html = await (await fetch(`${base}/profile/1?tab=settings`)).text();
   assert.match(html, /data-nav="pathname">(?:<!--[^]*?-->)?\/profile\/1</, 'useNavigation().pathname was wrong at SSR time');
@@ -367,6 +404,14 @@ test('the client runtime ships whole, with its dev-only detail compiled out', ()
   );
 });
 
+// The other half of the build-time action check, which minimal-app.test.mjs exercises from the broken side:
+// this app has six actions across two modules and every one of them loads, so the build must say nothing.
+// A check that cannot be quiet is one every app learns to ignore.
+test('a build says nothing about server actions when they all load', () => {
+  assert.doesNotMatch(buildOutput, /server action\(s\) could not be loaded/, buildOutput);
+  assert.doesNotMatch(buildOutput, /answers 500/);
+});
+
 test('a server action can redirect (POST-redirect-GET) and set a cookie without JavaScript', async () => {
   const html = await (await fetch(`${base}/login`)).text();
   const res = await fetch(`${base}/login`, {
@@ -396,6 +441,63 @@ test('progressive-enhancement form action works without JavaScript', async () =>
     'server action cookie (getRequestContext + setCookie) did not reach the response',
   );
   assert.match(await res.text(), /Welcome aboard, NoScript Nancy/);
+});
+
+// The other shape React emits, and the one the three `useActionState` forms above never produce: a server
+// component renders `<form action={subscribe}>`, so the body is a single `$ACTION_ID_<id>` field and there is
+// no form state to decode at all.
+test('a form a server component wired straight to an action posts as a bare $ACTION_ID', async () => {
+  const html = await (await fetch(`${base}/subscribe`)).text();
+  assert.match(html, /name="\$ACTION_ID_[0-9a-f]+"/, 'this shape is what the test is about — without it, it proves nothing');
+  assert.doesNotMatch(html, /\$ACTION_KEY/, 'and it carries no useActionState metadata');
+
+  const res = await fetch(`${base}/subscribe`, {
+    method: 'POST',
+    headers: { Origin: base },
+    body: actionFormData(html, { email: 'ada@example.com' }),
+  });
+  assert.equal(res.status, 200);
+  const cookie = res.headers.getSetCookie().find((each) => each.startsWith('subscribed='));
+  assert.ok(cookie, 'the action ran and wrote to the response head');
+
+  // Read back on the next request, which is when a cookie the action set is actually in play.
+  const back = await fetch(`${base}/subscribe`, { headers: { cookie: cookie.split(';')[0] } });
+  // `<!-- -->` is React's separator between static text and an interpolated value.
+  assert.match(await back.text(), /Subscribed as (?:<!-- -->)?ada@example\.com/);
+});
+
+// The form-state decode sits *after* the action has run, so it is the one place in this path that cannot
+// answer 400 — the caller would be told their request was refused by a server that had already acted on it.
+// A body React never writes reaches it: `$ACTION_REF_`/`$ACTION_KEY` fields, which is what `decodeFormState`
+// keys on, alongside a `$ACTION_ID_` that `decodeAction` takes for the call instead. That used to be a 500
+// and an `[error-reporter] request` line, mintable by anyone, since action ids are public.
+test('a form post carrying form-state fields React never wrote renders the page instead of 500ing', async () => {
+  const html = await (await fetch(`${base}/subscribe`)).text();
+  const actionField = html.match(/name="(\$ACTION_ID_[0-9a-f]+)"/)[1];
+
+  const body = new FormData();
+  // Order matters: `decodeAction` takes the *last* `$ACTION_` key it sees, `decodeFormState` only ever looks
+  // for a `$ACTION_REF_`. Neither is given the `$ACTION_1:0` metadata a real `useActionState` post carries.
+  body.set('$ACTION_REF_1', '');
+  body.set('$ACTION_KEY', 'not-a-key-react-wrote');
+  body.set(actionField, '');
+  body.set('email', 'crafted@example.com');
+
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/subscribe`, { method: 'POST', headers: { Origin: base }, body });
+  assert.equal(res.status, 200, 'the action already ran, so there is nothing left to refuse');
+  assert.match(res.headers.get('content-type'), /text\/html/, 'and the page is what comes back');
+  assert.ok(
+    res.headers.getSetCookie().some((cookie) => cookie.startsWith('subscribed=crafted%40example.com')),
+    'the action ran and kept its effects — which is exactly why this cannot be a 4xx',
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
+  assert.doesNotMatch(
+    getOutput().slice(logsBefore),
+    /\[error-reporter\]/,
+    'and nobody is paged: action ids are public, so this would be an unauthenticated way to reach the error tracker',
+  );
 });
 
 test('client-initiated server action mutates and re-renders', async () => {
@@ -530,21 +632,75 @@ test('a thrown endpoint renders the error page from routes.ts, redacted, in both
   }
 });
 
-test('a render failure answers with a visible error document, not a blank page', async () => {
-  // SSR fails before any of the shell is sent, so the app's `error` page can't be reached — this is
-  // the framework's own last-resort 500. It used to put its message inside <noscript>, which meant a
-  // normal browser showed nothing at all.
-  const res = await fetch(`${base}/crash?render=1`);
-  assert.equal(res.status, 500);
-  const html = await res.text();
-  assert.match(html, /500 — Internal Server Error/, 'the failure document must carry a visible message');
-  assert.doesNotMatch(html, /<noscript>/, 'the message must be visible without disabling JavaScript');
-  assert.doesNotMatch(
-    html,
-    /<script[^>]+src=/,
-    'the failed render must not attach the client runtime: hydrating a payload from the same failed render would tear the document down and blank the message',
+test('a thrown non-Error is answered exactly as a thrown Error is', async () => {
+  // Hono's `compose` hands `onError` only what is `instanceof Error` and re-throws everything else, which
+  // rejected `app.fetch` and left `@hono/node-server` to answer from outside the app: a bodiless 500 with no
+  // `error` page, nothing on stderr, no `onServerError` report, and — because nothing below the response
+  // floor ever unwound — not one of the baseline security headers either. `throw 'a plain string'` therefore
+  // answered strictly worse than the `Error` beside it, for a reason no app author could see.
+  const logsBefore = getOutput().length;
+  for (const { name, headers, contentType } of REPRESENTATIONS) {
+    const res = await fetch(`${base}/api/boom?throw=plain`, { headers: { Accept: 'text/html', ...headers } });
+    assert.equal(res.status, 500, `${name}: a non-Error throw is a 500 with a body, not a bodiless one`);
+    assert.match(res.headers.get('content-type'), new RegExp(contentType), `${name}: the client must get something it can swap in`);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff', `${name}: the response floor must unwind over the error page`);
+    assert.equal(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin', `${name}: and set the rest of the floor`);
+    assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN', `${name}: framing protection included`);
+    // The conversion happens at the route's own dispatch level rather than at the backstop above the app's
+    // middleware, which is what keeps this header here: a middleware's half after `await next()` runs for a
+    // thrown non-Error exactly as it does for a thrown `Error`.
+    assert.ok(res.headers.get('x-response-time'), `${name}: the app's own middleware must unwind too`);
+    const body = await res.text();
+    assert.match(body, /Something went wrong/, `${name}: the app's error page answers`);
+    assert.doesNotMatch(body, /a plain string/, `${name}: the thrown value is redacted in prod like any other detail`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
+  // Reported once, and the wrapper names the value: the message is all an error tracker gets to see, since
+  // the wrapper's own stack starts inside the framework. The value itself rides along as `cause`.
+  assert.match(
+    getOutput().slice(logsBefore),
+    /\[error-reporter\] request \/api\/boom #[^:]+: \[rshono\] a non-Error value was thrown: "a plain string"/,
+    'a converted throw is reported like any other request fault',
   );
+});
+
+test('a non-Error thrown from middleware reaches the error page, at the cost of the middleware outside it', async () => {
+  // The third source `RouteConfig.error` promises the page for, and the one the route-level conversion
+  // cannot reach — this is what the backstop just inside the response floor is for.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/api/health?throw=middleware`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  assert.match(await res.text(), /Something went wrong/, 'the app’s error page answers a middleware throw');
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff', 'and the response floor still sets its headers');
+  // The documented cost, pinned so it cannot change unnoticed: the middleware that threw is the one whose
+  // post-`next()` half is skipped, and everything registered outside it unwinds past — including the timer
+  // that would otherwise have set this. Nothing short of a change in `compose` could do better.
+  assert.equal(res.headers.get('x-response-time'), null, 'middleware registered outside the throw does not unwind');
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.match(
+    getOutput().slice(logsBefore),
+    /\[error-reporter\] request \/api\/health #[^:]+: \[rshono\] a non-Error value was thrown: "a plain string thrown from middleware"/,
+    'and it is reported, with the value named',
+  );
+});
+
+test('a page that throws in render answers with the app’s error page, not the framework document', async () => {
+  // The commonest 500 an app has, and the one path the `error` page used to be unreachable from: SSR
+  // fails before a byte of the shell is sent, so nothing is committed and the failure reaches
+  // `app.onError` — which renders the `error` page from a fresh render of its own.
+  const res = await fetch(`${base}/crash?render=1`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/html/);
+  const html = await res.text();
+  assert.match(html, /Something went wrong/, 'the app’s error page component must render');
+  assert.match(html, /Internal Server Error/, 'the error page shows the generic message');
   assert.doesNotMatch(html, /Intentional render failure/, 'prod must not leak the real error into the page');
+  assert.doesNotMatch(html, /500 — Internal Server Error<\/h1>/, 'the framework’s last-resort document must not be what answers');
+  // *Fresh* render, with a payload of its own, which is what makes re-throwing the shell failure safe.
+  // The framework document deliberately ships no runtime — hydrating the payload of the render that just
+  // failed would tear the page down over the message — and that reasoning does not apply to this one.
+  assert.match(html, /<script[^>]+src=/, 'the error page ships the client runtime like any other page');
+  assert.match(html, /__FLIGHT_DATA/, 'and a payload of its own to hydrate from');
 });
 
 test('a no-JS (progressive-enhancement) action that throws renders the error page', async () => {
@@ -605,20 +761,123 @@ test('an action whose page then fails to load still gets its result back', async
   assert.match(payload, /Something went wrong/, 'and the page it comes with is the app’s error page');
 });
 
-test('an action request that fails before the action runs answers with a payload carrying no result', async () => {
-  // The other half: nothing ran, so there is nothing to carry. What matters is that the reply is still a
-  // payload the client can decode — it is what lets the runtime say so, instead of reading `.ok` off it.
+test('an action request that fails before the action runs is refused outright, not answered with a page', async () => {
+  // The other half of the pair above. Nothing ran, so there is nothing to carry — and rather than render a
+  // page around that absence, the framework refuses the request. It used to answer 500 with an error-page
+  // payload, which made a malformed body indistinguishable from a server fault: same status, same rendered
+  // page, and an `[error-reporter]` line for a caller who was simply wrong.
+  //
+  // `text/plain` rather than a payload is deliberate and the client is built for it: `payloadResponse` gates
+  // on the content type precisely so a non-payload reply becomes an error naming the status and the body,
+  // which is more than the resultless payload ever said. It is the same shape the unknown-action-id 400
+  // already had.
   const res = await fetch(`${base}/users`, {
     method: 'POST',
     headers: { Origin: base, 'x-rsc-action': serverActionId('Add user'), RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
     body: 'not-a-flight-reply',
   });
 
-  assert.equal(res.status, 500);
-  assert.match(res.headers.get('content-type'), /text\/x-component/);
-  const payload = await res.text();
-  assert.doesNotMatch(payload, /"returnValue":\{/, 'the action never ran, so no result may be invented for it');
-  assert.match(payload, /Something went wrong/);
+  assert.equal(res.status, 400, 'a body the server cannot decode is the caller being wrong');
+  assert.doesNotMatch(res.headers.get('content-type'), /text\/x-component/, 'nothing was rendered, so there is no payload to send');
+  assert.match(await res.text(), /Bad Request: malformed server action request/);
+});
+
+// The third case that guard can see, and the only one that is not the caller's fault. The id has already
+// passed `Object.hasOwn(serverManifest, …)`, so no client can steer this: what is left is the deployment
+// missing part of itself, and answering 400 would blame the one caller in that guard who was right while
+// telling the operator who needs paging nothing at all.
+//
+// Reached by breaking a copy of the build the way a partial deploy does — the manifest entry for one action
+// is pointed at a module id the bundle does not hold, which is what React's own "older or newer deployment"
+// message is about. It cannot be done with a fixture: Rspack concatenates every `'use server'` module in the
+// app into one server module, so an action module that throws as it evaluates takes *all* of them with it.
+//
+// Both action shapes, because the split that gets this right was made twice. The client-initiated branch has
+// had it since F3; the form branch answered the very same fault with the silent 400 below — `decodeAction`
+// reads the caller's body *and* `__webpack_require__`s the action's module, so one `catch` was covering two
+// different people's mistakes. With JavaScript off, or before hydration, a broken deployment therefore told
+// the caller they were malformed and told the operator nothing.
+test('an action whose module cannot be loaded is a reported 500, not a silent 400', async () => {
+  // Inside the testbed, because the copy is imported and `src/server.ts` pulls in an ordinary `node_modules`
+  // dependency the node preset leaves external — from `os.tmpdir()` there is nothing above it to resolve.
+  const sandbox = mkdtempSync(join(TESTBED_DIR, 'drift-'));
+  const reported = [];
+  const console_ = { log: console.log, error: console.error };
+  try {
+    cpSync(join(TESTBED_DIST, 'server'), join(sandbox, 'dist', 'server'), { recursive: true });
+    const mainFile = join(sandbox, 'dist', 'server', 'main.mjs');
+    const actionId = serverActionId('Logging out');
+    const original = readFileSync(mainFile, 'utf8');
+    // `"<id>":{"id":"3860","name":…}` — the module the manifest sends `loadServerAction` to.
+    const patched = original.replaceAll(new RegExp(`("${actionId}":\\{"id":")[^"]+"`, 'g'), '$1chunk-that-went-missing"');
+    assert.notEqual(patched, original, 'the server manifest is not in the shape this test breaks — update the patch');
+    writeFileSync(mainFile, patched);
+
+    // The node runtime binds a port as the bundle evaluates, and nothing exported can close it again; this is
+    // the flag it checks for the prerender pass, which drives `app.fetch` directly for the same reason.
+    process.env.RSHONO_PRERENDER = '1';
+    let bundle;
+    try {
+      bundle = await import(pathToFileURL(mainFile).href);
+    } finally {
+      delete process.env.RSHONO_PRERENDER;
+    }
+
+    // In-process, so the app's own `onServerError` reports through this console rather than a child's stdout.
+    const call = async (request) => {
+      reported.length = 0;
+      console.log = (...args) => reported.push(args.join(' '));
+      console.error = (...args) => reported.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' '));
+      try {
+        const res = await bundle.app.fetch(request);
+        return { res, body: await res.text(), logged: reported.join('\n') };
+      } finally {
+        Object.assign(console, console_);
+      }
+    };
+
+    const client = await call(
+      new Request('https://rshono.example/dashboard', {
+        method: 'POST',
+        headers: { Origin: 'https://rshono.example', 'x-rsc-action': actionId, RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
+        body: '[]',
+      }),
+    );
+
+    assert.equal(client.res.status, 500, 'a bundle missing the action’s module is the server being broken, not the caller');
+    assert.match(
+      client.res.headers.get('content-type'),
+      /text\/x-component/,
+      'the client is holding a live tree, so it gets the error page as a payload',
+    );
+    // Carrying no result, because the action never ran — which is the one reachable cause of the client
+    // runtime's "the server action produced no result" error. See the branch in entry.client.tsx.
+    assert.match(client.body, /"returnValue":"\$undefined"/, 'nothing ran, so there is no result to carry across');
+    assert.match(client.logged, /server action could not be loaded/, 'the operator gets the real error');
+    assert.match(client.logged, /\[error-reporter\] action \/dashboard/, 'attributed to the action, not to the request that was fine');
+    assert.doesNotMatch(client.logged, /\[error-reporter\] request \/dashboard/, 'and reported once, whatever stages it crosses');
+
+    // The same fault reached the other way: a `<form action={serverAction}>` post, which is what a browser
+    // sends before hydration and with JavaScript off. Same id, so `decodeAction` resolves the same broken
+    // manifest entry — and the answer has to be the same one, since the request was no less valid for
+    // having no JavaScript behind it.
+    const form = await call(
+      new Request('https://rshono.example/dashboard', {
+        method: 'POST',
+        headers: { Origin: 'https://rshono.example', Accept: 'text/html', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ [`$ACTION_ID_${actionId}`]: '' }).toString(),
+      }),
+    );
+
+    assert.equal(form.res.status, 500, 'a no-JS form post meets the same broken deployment, so it gets the same status');
+    assert.doesNotMatch(form.body, /Bad Request/, 'and must not be told its request was malformed — it was not');
+    assert.match(form.res.headers.get('content-type'), /text\/html/, 'no client runtime is holding a tree here, so the error page is a document');
+    assert.match(form.body, /Something went wrong/, 'which is the app’s own error page, not the framework’s plain refusal');
+    assert.match(form.logged, /server action could not be loaded/, 'the operator gets the real error here too');
+    assert.match(form.logged, /\[error-reporter\] action \/dashboard/, 'under the same source: the deployment is what failed, not the request');
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('onServerError sees the errors the framework catches, tagged by source, without replacing the log', async () => {
@@ -632,13 +891,116 @@ test('onServerError sees the errors the framework catches, tagged by source, wit
 
   const logged = getOutput().slice(logsBefore);
   assert.match(logged, /\[error-reporter\] request \/api\/boom #[^:]+: Intentional endpoint failure/, 'a thrown endpoint must be reported');
-  assert.match(logged, /\[error-reporter\] (?:render|ssr) \/crash/, 'a failed render must be reported');
+  // `render`, by name. This used to accept `render|ssr` and so passed however many times the same fault
+  // was reported and under whichever source — while a thrown page component was in fact reported twice,
+  // as `render` and again as `ssr`, the second a message-free copy React redacted on its way across the
+  // payload boundary. An error tracker counting incidents saw two.
+  assert.match(logged, /\[error-reporter\] render \/crash/, 'a failed render is reported as a render');
+  assert.doesNotMatch(logged, /\[error-reporter\] ssr \/crash/, 'and once: the SSR layer must not report the payload’s stand-in for it');
+  assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'nor must the top-level handler it is re-thrown to');
   assert.match(logged, /\[rshono\] request error:/, 'stderr stays the fallback signal even with a reporter wired up');
   // The handler logs from inside `waitUntil` and reads `hono.var.requestId`, so both assertions above also
   // prove the two reach a handler at all — and the `request` one proves it for the source reported outside
   // the ambient context, where `getRequestContext()` throws. That was the whole gap: reporting is what this
   // hook exists for, and on a serverless target a report with nothing holding the invocation open is cut off.
   assert.doesNotMatch(logged, /#undefined/, 'the Hono context must carry the middleware variables, not an empty one');
+});
+
+test('a flight request for a page that throws is a 200 carrying the error, not a 500', async () => {
+  // The same failure, two statuses, and the asymmetry is load-bearing rather than an oversight: a flight
+  // response is committed as `200 text/x-component` the moment the render hands its stream back, before
+  // anything has been awaited, so no signal or fault can change it afterwards. The error rides the payload
+  // as a row and the client runtime paints its error UI, which is what makes a soft navigation onto a
+  // broken page recoverable instead of a blank tab. Buffering to learn the status first would cost every
+  // page its streaming — the trade M4 already settled — so this is pinned, not fixed.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?render=1`, { headers: { RSC: '1' } });
+  assert.equal(res.status, 200, 'the payload’s status is committed before the render can fail');
+  assert.match(res.headers.get('content-type'), /text\/x-component/);
+  assert.match(await res.text(), /^\d+:E\{/m, 'and the failure is a row in it');
+
+  // Which is why `onServerError()` is the place to count these: a 5xx watcher sees nothing here.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.match(getOutput().slice(logsBefore), /\[error-reporter\] render \/crash/, 'the reporting hook fires for both representations');
+});
+
+// `?boom=` makes the testbed's error page fail on demand too, the same way its 404 page does; see
+// components/500.tsx. The two pages are siblings and the framework has to treat their signals alike.
+test('an error page that redirects is honoured, not reported as a failure', async () => {
+  const logsBefore = getOutput().length;
+  for (const path of ['/crash?render=1&boom=redirect', '/api/boom?boom=redirect', '/unloadable?boom=redirect']) {
+    const res = await fetch(`${base}${path}`, { headers: { Accept: 'text/html' }, redirect: 'manual' });
+    assert.equal(res.status, 303, `${path}: a redirect from the error page is a redirect`);
+    assert.match(res.headers.get('location') ?? '', /\/users$/, path);
+  }
+  // The flight half is unchanged and is not this branch: an error page rendered as a payload has its
+  // response committed the instant the render hands its stream back, so the signal rides the payload as a
+  // digest and the client pushes the location. Asserted because the two representations having *different*
+  // mechanisms for the same redirect is the kind of thing that reads like a bug in six months.
+  const flight = await fetch(`${base}/unloadable?boom=redirect`, { headers: { RSC: '1' } });
+  assert.equal(flight.status, 500, 'the payload keeps the error page’s status — it is already committed');
+  assert.match(await flight.text(), /RSHONO_REDIRECT;303;%2Fusers/, 'and carries the redirect as a digest for the client to act on');
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+  assert.doesNotMatch(getOutput().slice(logsBefore), /the error page failed to render/, 'and not a render failure in the app’s error tracker');
+});
+
+test('an error page that throws notFound() stays a reported 500 — it has nowhere left to escalate to', async () => {
+  // The asymmetry is deliberate: honouring this one would render the `notFound` page from inside the
+  // error path, which can fail in its turn, and Hono calls `onError` inside its own catch.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?render=1&boom=notfound`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  assert.match(await res.text(), /500 — Internal Server Error/, 'the framework document answers when the error page will not');
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  // Reported, and as what it is. "the error page failed to render: NotFoundSignal" describes a bug in the
+  // page and sends its author looking for one; this is the framework declining to act on a signal, and the
+  // line has to say which.
+  const logged = getOutput().slice(logsBefore);
+  assert.match(logged, /notFound\(\) from the error page is not honoured/, 'the log says what happened, not that the page is broken');
+  assert.match(logged, /render the notFound page from inside the error path/, 'and why');
+  assert.doesNotMatch(logged, /the error page failed to render/, 'which is a different message, for a page that actually threw');
+});
+
+test('an error page that throws is a reported render failure, and the framework document still answers', async () => {
+  // The third `?boom=` shape and the one the message above must not be borrowed for: the error page has a
+  // bug. Nothing is left to escalate to — Hono calls `onError` inside its own catch — so this is answered
+  // where it is found.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?render=1&boom=throw`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  const html = await res.text();
+  assert.match(html, /500 — Internal Server Error/, 'the framework’s own document is the last resort');
+  assert.doesNotMatch(html, /Intentional error-page failure/, 'and it redacts in production like everything else');
+
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const logged = getOutput().slice(logsBefore);
+  // Two faults on one request — the page's and the error page's — and each is reported exactly once, as a
+  // `render`. The third line is the framework saying which of the two was the error page: stderr only,
+  // because what reaches it here is the payload's stand-in for a fault already reported.
+  assert.match(logged, /\[error-reporter\] render \/crash[^\n]*Intentional render failure/, 'the page’s own fault');
+  assert.match(logged, /\[error-reporter\] render \/crash[^\n]*Intentional error-page failure/, 'and the error page’s, each once');
+  assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'and nothing reported a third time');
+  assert.match(logged, /\[rshono\] the error page failed to render:/, 'with a line saying which render was the fallback');
+});
+
+test('an SSR-only failure is reported as `ssr`, once, and the error page answers it', async () => {
+  // The other half of the report rule. A `'use client'` component that throws on the server fails SSR on
+  // a payload the RSC layer never saw a problem with, so nothing has reported it — and this is the source
+  // that exists for it. It matters because the framework now *declines* to report an error carrying a
+  // payload digest, in three places; get that test wrong and it swallows this too, silently.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?ssr=1`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  const html = await res.text();
+  assert.match(html, /Something went wrong/, 'the app’s error page answers an SSR failure too');
+  assert.doesNotMatch(html, /Intentional SSR-only failure/, 'the real error detail must be redacted in prod');
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
+  const logged = getOutput().slice(logsBefore);
+  assert.match(logged, /\[error-reporter\] ssr \/crash #[^:]+: Intentional SSR-only failure/, 'an error that started in SSR is an ssr error');
+  assert.doesNotMatch(logged, /\[error-reporter\] render \/crash/, 'the RSC render was clean — nothing there to report');
+  assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'and re-throwing it to the top-level handler must not report it again');
 });
 
 test('<AsyncBoundary> renders its children on the happy path', async () => {
@@ -725,6 +1087,14 @@ test('prerendered pages build absolute URLs from siteUrl; a dynamic page uses th
   const flight = await (await fetch(`${base}/docs/getting-started`, { headers: { RSC: '1' } })).text();
   assert.match(flight, /https:\/\/rshono\.example\/docs\/getting-started/, 'useNavigation() reads the URL from this payload');
   assert.doesNotMatch(flight, /http:\/\/localhost/);
+
+  // And the query is frozen out of it with everything else — the same bytes answer every caller, whatever
+  // they asked for. This is the part `PageProps.url` used to send readers to `useNavigation()` over: both
+  // read the one `href` in this payload, so the hook is the same frozen URL rather than a way around it.
+  // `render: 'dynamic'` is the only server-side answer, which is what the JSDoc now says.
+  const withQuery = await (await fetch(`${base}/docs/getting-started?tab=x`, { headers: { RSC: '1' } })).text();
+  assert.doesNotMatch(withQuery, /tab=x/, 'a prerendered payload cannot carry the query the request made');
+  assert.equal(withQuery, flight, 'it is byte-identical to the query-less one — one file, handed to everyone');
 
   const dynamic = await (await fetch(`${base}/whoami`)).text();
   assert.doesNotMatch(dynamic, /rshono\.example/, 'siteUrl is a build-time concern only');
@@ -872,6 +1242,25 @@ test('no unguarded reference to process survives into the client bundle', () => 
   );
 });
 
+test('no development build of React reaches the server bundle', () => {
+  // Every React entry is a runtime branch on `process.env.NODE_ENV`, and DefinePlugin erases the dead half —
+  // except in the SSR layer, where `env-shadow-loader`'s prelude declares a module-scope `process` and
+  // DefinePlugin, which respects lexical scope, stops substituting. Both halves were bundled: six development
+  // builds, about half of `main.mjs`. The loader hands `process.env.NODE_ENV` back before shadowing it.
+  //
+  // Asserted against the source map's module list rather than the bundle text, because the entry wrappers'
+  // own source — `require('./cjs/…development.js')` inside a dead `else` — is in `sourcesContent` either way.
+  // It was size and cold start rather than behaviour: the prelude's env says `production`, so the right build
+  // always ran. On `cloudflare` it was half the Worker size budget.
+  const map = JSON.parse(readFileSync(join(TESTBED_DIST, 'server', 'main.mjs.map'), 'utf8'));
+  const development = map.sources.filter((source) => /\/cjs\/.*\.development\.js$/.test(source));
+  assert.deepEqual(development, [], 'a development React build cannot run in a production bundle — it is dead weight');
+  assert.ok(
+    map.sources.some((source) => /\/cjs\/react-dom-server\.node\.production\.js$/.test(source)),
+    'the production renderer still has to be there — an empty match would pass the assertion above for the wrong reason',
+  );
+});
+
 test('the server bundle ships a source map and the client bundle does not', () => {
   // The asymmetry is the whole decision. A server map never leaves the server and is what turns the
   // `onServerError` funnel — the error-tracker integration — from minified frames into real ones. A client map
@@ -997,6 +1386,49 @@ test('an action id the app does not export is a 400, not a fault or a prototype 
     assert.equal(res.status, 400, `"${id}" must be rejected as a bad request`);
   }
   assert.doesNotMatch(getOutput().slice(logsBefore), /TypeError/, 'an unknown action id must not fault into a stack trace');
+});
+
+test('an action body that will not decode is a 400, and never pages the error tracker', async () => {
+  // The decode used to sit outside the `try` that guards the action call, so a body React could not read
+  // escaped to `onError` as a `request` fault: a 500, the app's error page, and an `[error-reporter]` line
+  // per request. Action ids are public — bare string literals in `dist/static/chunks/*.js` — so that was an
+  // unauthenticated way for anyone to mint 500s and page whoever owns the error tracker.
+  //
+  // A malformed body is the same class of thing as the unknown-action-id 400 beside it: the caller is wrong,
+  // not the server. Each shape below fails in a different place — `request.text()`, `decodeReply`,
+  // `request.formData()`, and `decodeAction`'s own reference lookup for the form branch.
+  const id = serverActionId('Add user');
+  const logsBefore = getOutput().length;
+  const shapes = [
+    { what: 'garbage body', headers: { 'x-rsc-action': id, 'content-type': 'text/plain' }, body: 'oops' },
+    { what: 'empty body', headers: { 'x-rsc-action': id, 'content-type': 'text/plain' }, body: '' },
+    { what: 'bogus multipart', headers: { 'x-rsc-action': id, 'content-type': 'multipart/form-data; boundary=zz' }, body: 'garbage' },
+    {
+      what: 'unknown $ACTION_ID in the form branch',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: '$ACTION_ID_deadbeef=1',
+    },
+    // The form branch's other shape, and the one that keeps its 400 honest now that a *deployment* failure
+    // in the same `decodeAction` call answers 500: `useActionState` posts its id inside an encoded
+    // `$ACTION_<n>:0` field, so a body that fills it with nonsense fails where no module was ever asked for.
+    {
+      what: 'undecodable $ACTION_REF_ metadata in the form branch',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ $ACTION_REF_1: '', '$ACTION_1:0': 'not-a-flight-row', $ACTION_KEY: 'k1' }).toString(),
+    },
+  ];
+
+  for (const { what, headers, body } of shapes) {
+    const res = await fetch(`${base}/users`, { method: 'POST', headers: { Origin: base, ...headers }, body });
+    const text = await res.text();
+    assert.equal(res.status, 400, `${what} must be a bad request, not a server fault`);
+    assert.match(text, /Bad Request: malformed server action request/, `${what} should say which kind of bad request it is`);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stderr reaches us asynchronously
+  const logged = getOutput().slice(logsBefore);
+  assert.doesNotMatch(logged, /\[error-reporter\]/, 'a client sending a bad body must not reach the error tracker');
+  assert.doesNotMatch(logged, /request error/, 'nor be logged as a request fault');
 });
 
 test('the body-size cap covers endpoint routes and the server sub-app, not just actions', async () => {

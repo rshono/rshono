@@ -71,3 +71,16 @@ export async function signup(_prev: SignupState, formData: FormData): Promise<Si
   getRequestContext().cookies.set('welcomed', encodeURIComponent(user.name), { path: '/', httpOnly: true });
   return { message: `Welcome aboard, ${user.name}! (user #${user.id})` };
 }
+
+/**
+ * The *other* shape a form action takes, and the one nothing else here covers: a server component renders
+ * `<form action={subscribe}>`, so React posts a single `$ACTION_ID_<id>` field and there is no
+ * `useActionState` and no form state to decode. The three forms above are all the `useActionState` shape.
+ *
+ * One argument, the form's own data, because that is what React binds for this shape.
+ */
+export async function subscribe(formData: FormData): Promise<void> {
+  const email = field(formData, 'email');
+  if (!email.includes('@')) return;
+  getRequestContext().cookies.set('subscribed', email, { path: '/', httpOnly: true });
+}

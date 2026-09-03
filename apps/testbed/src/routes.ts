@@ -11,6 +11,12 @@ export const routes = defineRoutes({
       component: () => import('./components/signup'),
     },
     {
+      // A form a server component renders, posted as a single `$ACTION_ID_` field — the no-`useActionState`
+      // shape, which nothing else in this app exercises. See `subscribe` in src/actions.ts.
+      path: '/subscribe',
+      component: () => import('./components/subscribe'),
+    },
+    {
       path: '/crash',
       component: () => import('./components/crash'),
     },
@@ -83,6 +89,16 @@ export const routes = defineRoutes({
       // answer every method nobody asked it to.
       method: ['get', 'delete'],
       server: () => import('./session'),
+    },
+    {
+      type: 'endpoint',
+      // A cross-site form post — the arrival shape of SAML ACS, OIDC `response_mode=form_post` and most
+      // payment-gateway returns. A page route refuses every one of those, before the body is read, because
+      // a form post to a page is how a server action is called. An endpoint is the documented way to take
+      // one: it calls its handler directly and never reaches the page renderer.
+      path: '/api/acs',
+      method: 'post',
+      server: () => import('./acs'),
     },
     {
       type: 'endpoint',

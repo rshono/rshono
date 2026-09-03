@@ -3,7 +3,12 @@ dist/
 # `rshono dev`'s build output, kept apart from `dist/` so the two commands cannot overwrite each other.
 .rshono/
 .vercel/
+# Scaffolded into the project by the first `--deploy cloudflare` build and then left alone — so it is a
+# contributor's local file, and the cloudflare suite asserts on the one the build writes.
+apps/*/wrangler.jsonc
 *.tsbuildinfo
+# Raw V8 coverage from the on-demand hot-path measurement — see the README's Testing section.
+.coverage-e2e/
 .DS_Store
 .env*
 test-results/
@@ -11,3 +16,6 @@ playwright-report/
 # Throwaway app copies the minimal-app suite builds inside the fixture — see `appWithRoutes`. Removed
 # when the run ends; ignored so a killed run cannot leave one staged.
 packages/core/test/fixtures/minimal-app/throwaway-*/
+# The same, for the copy of the server bundle prod.test.mjs breaks to imitate a partial deploy. Inside the
+# testbed because the bundle leaves one dependency external, so it has to resolve `node_modules` from here.
+apps/testbed/drift-*/

@@ -1,7 +1,21 @@
 import type { ErrorPageProps } from '@rshono/core';
+import { notFound, redirect } from '@rshono/core/server';
 import { Layout } from './layout';
 
-export default function ErrorPage({ error }: ErrorPageProps) {
+export default function ErrorPage({ error, url }: ErrorPageProps) {
+  // The `notFound` page's `?boom=` twin, and the same two shapes: `?boom=redirect` sends the visitor
+  // somewhere else — "that record is gone, go to the list" — and `?boom=notfound` throws the other signal.
+  // The first is honoured, because nothing is committed when it arrives and answering a redirect cannot
+  // fail. The second is not: it would render the `notFound` page from inside the error path, which can fail
+  // in its turn with nowhere left to escalate to, so it stays a reported 500.
+  const boom = url.searchParams.get('boom');
+  if (boom === 'redirect') redirect('/users');
+  if (boom === 'notfound') notFound();
+  // And the third shape, which is neither: the error page itself has a bug. Nothing is left to escalate to,
+  // so the framework's own 500 document answers and the failure is reported as the render failure it is —
+  // the message the two above must *not* get.
+  if (boom === 'throw') throw new Error('Intentional error-page failure.');
+
   return (
     <Layout title="Something went wrong — rshono">
       <div className="page">

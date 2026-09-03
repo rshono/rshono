@@ -41,21 +41,24 @@ export const APP_ENV = {
  * `csrf()`, `bodyLimit()`, `secureHeaders()` — is read from the environment at start instead, and
  * needs no build of its own.
  */
-export function buildApp(dir, { config, args = [] } = {}) {
+export function buildApp(dir, { config, args = [], env = {} } = {}) {
   const result = spawnSync(process.execPath, [CLI, 'build', ...(config ? ['--config', config] : []), ...args], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, ...APP_ENV },
+    env: { ...process.env, ...APP_ENV, ...env },
     timeout: 180_000,
   });
   if (result.status !== 0) {
     throw new Error(`build failed (${result.status}):\n${result.stdout}\n${result.stderr}`);
   }
-  return result.stdout;
+  // Both streams, the way {@link runCli} returns them: a build says what it did on stdout and warns about it
+  // on stderr, and a test asserting on what the build said wants the pair. Concatenated rather than
+  // interleaved — which of them a line landed on is not what any of these assert.
+  return `${result.stdout ?? ''}${result.stderr ?? ''}`;
 }
 
-export function buildTestbed(config) {
-  return buildApp(TESTBED_DIR, { config });
+export function buildTestbed(config, { env } = {}) {
+  return buildApp(TESTBED_DIR, { config, env });
 }
 
 /**
@@ -86,7 +89,12 @@ export function runCli(dir, args, { env = {}, timeoutMs = 60_000 } = {}) {
  * is keyed by specifier, so importing twice without one hands back the previous build.
  */
 export function importServerBundle(cacheKey) {
-  return import(`${pathToFileURL(join(TESTBED_DIST, 'server', 'main.mjs')).href}?${cacheKey}`);
+  return importAppBundle(TESTBED_DIR, cacheKey);
+}
+
+/** {@link importServerBundle} for any app directory — the fixtures included. */
+export function importAppBundle(dir, cacheKey) {
+  return import(`${pathToFileURL(join(dir, 'dist', 'server', 'main.mjs')).href}?${cacheKey}`);
 }
 
 /** Runs `rshono <command>` in `dir` and resolves once it reports the address it is listening on. */

@@ -20,6 +20,8 @@ on:
       - '.github/workflows/ci.yml'
       # One config governs every package, so a rule change is a change to all of them.
       - 'eslint.config.mjs'
+      - '.prettierrc.json'
+      - '.prettierignore'
       # It decides the line endings every file is checked out with, which the suites read off disk.
       - '.gitattributes'
   pull_request:
@@ -31,6 +33,8 @@ on:
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
       - 'eslint.config.mjs'
+      - '.prettierrc.json'
+      - '.prettierignore'
       - '.gitattributes'
 
 concurrency:
@@ -68,6 +72,15 @@ jobs:
       # One config, one pass, every package.
       - name: Lint
         run: pnpm lint
+
+      # Beside the linter, because a formatter nothing enforces is one the tree drifts away from — which is
+      # exactly what had happened: five files were unformatted, two of them written by a generator and now
+      # in .prettierignore, where a formatter and a generator cannot argue over the same bytes.
+      #
+      # It checks the whole tree, but this workflow only starts for the paths at the top of the file — so a
+      # change confined to, say, the website is still formatted by whoever runs `pnpm format`, not by this.
+      - name: Check formatting
+        run: pnpm format:check
 
   test:
     name: test (node ${{ matrix.node }}, ${{ matrix.os }})
@@ -160,6 +173,9 @@ jobs:
       #
       # It measures what the suite reaches *in process*. The e2e suites run the app in a child process, so
       # what they exercise does not count towards it, and neither does the browser-only client runtime.
+      # That half is measurable on demand — see the recipe in the package README's Testing section, which
+      # remaps the testbed bundle's coverage through its source map — and the floors here are deliberately
+      # loose *because* they cannot see it: tightening them would ratchet the build tooling alone.
       - name: Test with a coverage floor
         run: pnpm --filter @rshono/core test:coverage
 

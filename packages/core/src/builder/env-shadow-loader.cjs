@@ -62,6 +62,29 @@ const MENTIONS_PROCESS = /\bprocess\b/;
 const GLOBAL_PROCESS = /\b(?:globalThis|global|self)\s*(?:\?\.|\.)?\s*(?:process\b|\[\s*(['"`])process\1\s*\])/;
 
 /**
+ * A free `process.env.NODE_ENV` read — the one expression the prelude has to hand back to the optimiser —
+ * and the three places that same text can sit without being one.
+ *
+ * The last alternative is the target. The lookbehind rejects a member read off something else
+ * (`this.process.env.NODE_ENV`, `foo.process…`) and a longer identifier (`myprocess`); the trailing `\b`
+ * rejects `NODE_ENVIRONMENT`. That is the shape DefinePlugin substitutes, minus the ones it also declines —
+ * an optional chain and a computed key are left alone here exactly as they are left alone there.
+ *
+ * The alternatives ahead of it are what keeps this a substitution of *code*. DefinePlugin works on the parsed
+ * module and so cannot rewrite a string; this loader is text, and without them
+ * `throw new Error('set process.env.NODE_ENV')` would come out as `throw new Error('set "production"')`.
+ * Comments come first so an apostrophe in one (`// don't`) cannot open a string that swallows the code after
+ * it, then strings, then templates.
+ *
+ * It is a scanner, not a parser, and two things are outside it: a regex literal spelled with unescaped dots
+ * (`/process.env.NODE_ENV/`), and an interpolation inside a template, which is consumed with the template
+ * around it. The first is the residual risk and a strange thing to write; the second only declines a
+ * substitution that would have been valid, which costs bytes and changes nothing. Any position it gets wrong
+ * leaves the text exactly as a bare `.replace()` would have, so this can only improve on one.
+ */
+const NODE_ENV_SCAN = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|(['"])(?:\\[\s\S]|(?!\1)[^\\\n])*\1|`(?:\\[\s\S]|[^\\`])*`|(?<![.$\w])process\.env\.NODE_ENV\b/g;
+
+/**
  * Shadows `process.env` with the PUBLIC_-only view inside SSR-layer modules, so a secret read from a
  * `'use client'` component renders empty on the server rather than leaking into the HTML stream — and SSR
  * keeps agreeing with hydration, which sees the same view via DefinePlugin.
@@ -74,7 +97,7 @@ module.exports = function envShadowLoader(source) {
   // Two steps rather than the regex alone: this loader sees every module in the bundle, and most of them do
   // not contain the substring at all, which `includes` settles far more cheaply than a scan for word breaks.
   if (!source.includes('process') || !MENTIONS_PROCESS.test(source)) return source;
-  const { prelude, layer, appSrcPrefix } = this.getOptions();
+  const { prelude, layer, appSrcPrefix, nodeEnv } = this.getOptions();
   if (!this._module) {
     throw new Error(
       "[rshono] env-shadow-loader could not read the module's layer (Rspack's `this._module` is unavailable). " +
@@ -94,6 +117,23 @@ module.exports = function envShadowLoader(source) {
           'one, and it ends up in the HTML. Read `process.env` directly instead.',
       ),
     );
+  }
+
+  // Hand `process.env.NODE_ENV` back to the optimiser before the prelude takes it away. DefinePlugin — the
+  // pass that erases `if (process.env.NODE_ENV === 'production')` and everything on the dead side of it —
+  // respects lexical scope, and the prelude below declares a module-scope `process`. So without this, every
+  // React entry wrapper in this layer stays a runtime branch and *both* halves are bundled: six development
+  // builds of react / react-dom / react-server-dom-rspack, about half of `dist/server/main.mjs`.
+  //
+  // Substituting is not a behaviour change. `NODE_ENV` is the one key of the prelude's own `env` literal that
+  // is not read from the host environment — it is this build's mode — so the value written here is the value
+  // the shadow would have returned anyway, and the shadow's security property is untouched.
+  //
+  // Textual, like the prelude insertion beside it, but not blindly so: {@link NODE_ENV_SCAN} walks the
+  // comments, strings and templates as well, and hands back everything that is not code untouched.
+  if (nodeEnv) {
+    const literal = JSON.stringify(nodeEnv);
+    source = source.replace(NODE_ENV_SCAN, (match) => (match.startsWith('process') ? literal : match));
   }
 
   const prologue = source.match(DIRECTIVE_PROLOGUE)[0];

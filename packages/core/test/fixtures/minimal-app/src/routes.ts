@@ -11,4 +11,6 @@ export const routes = defineRoutes([
   { path: '/manual', component: manualPage },
   { path: '/files/*', component: () => import('./pages/wildcard') },
   { path: '/boom', component: () => import('./pages/boom') },
+  // The one endpoint route here, and it is here for what it *returns* — see the file.
+  { type: 'endpoint', path: '/redirect', method: 'get', server: () => import('./redirect') },
 ]);

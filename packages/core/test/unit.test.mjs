@@ -3,23 +3,25 @@
 // check that dist is importable from plain Node.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { scanPageFiles } from '../dist/builder/page-files.js';
 import { checkReactVersions } from '../dist/builder/react-versions.js';
 import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
-import { appendVary, etagMatches } from '../dist/server/headers.js';
+import { publicRouteCollisions } from '../dist/deploy/public-paths.js';
+import { appendVary, etagMatches, varyWith } from '../dist/server/headers.js';
 import { loadConfig } from '../dist/server/load-config.js';
 import { parsePort, resolveServerConfig } from '../dist/server/server-config.js';
-import { createPageCache, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
+import { createPageCache, PRERENDER_NONCE_HEADER, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
 import { prerenderStaticRoutes, readPrerendered, resolveSiteOrigin } from '../dist/server/ssg.js';
 import { injectFlightPayload } from '../dist/runtime/flight-inject.js';
-import { asksForRsc, createRscRequest, isActionRequest, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
+import { asksForRsc, createRscRequest, isActionRequest, isBrowserFormPost, parseRenderRequest, wantsRsc } from '../dist/runtime/request.js';
 import { isControlDigest, parseRedirectDigest, RedirectSignal } from '../dist/runtime/control.js';
 import {
   beginPageRender,
@@ -710,6 +712,36 @@ describe('appendVary', () => {
   });
 });
 
+describe('varyWith', () => {
+  // The pure half, and what the response floor uses: it cannot write through the bag it read the header
+  // from, so it needs the answer as a value — and `null` for "nothing to write" is what keeps it from
+  // rebuilding a response it had no reason to touch.
+  test('answers the header to write, or null when there is nothing to write', () => {
+    assert.equal(varyWith(null, 'RSC'), 'RSC', 'no Vary at all: the value is the whole header');
+    assert.equal(varyWith('Accept', 'RSC'), 'Accept, RSC', 'what is already there survives');
+    assert.equal(varyWith('accept, rsc', 'RSC'), null, 'already listed, case aside');
+    assert.equal(varyWith(' * ', 'RSC'), null, '* already means "never reuse"');
+  });
+
+  test('answers a list, not a string: a `*` anywhere counts, and an empty header is nothing to append to', () => {
+    // Both questions this asks are about the entries. `*` used to have to be the *whole* header to be seen,
+    // so a list that already said "never reuse" got another field name added to it for no effect.
+    assert.equal(varyWith('Accept-Encoding, *', 'RSC'), null, '* covers every field, wherever it sits in the list');
+    assert.equal(varyWith('*, Accept-Encoding', 'RSC'), null);
+
+    // And the one that mattered: an app can set `vary: ''` — building the header from a list that came out
+    // empty is the obvious way — and Hono keeps it. Appending to it produced `, RSC`, an empty list element
+    // RFC 9110 tells a sender not to generate. A cache strict enough to reject that drops the `Vary`, and a
+    // dropped `Vary: RSC` is a flight payload served to a browser asking for the document.
+    assert.equal(varyWith('', 'RSC'), 'RSC', 'no entries to keep, so the value is the whole header');
+    assert.equal(varyWith('   ', 'RSC'), 'RSC');
+    assert.equal(varyWith(' , ', 'RSC'), 'RSC', 'separators without field names are not entries either');
+
+    // What must not change: a header with anything real in it comes back as its author wrote it.
+    assert.equal(varyWith('Accept , Accept-Encoding', 'RSC'), 'Accept , Accept-Encoding, RSC', 'spelling and spacing survive');
+  });
+});
+
 describe('etagMatches', () => {
   const etag = '"abc123"';
   test('matches exact, weak and listed validators', () => {
@@ -763,6 +795,46 @@ describe('ssgFilePath', () => {
     // `%2F` that would otherwise smuggle a second segment into one param value.
     for (const path of ['/docs/:slug', '/files/*', '/docs/a%2Fb', '/docs/a%5Cb', '/docs/a?b', '/docs/a|b', '/docs//x']) {
       assert.equal(ssgFilePath(path), null, `${path} must not resolve to a file`);
+    }
+  });
+
+  // Two Windows rules a macOS or Linux build cannot discover for itself, so they are checked rather than
+  // written down as a caveat. The reserved names fail `mkdir` with an `EINVAL` naming a path the author
+  // never wrote; the trailing dot and space are worse — Win32 *strips* them, so the page is written where
+  // no request will look for it, which is the exact failure this function exists to prevent.
+  test('refuses the segment names Windows cannot store', () => {
+    for (const path of [
+      '/docs/con',
+      '/docs/NUL',
+      '/docs/com1',
+      '/docs/LPT9',
+      '/docs/aux',
+      '/docs/prn',
+      '/docs/con.txt', // an extension does not make it a file name
+      '/docs/Con.HTML',
+      '/docs/com0',
+      '/docs/x.', // trailing dot: stored as `docs/x`
+      '/docs/x%20', // trailing space: the same
+      '/docs/...', // all dots, so all stripped
+    ]) {
+      assert.equal(ssgFilePath(path), null, `${path} must not resolve to a file`);
+    }
+  });
+
+  test('leaves the names that only look reserved alone', () => {
+    // The refusal has to be exact: a false one fails a build that was correct, and these are ordinary
+    // slugs. `console` starts with `con`, `comic` with `com`, and a dot or space *inside* a name is fine.
+    for (const [path, expected] of [
+      ['/docs/console', 'docs/console/index.html'],
+      ['/docs/contents', 'docs/contents/index.html'],
+      ['/docs/comic', 'docs/comic/index.html'],
+      ['/docs/nullable', 'docs/nullable/index.html'],
+      ['/docs/com', 'docs/com/index.html'],
+      ['/docs/v1.2', 'docs/v1.2/index.html'],
+      ['/docs/a%20b', 'docs/a b/index.html'],
+      ['/docs/.hidden', 'docs/.hidden/index.html'],
+    ]) {
+      assert.equal(ssgFilePath(path), expected, path);
     }
   });
 
@@ -1231,8 +1303,50 @@ describe('prerenderStaticRoutes', () => {
     }
   });
 
+  // A page under a nonce-based CSP is prerendered in half: the flight payload is served from disk, the
+  // document is re-rendered per request because it has to carry a fresh nonce. The build used to report all
+  // three testbed pages as "prerendered" while the deployment read the documents of none of them.
+  test('reports a page whose document a CSP nonce will re-render as flight-only, and says so once', async () => {
+    const ssgDir = tempDir();
+    const warnings = [];
+    const warn = console.warn;
+    console.warn = (message) => warnings.push(String(message));
+    let result;
+    try {
+      result = await prerenderStaticRoutes({
+        ssgDir,
+        routes: [
+          { path: '/nonced', render: 'static', component: async () => ({ default: () => null }) },
+          { path: '/plain', render: 'static', component: async () => ({ default: () => null }) },
+        ],
+        // The framework marks the document it rendered when the app minted a nonce for that path — what
+        // `secureHeaders({ …NONCE })` does on every request, and so at build time too.
+        fetch: (request) => {
+          const response = okResponse(request);
+          if (new URL(request.url).pathname === '/nonced' && request.headers.get('RSC') !== '1') {
+            response.headers.set(PRERENDER_NONCE_HEADER, '1');
+          }
+          return response;
+        },
+      });
+    } finally {
+      console.warn = warn;
+    }
+
+    assert.deepEqual(result.written, ['/nonced', '/plain'], 'both pages are still prerendered — the flight payload is served');
+    assert.deepEqual(result.flightOnly, ['/nonced'], 'only the page under the nonce is half-served');
+    assert.match(warnings.join('\n'), /1 page\(s\) mint a CSP nonce/, 'and the build says so');
+    assert.equal(warnings.filter((line) => line.includes('mint a CSP nonce')).length, 1, 'once, not per page');
+
+    // Written all the same: the policy may be off where this is deployed, and then the document is served.
+    assert.ok(await readPrerendered(ssgDir, '/nonced'), 'the document is still on disk');
+    assert.ok(await readPrerendered(ssgDir, '/nonced', 'flight'), 'and so is the payload that will be read');
+  });
+
   test('fails the build for a value it cannot store as one file, rather than writing a page nothing serves', async () => {
-    for (const slug of ['a b/c', 'a:b', '..']) {
+    // `con` and `x.` are the two Windows rules: the first fails `mkdir` there with an error naming a path
+    // nobody wrote, the second is stored under the trimmed name, so the page lands where no request looks.
+    for (const slug of ['a b/c', 'a:b', '..', 'con', 'NUL', 'x.', 'x ']) {
       await assert.rejects(
         prerenderStaticRoutes({
           ssgDir: tempDir(),
@@ -1429,6 +1543,62 @@ describe('deploy target resolution', () => {
       assert.throws(() => resolveDeployPreset({ env: key }), /unknown deploy target/, `${key} must not resolve to a preset`);
       assert.equal(deployHintFor(key), null, `${key} has no deploy hint`);
     }
+  });
+});
+
+describe('publicRouteCollisions', () => {
+  // `mountPublicFallback` puts `public/` after every route, so it answers only what no route claimed — the
+  // whole story on `node` and `aws-lambda`, and not on the two targets with a CDN in front, where `public/`
+  // is part of the static output and the platform answers from it *before* the app runs. The framework
+  // cannot reorder either one, so the build says so; this is the comparison it says it from.
+  const page = (path) => ({ path, component: async () => ({ default: () => null }) });
+
+  /** A `public/` tree on disk, since the check reads one. */
+  function publicTree(files) {
+    const dir = mkdtempSync(join(tmpdir(), 'rshono-public-'));
+    for (const file of files) {
+      mkdirSync(join(dir, dirname(file)), { recursive: true });
+      writeFileSync(join(dir, file), 'x');
+    }
+    return dir;
+  }
+
+  const collisionsFor = (files, routes, htmlExtensionless = false) => publicRouteCollisions(publicTree(files), routes, { htmlExtensionless });
+
+  test('finds a file on a route’s own path', () => {
+    const found = collisionsFor(['about.html'], [page('/'), page('/about.html')]);
+    assert.equal(found.length, 1);
+    assert.match(found[0], /public\/about\.html answers \/about\.html, which a page route claims/);
+  });
+
+  test('resolves an index.html to the directory it answers, not to its filename', () => {
+    // The collision on the one path every app has. Keyed on filenames alone this would be invisible:
+    // nothing has a route at `/index.html`.
+    assert.match(collisionsFor(['index.html'], [page('/')])[0], /answers \//);
+    assert.match(collisionsFor(['docs/index.html'], [page('/docs')])[0], /answers \/docs/);
+    assert.match(collisionsFor(['docs/index.html'], [page('/docs/')])[0], /answers \/docs\//, 'with and without the trailing slash');
+  });
+
+  test('drops the .html only where the platform’s own handling does', () => {
+    // Cloudflare's Workers Assets defaults to `auto-trailing-slash`, so `about.html` answers `/about`
+    // there. Vercel serves it at `/about.html` and adds `/about` only with `cleanUrls`, which is the
+    // project's setting — warning about it anyway would be a warning about a collision the platform
+    // does not have, and a check that cries wolf is one every app learns to ignore.
+    assert.equal(collisionsFor(['about.html'], [page('/about')], true).length, 1, 'cloudflare');
+    assert.deepEqual(collisionsFor(['about.html'], [page('/about')], false), [], 'vercel');
+  });
+
+  test('says nothing when nothing collides', () => {
+    assert.deepEqual(publicRouteCollisions(null, [page('/')], { htmlExtensionless: true }), [], 'an app with no public/');
+    assert.deepEqual(collisionsFor(['robots.txt', 'favicon.svg', 'img/logo.png'], [page('/'), page('/about')], true), []);
+    // A parameterised route is not compared: matching one needs the router rather than a set, and the
+    // failure mode of guessing is a warning about a build that was fine.
+    assert.deepEqual(collisionsFor(['docs/x.html'], [page('/docs/:slug'), page('/files/*')], true), []);
+  });
+
+  test('names the kind of route, since an endpoint and a page are fixed differently', () => {
+    const endpoint = { type: 'endpoint', path: '/api/health', server: async () => ({ handler: () => null }) };
+    assert.match(collisionsFor(['api/health'], [endpoint])[0], /which an endpoint route claims/);
   });
 });
 
@@ -1709,6 +1879,33 @@ describe('parseRenderRequest', () => {
     });
   });
 
+  test('isBrowserFormPost reads x-rsc-action the same way the classifier does', () => {
+    // The two have to agree about this header, because one decides what is *refused* and the other decides
+    // what is *decoded*: a POST the classifier sends down the form branch must be a POST the cross-site
+    // refusal has already looked at. A present-but-empty `x-rsc-action` was the shape they disagreed on —
+    // `has()` here said "the client-initiated shape, already covered by the preflight it would need", `get()`
+    // there found nothing to dispatch on, and the request ran its action with the check skipped. Not
+    // reachable from a browser, since an empty header still needs that preflight, but a security predicate
+    // that fails open on a shape nothing sends today is one that fails open the day something does.
+    const post = (headers, body = 'x=1') => new Request(BASE, { method: 'POST', headers, body });
+    const formish = { 'content-type': 'application/x-www-form-urlencoded' };
+
+    assert.equal(isBrowserFormPost(post(formish)), true, 'the plain form post');
+    assert.equal(isBrowserFormPost(post({ ...formish, 'x-rsc-action': 'abc' })), false, 'a real action id is the unforgeable shape');
+    assert.equal(isBrowserFormPost(post({ ...formish, 'x-rsc-action': '' })), true, 'an empty one names no action and forges nothing');
+
+    // Stated as the invariant rather than as three cases: every POST the classifier calls a `form-action`
+    // is one this returns true for, so the refusal cannot be routed around by the header the classifier
+    // ignores. `text/plain` is deliberately outside it in the other direction — refused here, never decoded
+    // there — which is why this is a one-way implication.
+    for (const headers of [formish, { ...formish, 'x-rsc-action': '' }, { 'content-type': 'multipart/form-data; boundary=x' }]) {
+      const request = post(headers);
+      if (parseRenderRequest(request).kind === 'form-action') {
+        assert.equal(isBrowserFormPost(request), true, `${JSON.stringify(headers)} decodes as a form action, so it must be checked as one`);
+      }
+    }
+  });
+
   test('asksForRsc reads the same header without parsing the rest', () => {
     // The prerendered-page path takes it on every GET, so it never builds a `RenderRequest` it would drop.
     assert.equal(asksForRsc(new Request(BASE, { headers: { RSC: '1' } })), true);
@@ -1802,13 +1999,24 @@ describe('the security-middleware build warning', () => {
 });
 
 describe('the env-shadow prelude', () => {
-  /** The prelude the builder actually generates, read off the rule that carries it. */
-  function generatedPrelude() {
-    const [, serverConfig] = createConfigs({ rootDir: MINIMAL_APP_DIR, isDev: false, config: {}, preset: NODE_PRESET });
+  /** The loader options the builder actually generates, read off the rule that carries them. */
+  function generatedOptions({ isDev = false } = {}) {
+    const [, serverConfig] = createConfigs({ rootDir: MINIMAL_APP_DIR, isDev, config: {}, preset: NODE_PRESET });
     const rule = serverConfig.module.rules.find((entry) => entry.use?.[0]?.loader?.includes('env-shadow-loader'));
     assert.ok(rule, 'the SSR env-shadow rule has to be in the server config');
-    return rule.use[0].options.prelude;
+    return rule.use[0].options;
   }
+
+  const generatedPrelude = () => generatedOptions().prelude;
+
+  test('tells the loader the mode it is building for, so the prelude does not cost dead-code elimination', () => {
+    // Without this the SSR layer bundles React's development builds beside the production ones — the prelude
+    // shadows `process`, and DefinePlugin will not substitute through a local binding. The two have to agree:
+    // the value the loader writes is the value the prelude's own `env` carries.
+    assert.equal(generatedOptions({ isDev: false }).nodeEnv, 'production');
+    assert.equal(generatedOptions({ isDev: true }).nodeEnv, 'development');
+    assert.match(generatedOptions({ isDev: false }).prelude, /"NODE_ENV":"production"/);
+  });
 
   test('shadows env while leaving the rest of process reachable', () => {
     // The prelude replaces the whole `process` binding for the module it rewrites, and `react-dom/server` is in
@@ -1834,6 +2042,55 @@ describe('the env-shadow prelude', () => {
   });
 });
 
+describe('page-entry-loader', () => {
+  const pageEntryLoader = createRequire(import.meta.url)('../dist/builder/page-entry-loader.cjs');
+  const BODY = '\nexport default function Page() {\n  return null;\n}\n';
+  /** Whether the loader left the module alone, which it must whenever the module declares a directive itself. */
+  const untouched = (head) => pageEntryLoader(head + BODY) === head + BODY;
+
+  test('leaves a module that already declares one of the three directives alone, wherever in the prologue it is', () => {
+    // The whole prologue, not only its first entry. A page opening `'use strict';` above its `'use client';`
+    // used to get `'use server-entry';` prepended — and the injected directive is the one the compiler acts
+    // on, so the page built clean and shipped instead of being refused by `assertPageModule`.
+    for (const head of [
+      "'use client';",
+      "'use server-entry';",
+      '"use server"',
+      "'use strict';\n'use client';",
+      '"use strict";\n"use client";',
+      "'use strict'\n'use client'",
+      "// banner\n/* block */\n'use strict';\n// why\n'use client';",
+      // Not one of the three, and not a list this has to be taught: `'use cache'` is React's, and the check
+      // is written as "any directive that is not those three".
+      "'use cache';\n'use server-entry';",
+      // A trailing comment used to end the match, because the old pattern required `;`, a newline or the end
+      // of the source right after the closing quote.
+      "'use client' // still a client page",
+    ]) {
+      assert.equal(untouched(head), true, `${JSON.stringify(head)} declares its own directive`);
+    }
+  });
+
+  test('prepends the directive to a page that declares none', () => {
+    for (const head of ['', "'use strict';", '// a plain page']) {
+      assert.equal(pageEntryLoader(head + BODY), `'use server-entry';${head}${BODY}`, `${JSON.stringify(head)} needs the directive`);
+    }
+  });
+
+  test('reads directives structurally, so a comment that mentions one is not one', () => {
+    // The regression the wider match must not buy: a page that says in a comment what it used to be, or a
+    // module-level string, would otherwise be left without the directive it needs — and fail the build.
+    for (const head of [
+      "// this page used to be 'use client';",
+      "/* 'use client' lived here */",
+      "const label = 'use client';",
+      "'use clientish';",
+    ]) {
+      assert.equal(untouched(head), false, `${JSON.stringify(head)} is not a directive`);
+    }
+  });
+});
+
 describe('env-shadow-loader', () => {
   const envShadowLoader = createRequire(import.meta.url)('../dist/builder/env-shadow-loader.cjs');
   const PRELUDE = 'const process = { env: {} }; ';
@@ -1843,10 +2100,10 @@ describe('env-shadow-loader', () => {
    * The slice of Rspack's loader context this loader reads. `layer` is the layer the *module* is in, and
    * `resourcePath` decides whether a module counts as the app's own source for the warning below.
    */
-  const run = (source, { layer = 'ssr', resourcePath = join(APP_SRC, 'component.tsx'), warnings } = {}) =>
+  const run = (source, { layer = 'ssr', resourcePath = join(APP_SRC, 'component.tsx'), warnings, nodeEnv } = {}) =>
     envShadowLoader.call(
       {
-        getOptions: () => ({ prelude: PRELUDE, layer: 'ssr', appSrcPrefix: APP_SRC + sep }),
+        getOptions: () => ({ prelude: PRELUDE, layer: 'ssr', appSrcPrefix: APP_SRC + sep, nodeEnv }),
         _module: { layer },
         resourcePath,
         emitWarning: (warning) => warnings?.push(warning.message),
@@ -1947,6 +2204,63 @@ describe('env-shadow-loader', () => {
   test('prepends to a module with no prologue at all', () => {
     const source = 'export const x = process.env.SECRET;';
     assert.equal(run(source), PRELUDE + source);
+  });
+
+  test('substitutes NODE_ENV before the prelude hides it from DefinePlugin', () => {
+    // The prelude declares a module-scope `process`, and DefinePlugin respects lexical scope — so every
+    // `if (process.env.NODE_ENV === 'production')` in this layer stayed a runtime branch and React's
+    // development builds were bundled beside the production ones. Substituting first hands the optimiser the
+    // one expression it needs back. Not a behaviour change: `NODE_ENV` is the build's mode, so the literal
+    // written here is the value the shadow would have returned anyway.
+    assert.equal(
+      run("if (process.env.NODE_ENV === 'production') { a(); } else { b(); }", { nodeEnv: 'production' }),
+      `${PRELUDE}if ("production" === 'production') { a(); } else { b(); }`,
+    );
+    assert.equal(run('export const x = process.env.NODE_ENV;', { nodeEnv: 'development' }), `${PRELUDE}export const x = "development";`);
+  });
+
+  test('substitutes code, and leaves the same text alone in a comment, a string or a template', () => {
+    // The substitution is textual where DefinePlugin's is not: DefinePlugin works on the parsed module and so
+    // cannot reach inside a string, and without a scan that walks the same tokens an SSR-layer module saying
+    // `throw new Error('set process.env.NODE_ENV')` would ship with its message rewritten.
+    const cases = [
+      ["throw new Error('set process.env.NODE_ENV first');", "throw new Error('set process.env.NODE_ENV first');"],
+      ['const s = "process.env.NODE_ENV";', 'const s = "process.env.NODE_ENV";'],
+      ['const t = `read process.env.NODE_ENV`;', 'const t = `read process.env.NODE_ENV`;'],
+      ['const x = 1; // process.env.NODE_ENV', 'const x = 1; // process.env.NODE_ENV'],
+      ['const x = 1; /* process.env.NODE_ENV */', 'const x = 1; /* process.env.NODE_ENV */'],
+      // An apostrophe in a comment must not open a string that swallows the code after it — the trap this
+      // kind of scan falls into, and why comments are matched ahead of strings.
+      ["const a = 1; // don't\nconst x = process.env.NODE_ENV;", 'const a = 1; // don\'t\nconst x = "production";'],
+      // …and an escaped quote must not close a string early, for the same reason.
+      ["const s = 'a\\'b'; const x = process.env.NODE_ENV;", "const s = 'a\\'b'; const x = \"production\";"],
+    ];
+    for (const [source, expected] of cases) {
+      assert.equal(run(source, { nodeEnv: 'production' }), PRELUDE + expected, source);
+    }
+  });
+
+  test('substitutes NODE_ENV only in the layer it shadows, and only when asked', () => {
+    const source = 'export const x = process.env.NODE_ENV;';
+    // The RSC layer gets no prelude, so DefinePlugin still reaches it there and this loader must not touch it.
+    assert.equal(run(source, { layer: 'rsc', nodeEnv: 'production' }), source);
+    // And with no `nodeEnv` configured the loader is the shadow and nothing more.
+    assert.equal(run(source), PRELUDE + source);
+  });
+
+  test('leaves NODE_ENV read off something other than the free process binding alone', () => {
+    // The same shapes DefinePlugin itself declines. Substituting a member read off another object would be
+    // rewriting an unrelated expression, and the shadow still answers all of these correctly at runtime.
+    // Asserted on the value not appearing rather than on the exact output, because `myprocess` never gets a
+    // prelude either — `\bprocess\b` turns it away one gate earlier.
+    for (const source of [
+      'export const x = this.process.env.NODE_ENV;',
+      'export const x = config.process.env.NODE_ENV;',
+      'export const x = myprocess.env.NODE_ENV;',
+      'export const x = process.env.NODE_ENVIRONMENT;',
+    ]) {
+      assert.ok(run(source, { nodeEnv: 'production' }).includes(source), `"${source}" must survive unrewritten`);
+    }
   });
 
   test('fails the build rather than shipping unshadowed when it cannot read the layer', () => {
@@ -2134,8 +2448,79 @@ describe('validateRoutesModule', () => {
     rejects([{ ...endpoint, path: '/' }, page], /already answers GET, POST \//, 'an endpoint shadows a page at the same path too');
   });
 
+  test('sees a dead route whose path is spelled differently from the one that shadows it', () => {
+    // The check used to key on the literal path string, so a dead route only had to be spelled differently
+    // to pass — exactly the build-exits-0-with-an-unreachable-route case it exists to prevent. Every pair
+    // below was confirmed against Hono 4.13 directly: the second route never wins for any request.
+    const at = (path) => ({ ...page, path });
+    for (const [table, expected, what] of [
+      [[at('/u/:id'), at('/u/:name')], /routes\[1\] \("\/u\/:name"\) would never run/, "a parameter's name is not part of the pattern"],
+      [[at('/posts/:y/:m'), at('/posts/:a/:b')], /routes\[1\] .* would never run/, 'two parameters, both renamed'],
+      [[at('/a/*'), at('/a/b')], /routes\[1\] \("\/a\/b"\) would never run/, 'a wildcard registered ahead of a concrete path'],
+      [[at('/a/*'), at('/a')], /routes\[1\] \("\/a"\) would never run/, 'a trailing wildcard answers its bare prefix too'],
+      [[at('/*'), at('/anything')], /routes\[1\] .* would never run/, 'a root wildcard claims everything after it'],
+      [[at('/u/:id/*'), at('/u/:name/x')], /routes\[1\] .* would never run/, 'both mechanisms at once'],
+      [[at('/a/*/c'), at('/a/:id/c')], /routes\[1\] .* would never run/, 'a `*` before the last segment is one segment, like a parameter'],
+      [[at('/a/:id?'), at('/a')], /routes\[1\] \("\/a"\) would never run/, 'an optional parameter answers the path without it'],
+    ]) {
+      rejects(table, expected, what);
+    }
+
+    // And says why, since two paths that look different reading as one route is the confusing part.
+    rejects([at('/u/:id'), at('/u/:name')], /Hono matches on the pattern, not the spelling/);
+    // An exact duplicate needs no explaining, so it does not get the sentence.
+    assert.throws(
+      () => validateRoutesModule([at('/u/:id'), at('/u/:id')]),
+      (error) => !error.message.includes('not the spelling'),
+      'an exact duplicate is self-explanatory',
+    );
+  });
+
+  test('compares a {regex} constraint as text, and stops there', () => {
+    const at = (path) => ({ ...page, path });
+    // Kept in the key, because a constraint *is* part of the pattern — so two spellings of one constraint
+    // are one route and the second is dead.
+    rejects([at('/a/:id{[0-9]+}'), at('/a/:n{[0-9]+}')], /routes\[1\] .* would never run/, 'the same constraint under two parameter names');
+    rejects(
+      [at('/a/:id{a/b}'), at('/a/:n{a/b}')],
+      /routes\[1\] .* would never run/,
+      'a constraint holding a slash is carried through, not interpreted',
+    );
+
+    // And this is the line: `[0-9]+` and `\d+` are the same language, the second route is dead, and the check
+    // accepts it. Deciding regex equivalence is not a route validator's job, and the failure mode is the
+    // safe one — an unreachable route slips through, a route that can still answer is never refused.
+    assert.doesNotThrow(() => validateRoutesModule([at('/a/:id{[0-9]+}'), at('/a/:id{\\d+}')]));
+  });
+
   test('leaves a route that still answers something alone', () => {
     for (const table of [
+      // A `{regex}` constraint *is* part of the pattern, so these are two routes and both can answer:
+      // `/a/7` goes to the first and `/a/xy` to the second.
+      [
+        { ...page, path: '/a/:id{[0-9]+}' },
+        { ...page, path: '/a/:name' },
+      ],
+      // Specific-behind-generic is the dead one; generic behind specific still answers everything else.
+      [
+        { ...page, path: '/a/b' },
+        { ...page, path: '/a/*' },
+      ],
+      // The wildcard's boundary is the `/` — `/a/*` does not answer `/ab`.
+      [
+        { ...page, path: '/a/*' },
+        { ...page, path: '/ab' },
+      ],
+      // `/a/:id?` answers `/a` as well as `/a/x`, so a bare `/a` ahead of it leaves it half its work.
+      [
+        { ...page, path: '/a' },
+        { ...page, path: '/a/:id?' },
+      ],
+      // A wildcard claims one subtree, not the table.
+      [
+        { ...page, path: '/a/*' },
+        { ...page, path: '/b/c' },
+      ],
       // One path split across two methods — an ordinary thing to write.
       [
         { ...endpoint, method: 'get' },
@@ -2153,6 +2538,25 @@ describe('validateRoutesModule', () => {
       ],
     ]) {
       assert.deepEqual(validateRoutesModule(table).routes, table);
+    }
+  });
+
+  test('refuses a route under the /_static prefix the framework mounts ahead of the table', () => {
+    // The failure this check exists to prevent, one prefix out of its reach: the shadow check compares the
+    // app's routes with each other, and `mountStaticAssets` registers `/_static` *before* any of them and
+    // ends in a terminal 404. So these built clean and then 404'd — on all four deploy targets and in dev.
+    const at = (path) => ({ ...page, path });
+    rejects([at('/_static')], /routes\[0\] \("\/_static"\) would never run — the framework serves the client bundle at \/_static/);
+    rejects([at('/_static/thing')], /would never run/, 'and anything below it');
+    rejects([{ ...endpoint, path: '/_static/api' }], /would never run/, 'an endpoint is mounted no earlier than a page');
+    rejects([at('/_static/*')], /would never run/, 'a wildcard under the prefix is dead the same way');
+    rejects([at('/_static')], /reserved on every deploy target and under `rshono dev`/, 'and says where it is reserved');
+
+    // The boundary is the `/`, and only a *literal* path is refused: a parameterised route that happens to
+    // match under the prefix loses those requests and answers everything else, which is the router's
+    // business rather than this rule's. Refusing one of these would fail a build that was correct.
+    for (const path of ['/_staticky', '/_static-files', '/:section/thing', '/*', '/x/_static']) {
+      assert.deepEqual(validateRoutesModule([at(path)]).routes[0].path, path, path);
     }
   });
 
@@ -2310,5 +2714,17 @@ describe('exit', () => {
       const cut = spawnWriting(bytes, 'process.exit(1);');
       assert.ok(cut.stderr.length < bytes, `a bare process.exit is what truncates (${cut.stderr.length} bytes)`);
     }
+  });
+
+  // The helper being right is half of it; every failure path in the CLI reaching it is the other half, and
+  // that is what drifted — four paths printed their one line and called `process.exit` directly, so the
+  // rule held for the paths that had been thought about and not for the ones added since. A structural pin
+  // rather than four spawns, because what matters is that there is no fifth.
+  test('nothing in the CLI calls process.exit except the helper that drains first', () => {
+    const cliDir = fileURLToPath(new URL('../dist/cli/', import.meta.url));
+    const offenders = readdirSync(cliDir)
+      .filter((name) => name.endsWith('.js') && name !== 'exit.js')
+      .filter((name) => /\bprocess\.exit\s*\(/.test(readFileSync(join(cliDir, name), 'utf8')));
+    assert.deepEqual(offenders, [], 'these must `return exit(code)` instead — a piped stderr drops what a bare exit leaves behind');
   });
 });

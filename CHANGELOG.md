@@ -12,11 +12,26 @@ those.
 ## 1.0.0-rc.19
 
 A pass over the two published packages against four questions — is the API correct and minimal, is there dead
-code, is the framework easy to understand, does it fail gracefully — and everything it turned up. Three
-entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5xx while prerendering**, and
-**`defineRoutes`' typing**. Read those three before upgrading.
+code, is the framework easy to understand, does it fail gracefully — and everything it turned up, followed by
+a release review of `packages/core` and the eleven findings that came out of it.
+
+Six entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5xx while prerendering**,
+**`defineRoutes`' typing**, **the `error` page answering a thrown page component**, **a route under
+`/_static`**, and **the `staticPaths` values a build accepts**. Read those six before upgrading — the last
+two refuse a build that succeeds today, on purpose.
 
 ### Security
+
+- **The cross-site form refusal no longer reads `x-rsc-action` differently from the classifier that decodes
+  the post.** One decides what is refused, the other what is decoded, and they tested the same header two
+  ways: the refusal asked whether it was _present_, the classifier whether it had a _value_. A POST carrying
+  a present-but-empty `x-rsc-action` therefore fell between them — excluded from the refusal as "the
+  client-initiated shape, which needs a preflight to forge", then dispatched down the form branch, where it
+  ran the action its body carried with the cross-site check skipped. Not reachable from a browser: an empty
+  header is still a header, so a cross-origin `fetch` still needs the preflight the framework never answers,
+  and any app with `csrf()` registered caught it regardless. It mattered because this refusal is the whole of
+  what an app with no `src/server.ts` has, and a predicate that fails open on a shape nothing sends today is
+  one that fails open the day something does. Both now read the value.
 
 - **`getRequestContext().env` no longer merges the platform's own `fetch` argument.** `c.env` is the second
   argument to `app.fetch(request, env)` — the app's bindings on Workers, and on every other target the
@@ -34,6 +49,37 @@ entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5
   bindings are objects on purpose. `ctx.hono.env` still reaches the raw argument.
 
 ### Changed
+
+- **The `error` page answers a page component that throws.** `RouteConfig.error` says "rendered with a 500
+  status when a request throws", and for the commonest server error there is — a failed query, a null
+  dereference — it was not: `renderHTML` caught its own shell failure and returned it as an ordinary 500, so
+  nothing above ever knew the render had failed and `app.onError`, where the `error` page lives, was never
+  reached. A page module that would not load and a thrown endpoint did reach it, which made the gap look like
+  one path misbehaving rather than the promise being false on the likeliest one. Nothing has reached the
+  socket when the shell fails, so the fault is re-thrown and answered where every other request failure is;
+  the `error` page renders fresh, with its own payload and the client runtime, and hydrates like any page.
+  An app with **no** `error` page now gets the framework's 500 **document** where a browser previously got
+  `text/plain` on this path, and a client that asked for neither HTML nor a payload still gets the plain
+  line. A flight request is unchanged: it is a 200 carrying the error, because its status is committed before
+  the render can fail — now stated in the README beside the same point about `notFound()`.
+
+- **A route under `/_static` fails the route check.** `mountStaticAssets` registers that prefix ahead of the
+  page routes and the assets app ends in a terminal 404, so a route at `/_static/thing` built clean and then
+  404'd, on every deploy target and in dev — exactly what `assertNothingIsShadowed` exists to prevent, one
+  prefix out of its reach. It is refused by name now. Only a literal path: a parameterised route that happens
+  to overlap the prefix loses those requests and answers the rest, and refusing it would fail a build that
+  was correct. **This check runs at every server start, not only at build**, so an app that boots today while
+  serving everything except its dead `/_static` route will refuse to boot after upgrading.
+
+- **`staticPaths` refuses the segment names Windows cannot store.** `isStorableSegment` already refused
+  `\ / : * ? " < > |` and the control characters, so a value that cannot be one portable file name fails the
+  build rather than writing a page on one machine and not another. Two Windows rules were missing and neither
+  is discoverable from a macOS or Linux build: the reserved device names (`CON`, `PRN`, `AUX`, `NUL`,
+  `COM0`-`COM9`, `LPT0`-`LPT9`, with or without an extension) and a trailing `.` or space. The first fails
+  `mkdir` on Windows with an error naming a path nobody wrote; the second is worse, because Win32 **strips**
+  it and the page lands where no request will look — the exact failure `ssgFilePath` exists to prevent. So a
+  docs slug of `con` or `v1.` builds and serves on Linux today and after this builds nowhere, which is the
+  trade `:` and `*` already make. `console`, `comic`, `contents`, `v1.2` and `a b` are unaffected.
 
 - **A 5xx while prerendering fails the build.** `renderVariant` only asked whether the status was 200, so
   every non-200 got the same sentence — `⚠ "/x" rendered 500 at build time — skipping, will SSR per request` —
@@ -113,6 +159,129 @@ entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5
   scaffolded README and `docs/configuration.md`, all three of which described `.env` loading without it.
 
 ### Fixed
+
+- **A broken deployment no longer answers a no-JS form post with a silent 400.** `decodeAction` does two
+  things in one call: it reads the caller's body, and it `__webpack_require__`s the module the action lives
+  in. Both sat behind the one `catch` that answers `400 Bad Request: malformed server action request` — the
+  refusal that is deliberately silent, because action ids are public and reporting from there would be an
+  unauthenticated way to page whoever owns the error tracker. So an action module that would not evaluate
+  told the caller their request was malformed, when it was not, and told the operator nothing at all. The
+  same fault reached through a client-initiated call has answered 500 with the app's `error` page, reported
+  as `source: 'action'`, since the guard around `loadServerAction` was split out; the form path — which is
+  what a browser sends before hydration and with JavaScript off — kept the old behaviour. Rspack compiles an
+  app's whole `'use server'` graph into a single server module, so this was every form post in the app, not
+  one. The body read now has its own guard, and a `decodeAction` failure asks whether the app's actions can
+  be loaded at all before it blames the caller. A malformed body, an unknown action id and undecodable
+  `useActionState` metadata are all still a silent 400.
+
+- **A thrown non-`Error` reaches the `error` page.** Hono's dispatcher hands `app.onError` only what is
+  `instanceof Error` and re-throws everything else, so `throw 'a plain string'` — or a rejected string, or a
+  thrown object — rejected `app.fetch` and was answered outside the app entirely: a bodiless 500 with no
+  `error` page, nothing on stderr, no `onServerError` report, and, because nothing below the response floor
+  ever unwound, not even `x-content-type-options`, `referrer-policy` or `x-frame-options`. A throw that was
+  merely written badly therefore answered strictly worse than a real `Error` beside it, and
+  `RouteConfig.error` promises the page for a throw from "an endpoint, a server action, or middleware" — all
+  three reachable this way. Anything that is not an `Error` is now wrapped in one carrying it as `cause`,
+  with the value named in the message; an `Error` of any kind is untouched, which is what keeps the control
+  signals, the payload stand-ins and the report de-duplication intact. An endpoint and a page route convert
+  at their own handler, so the app's middleware unwinds over the `error` page exactly as it does for an
+  `Error`; a _middleware_ that throws a non-`Error` reaches the page too, but everything registered outside
+  it is skipped, which no framework-side change could alter.
+
+- **A directive that is not first still counts.** `page-entry-loader` prepends `'use server-entry'` to a page
+  module that declares no directive of its own, and it recognised one only in first position — so a page
+  opening `'use strict';` above its `'use client';` got the injection anyway, and the injected directive is
+  the one the compiler acts on. The build then exited 0 and shipped a client page as a server entry, where
+  the same page with `'use client'` on line one is refused by name with the framework's message. It now
+  matches the whole directive prologue, the way `env-shadow-loader` already did — structurally, so a comment
+  that merely mentions `'use client'` is trivia and not a directive, and any other directive (`'use cache'`,
+  whatever React adds next) is stepped over rather than listed.
+
+- **The `/_static` mount ends in a terminal 404 on `cloudflare` too.** It answered `next()` for a miss, so a
+  request for a chunk that is not there walked the whole route table, then the `public/` fallback, and landed
+  in `app.notFound` — which for anything that asked for HTML is a full server render of the app's 404 page,
+  under a prefix no app can own. The filesystem targets have always ended that mount in a plain 404, and
+  both `RESERVED_PREFIX`'s doc and the reserved-route check above lean on the mount answering its whole
+  subtree on every target. A browser fetching a real subresource sends `Accept: */*` and got the plain 404
+  either way, so what this cost was a render for a crawler, a probe or a hand-typed URL — and the
+  `Cache-Control` that keeps a shared cache from storing a 404 for a content-hashed URL that is about to
+  become valid, which the filesystem mount states and this one inherited by accident. Both now take it from
+  one constant.
+
+- **A cross-site `enctype="text/plain"` form post is refused too.** The refusal was keyed on the request
+  classification, which names the two content types React writes an action as — so `text/plain`, the third
+  and last `enctype` a browser `<form>` can send with no preflight, was classified as an ordinary document
+  request and rendered the page, while the README promised that a page route refuses _every_ cross-site form
+  post. Nothing could run an action through it (`decodeAction` is only reached for the other two, so
+  SECURITY.md's boundary held) and the cost was a forced authenticated page render, which a cross-site GET
+  can already produce. What was wrong was the stated scope, and the fix is the direction that makes the
+  claim true: the check now runs on the request's _shape_ — a POST a browser form could have produced, all
+  three enctypes — because what makes a form post forgeable from another site is the shape and not what
+  happens to be in the body. `text/plain` is deliberately **not** added to the classification: `decodeAction`
+  reads the body with `request.formData()`, which throws on one, so that repair would turn every same-origin
+  `text/plain` POST into a 400. A cross-site `application/json` POST is still let through — no browser can
+  send one without a preflight the framework never answers.
+
+- **A handler may return a `Response` it did not build.** `Response.redirect(…)` and every `fetch()` result
+  carry a header bag guarded `immutable`, and handing one back verbatim is ordinary Hono — proxying an
+  upstream is the commonest thing a Worker does. The framework's response floor wrote its baseline headers
+  with `c.res.headers.set(…)`, which throws `TypeError: immutable` on one of those: the throw reached
+  `onError`, the app's 500 page went out in place of the redirect, and the app's error tracker got
+  `immutable` plus a minified frame naming nothing that could be acted on. **On `cloudflare` and
+  `aws-lambda` only**, which is what made it worth finding: `@hono/node-server` replaces the global
+  `Response` with a lightweight class whose headers are always mutable, so `node` and `vercel` — dev,
+  `rshono start`, and nearly every suite — answered the redirect correctly all along. The floor now collects
+  what a response is missing and writes the first of them through `c.header()`, which rebuilds a finalized
+  response before writing exactly as `serveAsset` already did by hand for the framework's own asset
+  responses; a response that needs nothing is not rebuilt at all. The `SSG_CACHE_CONTROL` doc recipe for
+  overriding a prerendered page's caching from middleware now uses `c.header()` for the same reason.
+
+- **One fault is reported once.** `reportServerError` keeps a WeakSet so a fault crossing several stages is
+  reported once, and it held everywhere except a thrown page component: an app wired to Sentry got the real
+  error as `render` and then a message-free duplicate as `ssr`, because the WeakSet keys on object identity
+  and React hands the SSR layer a fresh, redacted stand-in carrying only a `digest`. That digest **is** the
+  provenance, so the test `entry.ssr.tsx` already made for it is now one function in `control.ts` and is made
+  in all three places a payload fault could be reported twice from — the shell path, the top-level handler,
+  and the `error` page's own catch, where a throwing `error` page was reported twice for the same reason.
+  `onShellError` becomes what it says it is: a floor for a rejection React never announced.
+
+- **A `redirect()` from the `error` page is a redirect.** It was a 500 plus "the error page failed to
+  render: RedirectSignal" in the app's error tracker, while the `notFound` page's identical branch answered
+  the redirect — nothing is committed when the signal arrives and answering it cannot fail. `notFound()` from
+  the `error` page is still not honoured, because it would render the `notFound` page from inside the error
+  path, but it no longer claims the page is broken: the line says the framework declined and why. One thing
+  to know rather than discover: an `error` page redirecting to a URL that also fails is now a loop the
+  browser ends, where it used to terminate as a 500.
+
+- **A rebuild drops a `public/` file that is no longer there.** `dist/public` was the one output directory
+  assembled with a `cpSync` and no `rm` first, so a file deleted from `public/` survived there and went on
+  being served by `rshono start` permanently — and deleting `public/` outright left the whole of the old tree
+  in place, since the copy is conditional. The two CDN presets clear their own output but read this
+  directory, so a stale file propagated into the uploaded assets too.
+
+- **`rshono build` warns when a `public/` file shadows a route** on `cloudflare` and `vercel`.
+  `mountPublicFallback` mounts `public/` after every route, so it answers only unclaimed paths — the whole
+  story on `node` and `aws-lambda`, and not where a CDN sits in front, which answers from the static output
+  before the app is invoked. So `public/index.html` beside a page route at `/` serves the file on two targets
+  and renders the page on the other two, and the difference only appeared after deploying. The framework
+  cannot reorder either platform; the contract line is corrected, the README says which targets do which, and
+  the build compares the two. It compares what a _request_ resolves to rather than filenames — an
+  `index.html` answers its directory — and per target, since Cloudflare's asset handling also drops `.html`
+  and Vercel's does not without `cleanUrls`.
+
+- **Every CLI failure path drains its output before exiting.** `cli/exit.ts` exists because a piped
+  stdout/stderr is asynchronous on POSIX — every CI job, and any `rshono build | tee` — so `process.exit`
+  drops what has not left the buffer, which on a failure path is the report saying why. Four paths called
+  `process.exit` directly: an invalid `--port`/`PORT`, both of `rshono start`'s refusals, and `rshono dev`'s
+  port-in-use. Nothing in `dist/cli` reaches `process.exit` now except the helper that drains first, and a
+  test keeps it that way.
+
+- **`rshono dev` answers `/_static` itself, and now says so.** A build serves assets through the app, so they
+  carry HSTS, your CSP and anything else your middleware sets; the dev front-end owns the prefix, so they
+  carry none of it, and a policy is developed against the files it is most likely to break. Documented in
+  preference to moving it: every request the front-end proxies waits on the server rebuild, and the client
+  bundle is built by a separate compiler, so proxying assets would stall the browser's JS and CSS on a save
+  that only touched a server component.
 
 - **A `/_static` 404 carries a `Cache-Control`.** `cacheControl` returns early for anything that is not
   200/206 and the terminal `c.text('Not Found', 404)` set no header of its own. A 404 is heuristically

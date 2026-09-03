@@ -123,6 +123,18 @@ server.use('*', async (c, next) => {
   c.res.headers.set('X-Response-Time', `${(end - start).toFixed(2)} ms`);
 });
 
+// Middleware is the third source `RouteConfig.error` promises the `error` page for, and the only one of the
+// three whose non-`Error` throw the framework can catch nowhere but above the app — see `asError` in
+// entry.rsc.tsx. Which is also why this sits *below* the timer above: with everything outside it skipped,
+// the response carries no `X-Response-Time`, and that divergence is what the suite pins.
+//
+// Query-gated so one build serves the whole suite, and linked from nowhere. A real app would not have it.
+server.use('*', async (c, next) => {
+  // eslint-disable-next-line @typescript-eslint/only-throw-error -- throwing a non-Error is the whole point
+  if (c.req.query('throw') === 'middleware') throw 'a plain string thrown from middleware';
+  await next();
+});
+
 /**
  * The documented way to change what a prerendered page promises about caching: the framework's
  * `public, max-age=300` is a per-response header, not a config field, so middleware is the interface.
@@ -137,7 +149,7 @@ if (process.env.TESTBED_SSG_CACHE === '1') {
   server.use('/docs/*', async (c, next) => {
     c.header('cache-control', 'public, max-age=1');
     await next();
-    c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+    c.header('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
   });
 }
 

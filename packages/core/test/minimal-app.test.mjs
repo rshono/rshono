@@ -3,7 +3,7 @@
 // `defineRoutes` shorthand. The rest of the suite runs against one richly-configured testbed, which
 // is exactly the app that would never catch "the framework assumes X exists".
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { buildApp, MINIMAL_APP_DIR, runCli, startApp, stopServer } from './helpers.mjs';
@@ -48,6 +48,20 @@ test('a wildcard route matches and sees the full path', async () => {
   assert.match(html, /data-path="\/files\/deep\/nested\/path"/);
 });
 
+test('an endpoint returning a response it did not build keeps it, decorated', async () => {
+  // The response floor is the only middleware in front of this app, which is what makes it the app that can
+  // show whether the floor is safe on a `Response` with an immutable header bag — see src/redirect.ts.
+  //
+  // **This target cannot fail this test**, and the reason is the hazard: `@hono/node-server` replaces the
+  // global `Response` with a lightweight class whose headers are always mutable, `Response.redirect()`
+  // included. Asserted here anyway, so the two halves of the divergence sit in the suite together; the half
+  // that can fail is in cloudflare.test.mjs, where the platform's own `Response` is what the app gets.
+  const res = await fetch(`${base}/redirect`, { redirect: 'manual' });
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get('location'), `${base}/`);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff', 'the floor decorates it either way');
+});
+
 test('with no notFound page, an unmatched path is a plain 404', async () => {
   const res = await fetch(`${base}/nothing-here`, { headers: { Accept: 'text/html' } });
   assert.equal(res.status, 404);
@@ -63,9 +77,32 @@ test('with no error page, a thrown page falls back to the framework 500 without 
   const res = await fetch(`${base}/boom`, { headers: { Accept: 'text/html' } });
   assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'the framework’s own answers agree about caching');
   assert.equal(res.status, 500);
+  // A *document*, not the plain-text line. This app has nothing else to be given — no `error` page —
+  // so it is the whole of the "never a blank screen" promise, and a browser handed `text/plain` here
+  // would show one bare line where an app with an error page shows a page. The testbed suite pins the
+  // other half: an app that declares an `error` page gets it, even for a render failure.
+  assert.match(res.headers.get('content-type'), /text\/html/, 'a client that asked for HTML gets a document');
   const body = await res.text();
-  assert.match(body, /Internal Server Error/);
+  assert.match(body, /^<!DOCTYPE html>/);
+  assert.match(body, /500 — Internal Server Error/, 'the failure document must carry a visible message');
+  assert.doesNotMatch(body, /<noscript>/, 'the message must be visible without disabling JavaScript');
+  assert.doesNotMatch(
+    body,
+    /<script[^>]+src=/,
+    'the failed render must not attach the client runtime: there is no payload to hydrate from, and the one from the failed render would tear the document down and blank the message',
+  );
   assert.doesNotMatch(body, /blew up on purpose/, 'the real message must stay server-side in production');
+});
+
+test('with no error page, a client that did not ask for HTML still gets the plain line', async () => {
+  // `*/*` is a fetch, a probe or a health check — the document is for a browser, and this is the same
+  // split the plain 404 above already makes.
+  const res = await fetch(`${base}/boom`, { headers: { Accept: '*/*' } });
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/plain/);
+  assert.equal(res.headers.get('cache-control'), 'private, no-cache');
+  assert.match(res.headers.get('vary'), /\bRSC\b/);
+  assert.match(await res.text(), /^Internal Server Error$/);
 });
 
 test('the security and caching defaults apply with no config file at all', async () => {
@@ -177,12 +214,106 @@ function appWithRoutes(routesSource) {
 const HOME_AND = (second) =>
   `import { defineRoutes } from '@rshono/core';\nexport const routes = defineRoutes([\n  { path: '/', component: () => import('./pages/home') },\n${second}]);\n`;
 
+test('a rebuild drops a public/ file that is no longer there', () => {
+  // `dist/public` was the one directory the build assembled with `cpSync` and no `rm` first, so a file
+  // deleted from `public/` survived in the output and went on being served by `rshono start` — for good,
+  // since nothing else ever touched it. Every other output directory here is cleared: `dist/ssg` and both
+  // CDN presets' own trees, each with a comment saying why. Deleting `public/` outright was the worse
+  // half: the copy is conditional, so the whole of the old tree stayed.
+  const dir = appWithRoutes(HOME_AND(''));
+  const publicDir = join(dir, 'public');
+  mkdirSync(publicDir, { recursive: true });
+  writeFileSync(join(publicDir, 'keep.txt'), 'keep\n');
+  writeFileSync(join(publicDir, 'gone.txt'), 'gone\n');
+  buildApp(dir);
+  assert.deepEqual(readdirSync(join(dir, 'dist', 'public')).sort(), ['gone.txt', 'keep.txt']);
+
+  rmSync(join(publicDir, 'gone.txt'));
+  buildApp(dir);
+  assert.deepEqual(readdirSync(join(dir, 'dist', 'public')).sort(), ['keep.txt'], 'the deleted file must not survive the rebuild');
+
+  rmSync(publicDir, { recursive: true });
+  buildApp(dir);
+  assert.equal(existsSync(join(dir, 'dist', 'public')), false, 'and neither must the tree, once there is no public/ at all');
+});
+
 test('a second route claiming a path the table already answers fails the build, naming both entries', () => {
   const dir = appWithRoutes(HOME_AND("  { path: '/', component: () => import('./pages/manual') },\n"));
   const { status, output } = runCli(dir, ['build']);
   assert.equal(status, 1, `the build must not exit 0:\n${output}`);
   assert.match(output, /\[rshono\] src\/routes\.ts: routes\[1\] \("\/"\) would never run — routes\[0\] \("\/"\) already answers GET, POST \//);
   assert.doesNotMatch(output, /is not iterable|Cannot read properties/, 'and not by handing over a TypeError from a minified bundle');
+  assert.doesNotMatch(
+    output,
+    /\n\s+at /,
+    'and as a line, not an Error object — the three build stages the app can fail go out through `main().catch` too',
+  );
+});
+
+test("a 'use server' module that cannot be evaluated is a build warning, not a 500 per action", () => {
+  // The one part of an app a build never touched. Nothing on the server imports an action module until an
+  // action is called — a client component that calls one gets a `createServerReference` stub — so a module
+  // that throws as it evaluates used to reach production behind a green build, and then answer 500 for
+  // *every* action it holds, which with Rspack's single-module 'use server' graph is all of them.
+  const dir = appWithRoutes(HOME_AND("  { path: '/actions', component: () => import('./pages/calls-an-action') },\n"));
+  writeFileSync(
+    join(dir, 'src', 'actions.ts'),
+    "'use server';\n\nthrow new Error('this module cannot be evaluated');\n\nexport async function doThing(): Promise<string> {\n  return 'never';\n}\n",
+  );
+  writeFileSync(
+    join(dir, 'src', 'pages', 'action-button.tsx'),
+    "'use client';\n\nimport { doThing } from '../actions';\n\nexport function ActionButton() {\n  return <button onClick={() => void doThing()}>go</button>;\n}\n",
+  );
+  writeFileSync(
+    join(dir, 'src', 'pages', 'calls-an-action.tsx'),
+    'import { ActionButton } from \'./action-button\';\n\nexport default function CallsAnAction() {\n  return (\n    <html lang="en">\n      <body>\n        <ActionButton />\n      </body>\n    </html>\n  );\n}\n',
+  );
+
+  const { status, output } = runCli(dir, ['build']);
+  // A warning, not a failure: a module can legitimately decline to evaluate in a build — one that reads a
+  // secret out of the environment, say — and a build is not where that gets decided.
+  assert.equal(status, 0, `the build must still succeed:\n${output}`);
+  assert.match(output, /the module holding 1 of the app's 1 server action\(s\) could not be loaded at build time — this module cannot be evaluated/);
+  assert.match(output, /each of them answers 500/, 'and says what it means at run time, since nothing else will');
+});
+
+test('the one required file missing is one line, from `build` and from `dev` alike', () => {
+  // `src/routes.ts` is the file this whole fixture exists to say is required, so its absence is the likeliest
+  // first-run failure there is — and it used to get the worst output of any of them. The `[rshono]` message
+  // was only turned into a line by a `phase()` helper inside `build.ts`, wrapped around three later stages;
+  // `createConfigs` raises this one *before* the first of them, and `dev` never had the helper at all. Both
+  // fell through to `main().catch`'s bare `console.error(error)` — a raw `Error` object with
+  // `at createConfigs` and `at Module.devCommand` under it. That rule now lives in `main().catch` itself.
+  //
+  // `PORT: '0'` so `dev` cannot stop on the port-in-use branch instead: 0 is always bindable, and this has to
+  // fail for the reason under test on any machine.
+  const dir = mkdtempSync(join(MINIMAL_APP_DIR, 'throwaway-'));
+  throwaway.push(dir);
+
+  for (const command of ['build', 'dev']) {
+    const { status, output } = runCli(dir, [command], { env: { PORT: '0' } });
+    assert.equal(status, 1, `\`rshono ${command}\` must exit 1:\n${output}`);
+    assert.match(output, /✗ \[rshono\] src\/routes\.ts not found/, `\`rshono ${command}\` must name the file that is missing`);
+    assert.match(output, /it is the one required file/, 'and say why it matters');
+    assert.doesNotMatch(
+      output,
+      /\n\s+at /,
+      `\`rshono ${command}\` must not print a stack — node:internal and framework frames are not the user’s to read`,
+    );
+  }
+});
+
+test('a failure that is not the app’s keeps its stack, because that stack is the report', () => {
+  // The other half of the rule: only a `[rshono]`-prefixed message is a message for the user. Anything else
+  // is a bug in the framework, and flattening it to one line would throw away the only thing that locates it.
+  // A config module that throws is the cheapest way to raise one from inside the CLI's own call path.
+  const dir = appWithRoutes(HOME_AND(''));
+  writeFileSync(join(dir, 'rshono.config.ts'), "throw new Error('not an rshono message');\n");
+
+  const { status, output } = runCli(dir, ['build']);
+  assert.equal(status, 1);
+  assert.match(output, /not an rshono message/);
+  assert.match(output, /\n\s+at /, 'a framework fault has to keep the frames that say where it came from');
 });
 
 test('a src/server.ts that does not default-export a Hono app fails the build, naming the file', () => {
@@ -192,6 +323,7 @@ test('a src/server.ts that does not default-export a Hono app fails the build, n
   assert.equal(status, 1, `the build must not exit 0:\n${output}`);
   assert.match(output, /\[rshono\] src\/server\.ts must `export default` a Hono app/);
   assert.doesNotMatch(output, /Cannot read properties of undefined/, "Hono's own failure names nothing the developer wrote");
+  assert.doesNotMatch(output, /\n\s+at /, 'and as a line, not an Error object');
 });
 
 /*
@@ -273,4 +405,27 @@ test("a 'use client' module importing @rshono/core/server fails the build naming
   assert.match(plain, /\[rshono\] src[\\/]pages[\\/]widget\.tsx imports '@rshono\/core\/server', which the browser bundle cannot have\./);
   assert.match(output, /useNavigation\(\)/, 'and what to use instead');
   assert.doesNotMatch(output, /node:async_hooks|Unhandled scheme/, 'the resolver report names a builtin the author never wrote');
+});
+
+/*
+ * A `'use client'` page is a mistake the framework has a message for, and one line above it used to hide the
+ * message entirely. `page-entry-loader` prepends `'use server-entry'` to a page module that declares no
+ * directive of its own, and it only recognised a directive that came *first* — so a page opening
+ * `'use strict';` got the injection ahead of its own `'use client';`, and the injected directive is the one
+ * the compiler acts on. The build then exited 0 and shipped a page that fails inside React per request.
+ */
+test("a 'use client' page is refused whether or not something else comes first in its prologue", () => {
+  for (const head of ["'use client';", "'use strict';\n'use client';"]) {
+    const dir = appWithRoutes(HOME_AND("  { path: '/client', component: () => import('./pages/client-page') },\n"));
+    writeFileSync(
+      join(dir, 'src', 'pages', 'client-page.tsx'),
+      `${head}\nexport default function ClientPage() {\n  return (\n    <html lang="en">\n      <body>a client page</body>\n    </html>\n  );\n}\n`,
+    );
+
+    const { status, output } = runCli(dir, ['build']);
+    assert.equal(status, 1, `${JSON.stringify(head)}: the build must not exit 0:\n${output}`);
+    assert.match(output, /\[rshono\] The page component for "\/client" is missing its client-asset info/, 'the framework names the page');
+    assert.match(output, /a 'use client' page must be wrapped by a server component instead/, 'and says what to do about it');
+    assert.doesNotMatch(output, /build complete/, `${JSON.stringify(head)}: nothing that reads as the build having worked`);
+  }
 });

@@ -533,10 +533,21 @@ async function main() {
     const result = payload.returnValue;
     if (!result) {
       // A payload that is not this action's own reply: the server rendered a page in its place. An action
-      // that had already run has its result carried across (see `actionResults` in entry.rsc.tsx), so
-      // reaching here means the request failed before it ran at all — an undecodable body, most likely.
-      // Reading `.ok` off it used to hand the caller `Cannot read properties of undefined`.
-      throw new Error('[rshono] the server action produced no result — the request failed around it and the server answered with a page instead. Its log has the error.');
+      // that had already run has its result carried across (see `actionResults` in entry.rsc.tsx), and the
+      // ways a *caller* can get a request wrong are refused ahead of any render — an unknown id or an
+      // undecodable body is a `text/plain` 400, which `payloadResponse` turns into an error of its own
+      // before this.
+      //
+      // What is left is the server failing before the action ran, which is answered with the `error` page —
+      // a flight payload, so it arrives here rather than at `payloadResponse`, with no `returnValue` in it.
+      // A module the deployment no longer holds is the reachable case: `loadServerAction` throws, the
+      // framework reports it and 500s, and this is what the caller has to go on. Hence the message: the
+      // failure is on the server and its log is where the error is. Below that it is still the defensive
+      // floor for a payload shaped by another deployment or replaced by a proxy — reading `.ok` off it used
+      // to hand the caller `Cannot read properties of undefined`.
+      throw new Error(
+        '[rshono] the server action produced no result — the request failed around it and the server answered with a page instead. Its log has the error.',
+      );
     }
     if (!result.ok) throw result.error;
     return result.value;

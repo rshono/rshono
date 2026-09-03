@@ -26,6 +26,18 @@ const METHODS = new Set([...CONCRETE_METHODS, 'all']);
 /** What a page route's `render` accepts. */
 const RENDER_MODES = ['static', 'dynamic'];
 
+/**
+ * The one path prefix the framework claims on every deploy target: the hashed client bundle, mounted by
+ * `runtime.mountStaticAssets` ahead of the route table, ending in a terminal 404 — so nothing under it
+ * reaches a page. Written out here rather than imported, because the mounts live in the deploy runtimes
+ * (`deploy/filesystem.ts`, `deploy/cloudflare/runtime.ts`) and in `cli/dev.ts`, none of which this module
+ * can pull in.
+ *
+ * It is the only one. `/_rshono/hmr` is dev-only and an exact path rather than a prefix, and Cloudflare's
+ * `__ssg` is an asset path no app would name.
+ */
+const RESERVED_PREFIX = '/_static';
+
 function fail(message: string): never {
   throw new Error(`[rshono] ${message}`);
 }
@@ -130,29 +142,131 @@ function methodsOf(route: Route): readonly string[] {
 }
 
 /**
- * Refuses a route the table already answers in full. Hono matches in registration order, so a later entry
- * whose every method and path is spoken for is dead code — and the build that produced it exits 0 with
- * nothing to say, which is how a duplicated `path` survives.
+ * A parameter's *name*, which is not part of the pattern Hono matches on. Anchored to a segment boundary so
+ * a `:` inside a `{regex}` constraint is not mistaken for one, and stopped by `{` and `?` — both of which
+ * *are* part of the pattern and have to survive into the key.
+ */
+const PARAM_NAME = /(?<=\/):[^/{?]+/g;
+
+/**
+ * What Hono matches on, rather than what was typed — so two spellings of one pattern hash alike.
+ *
+ * - **A parameter's name is not part of it.** `/u/:id` and `/u/:name` are one route, and whichever is
+ *   registered second never runs. A `{regex}` constraint is kept, because that one *is* part of the
+ *   pattern: `/a/:id{[0-9]+}` and `/a/:name` are genuinely different routes and both can answer.
+ * - **A `*` before the last segment matches exactly one non-empty segment** — the same thing an
+ *   unconstrained parameter matches. Checked against Hono 4.13: `/a/[*]/c` and `/a/:id/c` both answer
+ *   `/a/b/c`, both 404 `/a//c`, and both 404 `/a/b/x/c`.
+ *
+ * A *trailing* `*` is left alone: it claims a whole subtree rather than one segment, which is
+ * {@link subtreeOf}'s half of the job.
+ */
+function patternKey(path: string): string {
+  const segments = path.replace(PARAM_NAME, ':').split('/');
+  return segments.map((segment, index) => (segment === '*' && index < segments.length - 1 ? ':' : segment)).join('/');
+}
+
+/**
+ * Every key a route answers. More than one only for a trailing optional parameter: `/a/:id?` answers
+ * `/a/x` *and* `/a`, and — checked — neither `/a/` nor `/a/x/y`. Both have to be spoken for before it is
+ * dead, which is why this is a list rather than a key.
+ */
+function keysFor(path: string): readonly string[] {
+  const key = patternKey(path);
+  if (!key.endsWith('/:?')) return [key];
+  return [key.slice(0, -1), key.slice(0, -3) || '/'];
+}
+
+/**
+ * The subtree a trailing `*` claims, or `null` for a path without one. `/a/*` answers `/a/b` and
+ * `/a/b/c/d`, and the bare `/a` as well — but not `/ab`, so the boundary is the `/` and a prefix test has
+ * to respect it.
+ */
+function subtreeOf(key: string): string | null {
+  return key.endsWith('/*') ? key.slice(0, -2) : null;
+}
+
+/** Whether the subtree claimed by a trailing `*` at `prefix` contains `key`. */
+function covers(prefix: string, key: string): boolean {
+  return key === prefix || key.startsWith(`${prefix}/`);
+}
+
+/**
+ * Whether a path sits inside {@link RESERVED_PREFIX}'s subtree, which is the prefix and everything below
+ * it. The boundary is the `/`: `/_staticky` is an ordinary path and answers normally.
+ */
+function isReserved(path: string): boolean {
+  return path === RESERVED_PREFIX || path.startsWith(`${RESERVED_PREFIX}/`);
+}
+
+/**
+ * Refuses a route the table already answers in full, or that the framework's own mount already answers.
+ * Hono matches in registration order, so a later entry whose every method and path is spoken for is dead
+ * code — and the build that produced it exits 0 with nothing to say, which is how a duplicated `path`
+ * survives.
+ *
+ * The framework's mount is checked first and by name. The rest of this function compares the app's routes
+ * with *each other*, so the prefixes the framework registers ahead of them were invisible to it: a route at
+ * `/_static/thing` built clean and then 404'd, on every target and in dev. Only a literal path is refused —
+ * a parameterised route that happens to match under the prefix, `/:section/thing` or a root `/*`, still
+ * answers everything else and is none of this rule's business.
  *
  * Method by method, and only when *all* of them are taken: one path split between a `'get'` endpoint and a
  * `'post'` one shadows nothing, and neither does a catch-all registered behind a route that claims one
  * method of it — that one still answers the rest.
+ *
+ * Keyed on the *pattern* rather than on the path as written, because a dead route need not be a duplicated
+ * string. Two shapes reached a build this way: `/u/:id` followed by `/u/:name`, which is the same route
+ * twice under two spellings, and a wildcard registered *ahead* of a concrete path — `/a/*` then `/a/b` —
+ * where the second can never be reached. The doc comment above used to discuss only the opposite order, a
+ * catch-all registered behind a route, which is the case that is fine.
+ *
+ * **Where the line is drawn**, for whoever widens this next. A `{regex}` constraint is kept in the key and
+ * compared as text, so `/a/:id{[0-9]+}` then `/a/:n{[0-9]+}` is caught and `/a/:id{[0-9]+}` then
+ * `/a/:id{\d+}` is not — the second pair is equivalent, and the later route is dead, and this accepts it.
+ * Deciding regex equivalence in general is undecidable-adjacent and not a route validator's job. The same
+ * goes for a constraint containing a `/`, which the key carries through unchanged rather than interpreting.
+ * Both leave the error on the safe side: an unreachable route slips through, and a route that can still
+ * answer is never refused. Anything added here should keep that asymmetry — a false refusal fails a build
+ * that was correct, which is much worse than the hole it would close.
  */
 function assertNothingIsShadowed(routes: readonly Route[]): void {
-  /** `"<method> <path>"` → the first route answering it. */
-  const claimed = new Map<string, string>();
+  /** `"<method> <key>"` → the first route answering it. */
+  const claimed = new Map<string, { name: string; path: string }>();
+  /** The trailing-`*` routes already registered, which claim a whole subtree rather than single keys. */
+  const subtrees: { method: string; prefix: string; name: string; path: string }[] = [];
+
+  const claimantOf = (method: string, key: string) =>
+    claimed.get(`${method} ${key}`) ?? subtrees.find((subtree) => subtree.method === method && covers(subtree.prefix, key));
+
   routes.forEach((route, index) => {
     const name = label(route, index);
+    if (isReserved(route.path)) {
+      fail(
+        `src/routes.ts: ${name} would never run — the framework serves the client bundle at ${RESERVED_PREFIX}, ` +
+          `mounted ahead of the route table and answering that whole subtree, so ${RESERVED_PREFIX} is reserved on every ` +
+          'deploy target and under `rshono dev`. Give the route a path of its own.',
+      );
+    }
     const methods = methodsOf(route);
-    const claimants = methods.map((method) => claimed.get(`${method} ${route.path}`));
+    const keys = keysFor(route.path);
+    const claimants = methods.flatMap((method) => keys.map((key) => claimantOf(method, key)));
     if (claimants.every((claimant) => claimant !== undefined)) {
-      const by = [...new Set(claimants)].join(' and ');
+      const by = [...new Set(claimants.map((claimant) => claimant.name))].join(' and ');
       const verbs = methods.map((method) => method.toUpperCase()).join(', ');
-      fail(`src/routes.ts: ${name} would never run — ${by} already answers ${verbs} ${route.path}, and Hono matches in registration order.`);
+      // Only when the two are spelled differently, which is the part that reads as a false alarm: an exact
+      // duplicate needs no explaining, and this sentence would only get in its way.
+      const why = claimants.some((claimant) => claimant.path === route.path)
+        ? ''
+        : ' Hono matches on the pattern, not the spelling — a parameter’s name is not part of it, and a trailing `*` answers its whole subtree, the bare prefix included.';
+      fail(`src/routes.ts: ${name} would never run — ${by} already answers ${verbs} ${route.path}, and Hono matches in registration order.${why}`);
     }
     for (const method of methods) {
-      const key = `${method} ${route.path}`;
-      if (!claimed.has(key)) claimed.set(key, name);
+      for (const key of keys) {
+        if (!claimed.has(`${method} ${key}`)) claimed.set(`${method} ${key}`, { name, path: route.path });
+      }
+      const prefix = subtreeOf(patternKey(route.path));
+      if (prefix !== null) subtrees.push({ method, prefix, name, path: route.path });
     }
   });
 }

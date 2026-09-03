@@ -54,7 +54,47 @@ export function createRscRequest(urlString: string, action?: { id: string; body:
   });
 }
 
+/**
+ * The two content types React writes a form action as, and so the two a POST must carry to be *decoded* as
+ * one.
+ *
+ * Deliberately narrower than the set {@link isBrowserFormPost} refuses on. `decodeAction` reaches the body
+ * through `request.formData()`, which throws on a `text/plain` one — so classifying that enctype as a
+ * `form-action` would turn every same-origin `text/plain` POST into a 400 where the page used to render.
+ * What the framework decodes and what it refuses are two different questions.
+ */
 const FORM_CONTENT_TYPES = /^(?:multipart\/form-data|application\/x-www-form-urlencoded)/i;
+
+/** The third `enctype` a browser `<form>` can send, which React never writes and this never decodes. */
+const PLAIN_TEXT_ENCTYPE = /^text\/plain/i;
+
+/**
+ * Whether a POST arrived in a shape a browser `<form>` could have produced: one of the three `enctype`
+ * values, and no header of its own to need a preflight for.
+ *
+ * The framework's cross-site refusal runs on this rather than on the {@link RenderRequest} classification,
+ * because what makes a form post forgeable from another site is its shape and not what happens to be in the
+ * body. Keyed the other way, `text/plain` — the one enctype React never writes — was classified `document`
+ * and never reached the refusal, while the README promised that a page route refuses *every* cross-site form
+ * post. No action could run through it, since `decodeAction` is only called for the two above; what it cost
+ * was a forced authenticated page render, and a claim about the boundary that was not true as written.
+ *
+ * `x-rsc-action` excludes the client-initiated shape, which needs no check of its own: that header is not
+ * CORS-safelisted, so a cross-origin caller needs a preflight the framework never answers.
+ *
+ * **The same test {@link parseRenderRequest} makes**, and it has to be: this decides what is *refused* and
+ * that decides what is *decoded*, so a header the two read differently is a request that takes the form path
+ * without passing the form check. A present-but-empty `x-rsc-action` was exactly that — `has` said "the
+ * client-initiated shape, already covered" while `get` was falsy, so the request fell through to
+ * `form-action` and ran the action it carried with the cross-site refusal skipped. Not reachable from a
+ * browser, since an empty header is still a header and still needs the preflight; refused anyway, because a
+ * predicate that fails open on a shape nothing produces today is one bad day from being wrong.
+ */
+export function isBrowserFormPost(request: Request): boolean {
+  if (request.method !== 'POST' || request.headers.get(HEADER_ACTION_ID)) return false;
+  const contentType = request.headers.get('content-type') ?? '';
+  return FORM_CONTENT_TYPES.test(contentType) || PLAIN_TEXT_ENCTYPE.test(contentType);
+}
 
 export function parseRenderRequest(request: Request): RenderRequest {
   if (request.method === 'POST') {

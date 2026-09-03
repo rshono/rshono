@@ -45,9 +45,11 @@ The framework owns four boundaries, and a defect in any of them is a vulnerabili
 
 - **An app's own middleware, or its absence.** Per-request security is Hono middleware in `src/server.ts` —
   `csrf()`, `bodyLimit()`, `secureHeaders()` — and `create-rshono` scaffolds it. An app that removed it is
-  not a framework vulnerability. (The one exception the framework does enforce is a form post to a server
-  action from another origin — a sibling subdomain included, since `Sec-Fetch-Site: same-site` is what a
-  browser labels that — which it refuses whether or not `csrf()` is registered.)
+  not a framework vulnerability. (The one exception the framework does enforce is a form post to a **page
+  route** from another origin — a sibling subdomain included, since `Sec-Fetch-Site: same-site` is what a
+  browser labels that — which it refuses whether or not `csrf()` is registered. All of them, in every
+  `enctype` a browser form can send: a form post to a page is how a server action is called, and which posts
+  carry one cannot be known without reading the body.)
 
   The _other_ action shape has no such rule and needs none, which is worth writing down because it is
   load-bearing: a client-initiated action call is selected by the `x-rsc-action` request header, and that is

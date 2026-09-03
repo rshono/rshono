@@ -28,14 +28,16 @@ import { routes as userRoutes } from '@rshono/routes';
 // @ts-expect-error — resolved by the '@rshono/server-app' alias (src/server.ts or the empty fallback)
 import * as serverAppModule from '@rshono/server-app';
 import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent, type PageProps, type Route } from '../router.js';
-import { appendVary, etagMatches } from '../server/headers.js';
+import { appendVary, etagMatches, varyWith } from '../server/headers.js';
+import { PRERENDER_NONCE_HEADER } from '../server/prerendered.js';
 import { beginPageRender, getRequestContext, publicUrl, readParams, reportServerError, runWithContext } from './context.js';
-import { isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
+import { cameFromPayload, isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
 import { renderHTML } from './entry.ssr.js';
+import { failureDocument } from './failure-document.js';
 // Type-only, so it is erased — the RSC layer does not take its own instance of the SSR layer's module.
 import type { CancellableTransformer } from './flight-inject.js';
 import { RouterProvider } from './navigation.js';
-import { asksForRsc, isActionRequest, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
+import { asksForRsc, isActionRequest, isBrowserFormPost, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
 import { assertEndpointModule, assertPageModule, assertRouteModules, validateRoutesModule, validateServerApp } from './validate-entries.js';
 
 const serverApp = validateServerApp(serverAppModule);
@@ -53,13 +55,16 @@ const { isDev } = __RSHONO_CONFIG__;
  * ```ts
  * server.use('/docs/*', async (c, next) => {
  *   await next();
- *   c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+ *   c.header('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
  * });
  * ```
  *
- * After, because the response below is built with `cache-control` in the bag it hands `c.body(...)`, and
- * that replaces a header prepared with `c.header(...)` before the handler ran. The `ETag` is untouched
- * either way, so revalidation still costs a 304 rather than the page.
+ * After, because the response below is built with `cache-control` in the bag it hands `c.body(...)`, and that
+ * replaces anything prepared before the handler ran. The `ETag` is untouched either way, so revalidation
+ * still costs a 304 rather than the page.
+ *
+ * `c.header()` rather than `c.res.headers.set(...)`, which is the same choice the response floor makes and
+ * for the same reason: it is the one that also works on a response the app did not build. See the floor.
  */
 const SSG_CACHE_CONTROL = 'public, max-age=300';
 
@@ -106,14 +111,49 @@ export type RscPayload = {
 const actionResults = new WeakMap<Context, ActionResult>();
 
 /**
+ * Whether this process is `rshono build`'s prerender pass rather than a server answering requests.
+ *
+ * Set by `build.ts` before it imports the app bundle, which inlines its own copy of the module graph — so
+ * `process.env` is what crosses that boundary, the same channel `runtime/context.ts` and the `node` runtime
+ * already read. Unforgeable from outside: it is an environment variable of the build process, and a deployed
+ * server never has one.
+ */
+const prerendering = typeof process !== 'undefined' && !!process.env?.RSHONO_PRERENDER;
+
+/**
  * The per-request CSP nonce, if the app asked for one.
  *
  * The framework never mints it: `secureHeaders()` does, when its policy contains the `NONCE`
  * placeholder, and stores it here — so all the framework does is stamp the value into the render. It is
  * readable from a route handler because `secureHeaders` resolves its directives before `next()`.
+ *
+ * Always `undefined` while prerendering, because a nonce is per request and a prerendered file is not. The
+ * pass renders through the app's full middleware, so `secureHeaders()` mints one at *build* time and it was
+ * stamped into the document that ships — frozen, and identical in every copy. Which of two bad things that
+ * caused depended on the app's policy: under a global nonce policy the file was never served (the request
+ * has a nonce of its own, so `mustRenderForNonce` renders it fresh) and the build reported prerendering
+ * pages the deployment would never read; under a policy scoped to some other path, `secureHeaders` never ran
+ * on this one, nothing forced a re-render, and the stale build-time nonce shipped — picked up by the client
+ * as `__webpack_nonce__`. Asking for the document without a nonce is what the flight variant already gets,
+ * and it settles both.
  */
 function cspNonce(c: Context): string | undefined {
-  return c.get('secureHeadersNonce');
+  return prerendering ? undefined : c.get('secureHeadersNonce');
+}
+
+/**
+ * The build-time half of `mustRenderForNonce`, as a header on the document the prerender pass asked for —
+ * {@link PRERENDER_NONCE_HEADER}, where the contract is written down.
+ *
+ * {@link cspNonce} masks the nonce so none is stamped into a file, but *whether one was minted* is exactly
+ * what decides that file's fate: a request for this path will mint its own, so the document is re-rendered
+ * per request and the copy on disk is never read. Read here rather than through `cspNonce` for that reason —
+ * this is the one place the unmasked value is the answer.
+ *
+ * Empty on a deployed server: `prerendering` is an environment variable of the build process.
+ */
+function prerenderNonceHeader(c: Context): Record<string, string> | null {
+  return prerendering && c.get('secureHeadersNonce') !== undefined ? { [PRERENDER_NONCE_HEADER]: '1' } : null;
 }
 
 /**
@@ -126,9 +166,9 @@ function cspNonce(c: Context): string | undefined {
  *
  * - A client-initiated action carries `x-rsc-action`, which is not a CORS-simple header. A cross-origin caller
  *   needs a preflight it will not be given, so that shape cannot be forged from a browser at all.
- * - A form post is `multipart/form-data` or `application/x-www-form-urlencoded` with no header of its own —
+ * - A form post is one of the three `enctype` values a browser `<form>` can send, with no header of its own —
  *   the content types that need no preflight. It is forgeable, and an app with no `src/server.ts` has nothing
- *   standing in front of it.
+ *   standing in front of it. All three, not the two React writes: see {@link isBrowserFormPost}.
  *
  * Both halves are required, because either alone refuses something real:
  *
@@ -149,8 +189,16 @@ function cspNonce(c: Context): string | undefined {
  *
  * `publicUrl(c)` rather than `c.req.url`, so it honours `trustProxy` and compares against the origin the
  * browser actually used — which behind a proxy, `rshono dev`'s included, is not the one the server was reached
- * on. The cost is that an app deliberately accepting *form* posts to an action from another origin of its own
- * cannot, `csrf()`'s allowlist included; that is what an `{ type: 'endpoint' }` route is for.
+ * on.
+ *
+ * **The cost is wider than "an action you meant to allow".** This runs on the request's shape alone, before
+ * the body is read, because knowing whether a given post carries an action means buffering an untrusted body
+ * to look for a `$ACTION_*` field. So a **page route cannot accept any cross-site form post at all**, whether
+ * or not an action is in it: a SAML ACS callback, OIDC `response_mode=form_post`, and most payment-gateway
+ * returns all arrive in exactly this shape and are all refused, `csrf()`'s allowlist included. Refusing
+ * before parsing is the right trade — the alternative is reading a body from anyone who asks — but it is a
+ * real limitation and the 403 and the README both say so. An `{ type: 'endpoint' }` route is the way to
+ * accept one: those call the app handler directly and never reach `renderPage`, so they never reach this.
  */
 function refusesCrossSiteForm(c: Context): boolean {
   const site = c.req.header('sec-fetch-site');
@@ -164,15 +212,30 @@ function acceptsHtml(c: Context): boolean {
 }
 
 /**
- * The 404 for an app with no `notFound` page, and for a client that wanted neither HTML nor a flight
- * payload. It carries the `Vary` too: this is one of the answers a page URL gives depending on the `RSC` request header.
+ * Every plain-text answer the framework gives on a page route: the 404s, the refusals on the action path and
+ * the last-resort 500. One function, because the header bag is what gets forgotten — and the four call sites
+ * used to make three different choices about it, which left the next one to guess.
+ *
+ * Both headers are set here rather than left to the response floor, which only decorates page *content
+ * types* and so never sees a `text/plain` answer.
+ *
+ * - **`cache-control`** matters in one case and is consistency in the rest. A 404 is heuristically cacheable
+ *   under RFC 9111, so without this a shared cache may store the plain-text one — while the rendered HTML
+ *   404 beside it, the same answer to the same request from a client that asked for HTML, is correctly
+ *   private. The action refusals answer a POST, which no cache stores, and 400/403/500 are not in that list
+ *   either; saying it anyway costs a header and settles the question for good.
+ * - **`vary: RSC`** because a page URL has two representations, and every one of these is an answer to a
+ *   request that could have asked for either.
+ */
+function plainRefusal(c: Context, message: string, status: ContentfulStatusCode): Response {
+  return c.text(message, status, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+}
+
+/**
+ * The 404 for an app with no `notFound` page, and for a client that wanted neither HTML nor a flight payload.
  */
 function plainNotFound(c: Context): Response {
-  // `cache-control` explicitly, because the default above is applied to page *content types* and this is
-  // `text/plain`. A 404 is heuristically cacheable under RFC 9111, so without it a shared cache may store
-  // this one — while the rendered HTML 404 next to it, the same answer to the same request from a client
-  // that asked for HTML, is correctly private.
-  return c.text('Not Found', 404, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+  return plainRefusal(c, 'Not Found', 404);
 }
 
 /** A lazy once-cell: runs `load` at most once, but clears a rejection so a later call can retry. */
@@ -360,6 +423,10 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
       onError: (error) => reportServerError(error, { source: 'ssr', hono: c, message: '[rshono] SSR error:' }),
     });
   } catch (error) {
+    // The render is abandoned, so stop it: a boundary still resolving is work for a response that will never
+    // be sent, and it holds the tee's SSR branch open behind it. The `signal.aborted` guard in `onError`
+    // above is what keeps the resulting cancellations from being reported as render errors of their own.
+    renderAbort.abort(error);
     release();
     if (controlSignal) throw controlSignal;
     throw error;
@@ -384,13 +451,118 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
     release();
     throw controlSignal;
   }
-  return c.body(ssrResult.stream, (ssrResult.status ?? opts.status ?? 200) as ContentfulStatusCode, {
+  return c.body(ssrResult.stream, (opts.status ?? 200) as ContentfulStatusCode, {
     'content-type': 'text/html;charset=utf-8',
+    ...prerenderNonceHeader(c),
   });
+}
+
+/**
+ * The answer to an action request whose body could not be read or decoded — a malformed request, the same
+ * class of thing as the unknown-action-id 400 beside it, and answered the same way.
+ *
+ * Deliberately silent. Action ids are public — they are bare string literals in the client chunks — so
+ * anyone can post a valid id with a body that will not decode, and while that reached `reportServerError` it
+ * was an unauthenticated way to page whoever owns the error tracker, once per request. Nothing here is the
+ * server being wrong, so there is nothing to report; the status is the whole message.
+ *
+ * The text says no more than that on purpose: which of `text()`, `formData()`, `decodeReply` or
+ * `decodeAction` gave up is React's or undici's internal shape, and repeating it back would describe the
+ * framework's decoding to a caller who cannot act on it.
+ */
+function malformedAction(c: Context): Response {
+  return plainRefusal(c, 'Bad Request: malformed server action request', 400);
+}
+
+/** The field name React gives the action id of a form with no `useActionState`. See {@link formActionId}. */
+const ACTION_ID_FIELD = '$ACTION_ID_';
+
+/**
+ * The action id a `<form action={serverAction}>` post names in a field *name*, or `null` for the shape that
+ * does not.
+ *
+ * Two shapes reach `decodeAction`, and only one puts the id somewhere readable. A form with no
+ * `useActionState` posts a bare `$ACTION_ID_<id>` field, whose name is what `decodeAction` itself matches on
+ * — so reading it here is not a second decoder of React's form format. `useActionState`'s shape puts the id
+ * *inside* an encoded `$ACTION_<n>:0` value instead, and reading that would be exactly the drift
+ * `decodeFormState`'s guard below is about: two decoders disagreeing about a wire format neither owns.
+ */
+function formActionId(formData: FormData): string | null {
+  for (const key of formData.keys()) {
+    if (key.startsWith(ACTION_ID_FIELD)) return key.slice(ACTION_ID_FIELD.length);
+  }
+  return null;
+}
+
+/**
+ * The first action the server bundle holds itself, as the id to ask `loadServerAction` about when a form
+ * post names none this can see.
+ *
+ * Entries declaring `chunks` are skipped for {@link checkServerActions}'s reason: `loadServerAction` is a
+ * bare `__webpack_require__`, so a module that has not been loaded yet throws for a reason that says nothing
+ * about the deployment — and a probe that answers "broken" for a healthy app is the one failure direction
+ * this must not have.
+ */
+const probeActionId = ((): string | undefined => {
+  for (const [id, entry] of Object.entries(__rspack_rsc_manifest__.serverManifest)) {
+    if ((entry.chunks?.length ?? 0) === 0) return id;
+  }
+  return undefined;
+})();
+
+/**
+ * Whether the app's `'use server'` module is what `decodeAction` could not load, rather than the caller's
+ * body being what it could not decode.
+ *
+ * Asked by loading an action for real, because nothing on the error says which of the two it was: React
+ * reports a missing module and an undecodable field through the same channel, and the message is its own
+ * internal shape either way. `loadServerAction` is `__webpack_require__` plus a `typeof === 'function'`
+ * check, so a second call after the first succeeded is a cache hit.
+ *
+ * The id it asks about is the one the body names where the body names one, and otherwise any of the app's —
+ * which is the same question, because Rspack concatenates the whole `'use server'` graph into a single
+ * server module (see {@link checkServerActions} and the G1 note): if one action cannot be loaded at run
+ * time, none of them can.
+ *
+ * **Both ways of being wrong land on the old behaviour, deliberately.** No manifest to probe, or a probe
+ * that succeeds while the id the caller actually named is broken — which needs `useActionState`'s shape
+ * *and* a per-entry manifest corruption rather than a module that will not evaluate — answers `false`, and
+ * the 400 stands exactly as it did. What must never happen is the other direction: a malformed body
+ * answering 500 and paging whoever owns the error tracker, which is what {@link malformedAction} exists to
+ * prevent. A probe that throws is the deployment being broken for every caller, so a 500 is then right for
+ * this one too.
+ */
+function cannotLoadServerActions(formData: FormData): boolean {
+  const named = formActionId(formData);
+  const id = named !== null && Object.hasOwn(__rspack_rsc_manifest__.serverManifest, named) ? named : probeActionId;
+  if (id === undefined) return false;
+  try {
+    loadServerAction(id);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageComponent>>): Promise<Response> {
   const request = c.req.raw;
+
+  // Ahead of the classification below, and keyed on the request's *shape* rather than on it: every `enctype`
+  // a browser form can post is refused, not only the two React writes. `text/plain` is the third, and keying
+  // this off `parseRenderRequest` left it classified `document` and let through — the one enctype the
+  // framework never decodes was also the one it never refused, while the README promised that a page route
+  // refuses every cross-site form post. See {@link isBrowserFormPost} and `refusesCrossSiteForm`.
+  if (isBrowserFormPost(request) && refusesCrossSiteForm(c)) {
+    // Named for what was actually refused. The check runs before the body is read — it has to, since knowing
+    // whether a post carries an action means buffering an untrusted body — so "to a server action" claimed
+    // something this code cannot know, and said it to a caller whose post very often has no action in it.
+    return plainRefusal(
+      c,
+      "Forbidden: cross-site form post to a page route — a page route cannot accept one, because a form post to a page is how a server action is called. Use an { type: 'endpoint' } route.",
+      403,
+    );
+  }
+
   const renderRequest = parseRenderRequest(request);
 
   let returnValue: ActionResult | undefined;
@@ -402,13 +574,34 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       // Before the body is decoded, so an unknown id costs nothing to reject. `hasOwn` so `__proto__`
       // does not resolve to a manifest entry.
       if (!Object.hasOwn(__rspack_rsc_manifest__.serverManifest, renderRequest.actionId)) {
-        return c.text('Bad Request: unknown server action', 400);
+        return plainRefusal(c, 'Bad Request: unknown server action', 400);
       }
-      const contentType = request.headers.get('content-type');
-      const body = contentType?.startsWith('multipart/form-data') ? await request.formData() : await request.text();
-      temporaryReferences = createTemporaryReferenceSet();
-      const args = await decodeReply<unknown[]>(body, { temporaryReferences });
-      const action = loadServerAction(renderRequest.actionId);
+      let args: unknown[];
+      try {
+        const contentType = request.headers.get('content-type');
+        const body = contentType?.startsWith('multipart/form-data') ? await request.formData() : await request.text();
+        temporaryReferences = createTemporaryReferenceSet();
+        args = await decodeReply<unknown[]>(body, { temporaryReferences });
+      } catch {
+        return malformedAction(c);
+      }
+
+      // Outside that guard, deliberately. Everything inside it reads or decodes the *body*, which is the
+      // caller's to get wrong; loading the action is not. The id is one `hasOwn` above proved the manifest
+      // holds, so no client can steer this — what is left is the bundle being incomplete: a chunk
+      // `__webpack_require__` cannot find after a partial deploy, or a module that throws as it evaluates.
+      // A 400 there would tell the one caller in that guard who is *not* at fault that they are, and tell
+      // the operator who needs paging nothing at all.
+      let action: (...actionArgs: unknown[]) => Promise<unknown>;
+      try {
+        action = loadServerAction(renderRequest.actionId);
+      } catch (error) {
+        // Attributed to the action rather than left to the top-level handler's `source: 'request'`: the
+        // request was fine, the deployment is not. Then re-thrown, so the app's `error` page answers 500 —
+        // `reportServerError` de-duplicates, so `onError` reporting it again is a no-op.
+        reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action could not be loaded:' });
+        throw error;
+      }
       try {
         returnValue = { ok: true, value: await action(...args) };
       } catch (error) {
@@ -425,12 +618,32 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
     } else {
       // A `<form action={serverAction}>` post, which is the path that runs before hydration and with
       // JavaScript off. Unlike the client-initiated one it carries no custom header, so it is also the only
-      // action shape a browser can be made to send from another site: see `refusesCrossSiteForm`.
-      if (refusesCrossSiteForm(c)) {
-        return c.text('Forbidden: cross-site form post to a server action', 403, { vary: RSC_VARY_HEADER });
+      // action shape a browser can be made to send from another site — refused above, on the shape of the
+      // request rather than on this classification: see `refusesCrossSiteForm`.
+      let formData: FormData;
+      try {
+        formData = await request.formData();
+      } catch {
+        return malformedAction(c);
       }
-      const formData = await request.formData();
-      const decodedAction = await decodeAction(formData, __rspack_rsc_manifest__.serverManifest);
+      let decodedAction: (() => Promise<unknown>) | null;
+      try {
+        decodedAction = await decodeAction(formData);
+      } catch (error) {
+        // Split from the read above, for the reason F3 split the client-initiated path: `decodeAction` is
+        // two things at once. It reads the caller's body *and* — through `loadServerReference` —
+        // `__webpack_require__`s the module the action lives in, so the 400 that is right about a body is
+        // wrong whenever the deployment is what failed. Which of the two it was is nowhere on the error, so
+        // it is asked directly. See {@link cannotLoadServerActions}.
+        if (cannotLoadServerActions(formData)) {
+          // The original error, not the probe's: this one is the fault the request actually met. Attributed
+          // and re-thrown exactly as the `rsc-action` branch does, so the app's `error` page answers 500 and
+          // the operator is paged instead of the caller being blamed.
+          reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action could not be loaded:' });
+          throw error;
+        }
+        return malformedAction(c);
+      }
       if (decodedAction) {
         let result: unknown;
         try {
@@ -445,7 +658,23 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
           reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action error:' });
           throw error;
         }
-        formState = (await decodeFormState(result, formData, __rspack_rsc_manifest__.serverManifest)) ?? undefined;
+        try {
+          formState = (await decodeFormState(result, formData)) ?? undefined;
+        } catch (error) {
+          // The action has already run, and may well have written something, so this cannot be refused the
+          // way an undecodable body *before* it is — the guard above answers 400 precisely because nothing
+          // has happened yet. What failed here is rebuilding the `useActionState` key from the body's
+          // `$ACTION_REF_` metadata, and a body React wrote always carries it: this is reachable only from a
+          // hand-made one, which pairs a `$ACTION_ID_` React took for the call with `$ACTION_REF_`/
+          // `$ACTION_KEY` fields it did not write. So the page is rendered with no form state, which is
+          // exactly what a form without `useActionState` gets.
+          //
+          // Silent for the same reason `malformedAction` is: action ids are public, so anyone can post one,
+          // and reporting from here would put an unauthenticated caller back in touch with whoever owns the
+          // error tracker — for a request that has already had its effects. In dev it is worth a line, since
+          // there the likely cause is a React or bundler version whose form fields this does not understand.
+          if (isDev) console.warn('[rshono] a form post carried form-state fields that could not be decoded; rendering without them:', error);
+        }
       }
     }
   }
@@ -460,6 +689,43 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
   });
 }
 
+/**
+ * A thrown value as an `Error`, because that is what Hono's dispatcher requires before it will hand one to
+ * `app.onError`.
+ *
+ * `compose` routes a rejection to the error handler only when it is `instanceof Error`, and **re-throws
+ * anything else** — which rejects `app.fetch` and leaves the answer to whatever is hosting it. Under
+ * `@hono/node-server` that is a bodiless 500 raised outside the app: no `error` page, nothing on stderr, no
+ * `onServerError` report, and not even the response floor's `x-content-type-options` / `referrer-policy` /
+ * `x-frame-options`, since nothing below it ever unwinds. So `throw 'a plain string'` from an endpoint used
+ * to answer strictly worse than `throw new Error('…')` beside it, and `RouteConfig.error` promises the page
+ * for a throw from "an endpoint, a server action, or middleware" — all three reachable this way.
+ *
+ * The test is `instanceof Error` and nothing wider, deliberately: it has to be the *same* test `compose`
+ * makes, so that what this converts is exactly what Hono would have re-thrown. A duck-typed check would
+ * convert a cross-realm `Error` the dispatcher was about to handle, and leave one it was not.
+ *
+ * Converting only a non-`Error` is also what keeps the rest of the error path intact: both control signals
+ * extend `Error`, `cameFromPayload` reads a `digest` off the thrown object, and `reportServerError`
+ * de-duplicates on its identity — a wrapper around any of those would break all three.
+ *
+ * The value goes on `cause` rather than into the message alone. It is the only thing that carries what the
+ * app actually threw, an error tracker walks it, and the wrapper's own `stack` starts *here*, in the
+ * framework, so it says nothing about where the throw came from.
+ */
+function asError(value: unknown): Error {
+  if (value instanceof Error) return value;
+  let described: string;
+  try {
+    // Quoted for a string, so an empty one is still visible; anything else prints however it prints. A
+    // `toString` that throws in its turn leaves only the type to say, and this must not fail in a catch.
+    described = typeof value === 'string' ? JSON.stringify(value) : String(value);
+  } catch {
+    described = typeof value;
+  }
+  return new Error(`[rshono] a non-Error value was thrown: ${described}`, { cause: value });
+}
+
 function buildApp(): Hono {
   const app = new Hono();
 
@@ -469,23 +735,77 @@ function buildApp(): Hono {
   app.use(async (c, next) => {
     await next();
     const headers = c.res.headers;
-    if (!headers.has('x-content-type-options')) headers.set('x-content-type-options', 'nosniff');
-    if (!headers.has('referrer-policy')) headers.set('referrer-policy', 'strict-origin-when-cross-origin');
-    if (!headers.has('x-frame-options')) headers.set('x-frame-options', 'SAMEORIGIN');
+
+    /**
+     * The headers this response still needs, collected before any of them is written — because the writing
+     * is the part that cannot go through `headers.set(…)`.
+     *
+     * A handler is free to return a `Response` it did not build. `Response.redirect(…)` and every result of
+     * `fetch()` carry an **immutable** header bag, and handing one straight back is ordinary Hono — proxying
+     * an upstream is the commonest thing a Worker does. `.set()` on one throws `TypeError: immutable`, which
+     * is what this floor used to answer such a handler with: the throw reached `onError`, the app's 500 page
+     * went out in place of the redirect, and the app's error tracker got `immutable` and a minified frame
+     * naming nothing anyone could act on.
+     *
+     * Invisible on the targets anyone develops against, which is the whole hazard: `@hono/node-server`
+     * installs a mutable `Response` shim as a global, so `node` and `vercel` — dev, `rshono start` and every
+     * suite that drives them — cannot see the bug that `cloudflare` and `aws-lambda` will. The framework
+     * already knew the mechanism: it is written on `serveAsset` in `cloudflare/runtime.ts`, which repairs the
+     * framework's *own* asset responses by hand.
+     *
+     * `c.header()` is the repair, and Hono's own — it rebuilds a finalized response as
+     * `new Response(res.body, res)` before writing. It does that on *every* call, so collecting is what keeps
+     * it to one rebuild: the first write goes through `c.header()` and the rest to the bag it hands back
+     * (measured at 1.2 µs against 4.9 µs for five separate calls), and a response that already carries all of
+     * these is not rebuilt at all.
+     */
+    const writes: [name: string, value: string][] = [];
+    if (!headers.has('x-content-type-options')) writes.push(['x-content-type-options', 'nosniff']);
+    if (!headers.has('referrer-policy')) writes.push(['referrer-policy', 'strict-origin-when-cross-origin']);
+    if (!headers.has('x-frame-options')) writes.push(['x-frame-options', 'SAMEORIGIN']);
 
     // React Refresh compiles updates with `eval`, so a dev build cannot run under a production CSP.
     // Widened here so one policy in src/server.ts serves both.
     if (isDev) {
       const csp = headers.get('content-security-policy');
       if (csp?.includes('script-src ')) {
-        headers.set('content-security-policy', csp.replace('script-src ', "script-src 'unsafe-eval' "));
+        writes.push(['content-security-policy', csp.replace('script-src ', "script-src 'unsafe-eval' ")]);
       }
     }
 
-    // Page responses only from here down.
-    if (!PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) return;
-    appendVary(headers, RSC_VARY_HEADER);
-    if (!headers.has('cache-control')) headers.set('cache-control', PAGE_CACHE_CONTROL);
+    // Page responses only.
+    if (PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) {
+      const vary = varyWith(headers.get('vary'), RSC_VARY_HEADER);
+      if (vary !== null) writes.push(['vary', vary]);
+      if (!headers.has('cache-control')) writes.push(['cache-control', PAGE_CACHE_CONTROL]);
+    }
+
+    let writable: Headers | undefined;
+    for (const [name, value] of writes) {
+      if (writable) writable.set(name, value);
+      else {
+        c.header(name, value);
+        writable = c.res.headers;
+      }
+    }
+  });
+
+  // The backstop for {@link asError}, and *second* for a reason: the middleware that throws is the one whose
+  // own half after `await next()` is skipped, so converting in the floor above would buy `onError` at the
+  // cost of the headers that floor exists to set. Here the conversion happens below it, `compose` hands the
+  // `Error` to `onError` at this level, and the floor unwinds over the response that comes back.
+  //
+  // Second also means *above the app's own middleware*, which is what the two conversions further down make
+  // up for: an endpoint or a page route converts at its own handler, so a middleware's post-`next()` half
+  // still runs, exactly as it does for a thrown `Error`. What is left over is a *middleware* that throws a
+  // non-`Error` itself — then everything registered outside it is skipped, and nothing short of a change in
+  // `compose` could do otherwise.
+  app.use(async (c, next) => {
+    try {
+      await next();
+    } catch (error) {
+      throw asError(error);
+    }
   });
 
   // First, so the app's own middleware (`csrf()`, `bodyLimit()`, auth, logging) wraps everything registered
@@ -519,6 +839,9 @@ function buildApp(): Hono {
       // `301` and `308` are cacheable with no explicit `Cache-Control` at all, so a session-gated permanent
       // redirect could otherwise be stored by a shared cache and replayed to another visitor, and without
       // `Vary` this document redirect could answer an `RSC: 1` fetch that needs the payload above.
+      //
+      // Written straight to the bag, unlike the floor: `c.redirect` builds this response here and now, so it
+      // is Hono's own and mutable. `Response.redirect()` — the one an *app* would reach for — is not.
       const redirected = c.redirect(signal.location, signal.status as RedirectStatusCode);
       appendVary(redirected.headers, RSC_VARY_HEADER);
       if (!redirected.headers.has('cache-control')) redirected.headers.set('cache-control', PAGE_CACHE_CONTROL);
@@ -581,7 +904,11 @@ function buildApp(): Hono {
           return await runWithContext(c, () => renderPage(c, loadPage));
         } catch (error) {
           if (isControlSignal(error)) return runWithContext(c, () => respondToControlSignal(c, error));
-          throw error;
+          // Converted here rather than left to the backstop above the app's middleware, so a page or an
+          // action that throws a non-`Error` reaches `onError` from this route's own dispatch level — which
+          // is where a thrown `Error` reaches it, and so the only place from which a middleware's
+          // post-`next()` half runs. See {@link asError}.
+          throw asError(error);
         }
       };
 
@@ -606,10 +933,16 @@ function buildApp(): Hono {
       const loadEndpoint = once(async () => assertEndpointModule(await route.server(), `"${route.path}"`));
       const handler: Handler = async (c, next) => {
         const endpointHandler = await loadEndpoint();
-        // Hono's `Handler` leaves its return parameter defaulted to `any`, so this hands back exactly what
-        // the app's own handler is declared to return — there is nothing narrower to assert here.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-        return endpointHandler(c, next);
+        try {
+          // Awaited rather than returned, so a rejection is this frame's to catch: the same conversion the
+          // page route makes, for the same reason. See {@link asError}.
+          // Hono's `Handler` leaves its return parameter defaulted to `any`, so this hands back exactly what
+          // the app's own handler is declared to return — there is nothing narrower to assert here.
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+          return await endpointHandler(c, next);
+        } catch (error) {
+          throw asError(error);
+        }
       };
       // De-duplicated, because `app.on(['GET', 'GET'], …)` registers the path twice. Validation refuses
       // `'all'` inside a list, so a list that reaches here is concrete methods only.
@@ -649,7 +982,8 @@ function buildApp(): Hono {
       const res = error.getResponse();
       return c.newResponse(res.body, res);
     }
-    reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
+    // Not a shell failure re-thrown from `renderComponent`: {@link cameFromPayload} says why.
+    if (!cameFromPayload(error)) reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadErrorPage && (isRsc || acceptsHtml(c))) {
       const errorInfo: ErrorPageInfo = isDev
@@ -663,25 +997,101 @@ function buildApp(): Hono {
           renderComponent(c, await loadErrorPage(), { status: 500, isRsc, errorInfo, returnValue: actionResults.get(c) }),
         );
       } catch (renderError) {
-        reportServerError(renderError, { source: 'request', hono: c, message: '[rshono] the error page failed to render:' });
+        // A `redirect()` is not a render failure, and this is the one catch on that path that used to treat
+        // it as one — a 500 and a misleading line in the app's error tracker, where the `notFound` page's
+        // identical branch answers the redirect. Nothing is committed yet and the branch that answers it
+        // cannot fail, which is the same reasoning as there.
+        //
+        // `notFound()` is deliberately **not** honoured here: it would render the `notFound` page from
+        // inside the error path, which can fail in its turn and has nowhere left to escalate to. It stays
+        // reported.
+        if (renderError instanceof RedirectSignal) return respondToControlSignal(c, renderError);
+        // Not as a render failure, for a signal — that message describes a bug in the page, and this is the
+        // framework declining to act. An author who wrote `notFound()` in their `error` page and read "the
+        // error page failed to render: NotFoundSignal" would go looking for the wrong thing.
+        const message = isControlSignal(renderError)
+          ? '[rshono] notFound() from the error page is not honoured — it would render the notFound page from inside the error path. The framework 500 answers instead:'
+          : '[rshono] the error page failed to render:';
+        // An `error` page whose *own* render threw arrives here as a payload stand-in, its real fault
+        // already reported as `render` by the render that produced it. So the line still goes to stderr —
+        // with two `render` reports on one request it is what says which of them was the error page — but
+        // it is not a second report of one fault. {@link cameFromPayload}.
+        if (cameFromPayload(renderError)) console.error(message, renderError);
+        else reportServerError(renderError, { source: 'request', hono: c, message });
       }
     }
+    // A client that asked for HTML gets a document, even here: this is the last resort for an app with no
+    // `error` page, and for one whose `error` page threw in its turn, and a browser handed `text/plain` in
+    // either case shows a bare line of text where the app used to show a page. Everything else — a flight
+    // fetch, curl, a probe — gets the plain line, which is what it asked for.
+    if (!isRsc && acceptsHtml(c)) {
+      return c.html(failureDocument(error), 500, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+    }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';
-    // Same reason as `plainNotFound`, minus the urgency: a 500 is not heuristically cacheable, so this half
-    // is consistency — the framework's own answers should not differ in what they promise about caching.
-    return c.text(`Internal Server Error${detail}`, 500, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+    return plainRefusal(c, `Internal Server Error${detail}`, 500);
   });
 
   return app;
 }
 
 /**
- * Resolves and checks every route's own module — page and endpoint alike, `notFound` and `error` included.
+ * Loads the app's server actions, so a `'use server'` module that cannot be evaluated is a line in the build
+ * log rather than a 500 on the first action anyone calls.
+ *
+ * Nothing on the server imports these modules until an action is called: a `'use client'` component that
+ * calls one gets a `createServerReference` stub, so the only thing holding them is the manifest. That makes
+ * an action module the one part of an app a build never touched — and the failure it hides is not one route,
+ * it is every action that module holds, which in practice is all of them (Rspack compiles the app's whole
+ * `'use server'` graph into a single server module).
+ *
+ * One id per *module*, because that is the granularity of the failure that matters — and evaluating a module
+ * that throws once per action id would repeat whatever it did before throwing. The rest of that module's ids
+ * are then cache hits, so they are checked too: `loadServerAction` also refuses an export that is not a
+ * function, and that is per id.
+ *
+ * Entries declaring `chunks` are skipped. `loadServerAction` is a bare `__webpack_require__`, so a module
+ * that has not been loaded yet would throw here for a reason that says nothing about the app — and every
+ * action this framework has produced sits in the server bundle itself, with no chunks to load.
+ *
+ * A warning, not a failure, for the same reason {@link assertRouteModules} warns: a module can legitimately
+ * decline to evaluate in a build — one that reads a secret out of the environment, say — and a build is not
+ * where that gets decided.
+ */
+function checkServerActions(): void {
+  const entries = Object.entries(__rspack_rsc_manifest__.serverManifest).filter(([, entry]) => (entry.chunks?.length ?? 0) === 0);
+  /** Action ids by the module that holds them, in manifest order. */
+  const byModule = new Map<string, string[]>();
+  for (const [actionId, entry] of entries) byModule.set(entry.id, [...(byModule.get(entry.id) ?? []), actionId]);
+
+  for (const actionIds of byModule.values()) {
+    for (const actionId of actionIds) {
+      try {
+        loadServerAction(actionId);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `  ⚠ the module holding ${actionIds.length} of the app's ${entries.length} server action(s) could not be loaded at build time — ${reason}\n` +
+            `    Calling one of those actions loads that module first, so if it fails the same way at run time, each of them answers 500.`,
+        );
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Everything about the app a build can check without serving a request: every route's own module — page and
+ * endpoint alike, `notFound` and `error` included — and then the server actions, which no route reaches.
+ *
  * Called by `rshono build` once this bundle is imported for the prerender pass, so a route that could never
  * serve a request fails the build rather than answering 500 in production. Exported from here rather than
- * driven from the CLI because the fallback pages are on `routeConfig`, which does not leave this module.
+ * driven from the CLI because both halves read module-scope state — `routeConfig`, and the manifest the RSC
+ * plugin injects — neither of which leaves this bundle.
  */
-export const checkRouteModules = (): Promise<void> => assertRouteModules(routeConfig);
+export const checkAppModules = async (): Promise<void> => {
+  await assertRouteModules(routeConfig);
+  checkServerActions();
+};
 
 export const app = buildApp();
 

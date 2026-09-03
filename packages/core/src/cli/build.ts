@@ -23,27 +23,8 @@ interface BuildOptions {
 interface ServerBundle {
   app: Hono;
   routes: readonly Route[];
-  /** Resolves every route's own module and checks it — see `assertRouteModules`. */
-  checkRouteModules: () => Promise<void>;
-}
-
-/**
- * Runs one phase of the build that the app itself can fail.
- *
- * A `[rshono]` message was written for whoever is running the build, so it is printed as the one line it is;
- * anything else is a bug in the framework and keeps its stack. Everything the app can get wrong arrives this
- * way — the two entry modules, checked in the bundle's module scope; each route's own module; and a page that
- * throws while prerendering.
- */
-async function phase<T>(run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.startsWith('[rshono]')) throw error;
-    console.error(`\n  ✗ ${message}\n`);
-    return exit(1);
-  }
+  /** Resolves every route's own module, and the app's server actions, and checks them — see `checkAppModules`. */
+  checkAppModules: () => Promise<void>;
 }
 
 function importServerBundle(distDir: string): Promise<ServerBundle> {
@@ -77,9 +58,17 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   console.log(stats.toString({ preset: 'summary', colors: true }));
 
   const publicDir = join(rootDir, 'public');
-  let distPublicDir: string | null = null;
+  // From scratch, and unconditionally, like every other directory this build assembles. `cpSync` only
+  // adds, so a file deleted from `public/` used to survive in `dist/public` and go on being served by
+  // `rshono start` for good — and deleting `public/` outright left the whole of the old tree there, since
+  // the copy below is the only thing that touches it. The two CDN presets clear their own output but read
+  // *this* directory, so a stale file propagated into their assets as well, past a comment promising it
+  // could not.
+  const distPublicDir = join(distDir, 'public');
+  await rm(distPublicDir, { recursive: true, force: true });
+  let servedPublicDir: string | null = null;
   if (existsSync(publicDir)) {
-    distPublicDir = join(distDir, 'public');
+    servedPublicDir = distPublicDir;
     cpSync(publicDir, distPublicDir, { recursive: true });
     console.log('  • copied public/ into dist/public (served at /)');
   }
@@ -88,22 +77,35 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   await rm(ssgDir, { recursive: true, force: true });
   process.env.RSHONO_PRERENDER = '1';
   // The bundle's module scope is where `src/routes.ts` and `src/server.ts` are validated.
-  const bundle = await phase(() => importServerBundle(distDir));
+  //
+  // This and the two stages below are what the *app* can fail — the two entry modules here, each route's own
+  // module next, and a page that throws while prerendering after that. Each raises a `[rshono]` message
+  // written for whoever is running the build, and `main().catch` in `cli/index.ts` is what prints it as the
+  // one line it is. These used to be wrapped in a `phase()` helper that did the same thing three times and
+  // nowhere else, which left `createConfigs` above — where a missing `src/routes.ts` is found — printing a
+  // raw `Error` object with framework frames in it.
+  const bundle = await importServerBundle(distDir);
 
   // Before anything is rendered: the checks here are the ones a route fails on *every* request, so a build
   // that skipped them would spend the prerender pass on a route it is about to refuse anyway. Without this
   // they ran on first request instead, which meant a page that could never work shipped behind a green build.
-  await phase(() => bundle.checkRouteModules());
+  await bundle.checkAppModules();
 
-  const { written, skipped } = await phase(() =>
-    prerenderStaticRoutes({
-      routes: bundle.routes,
-      fetch: (request) => bundle.app.fetch(request),
-      ssgDir,
-      siteUrl: config.siteUrl,
-    }),
-  );
-  if (written.length > 0) console.log(`  • prerendered ${written.length} static page(s): ${written.join(', ')}`);
+  const { written, skipped, flightOnly } = await prerenderStaticRoutes({
+    routes: bundle.routes,
+    fetch: (request) => bundle.app.fetch(request),
+    ssgDir,
+    siteUrl: config.siteUrl,
+  });
+  if (written.length > 0) {
+    // Marked per page rather than counted separately, so the line answers the question a reader has about
+    // each name in it: is this page served from disk? A page under a CSP nonce is half of one — its flight
+    // payload is, its document is re-rendered per request — and saying "prerendered" alone would claim more
+    // than the build did. The warning above says why, once.
+    const nonced = new Set(flightOnly);
+    const label = (path: string) => (nonced.has(path) ? `${path} (flight only)` : path);
+    console.log(`  • prerendered ${written.length} static page(s): ${written.map(label).join(', ')}`);
+  }
   if (skipped.length > 0) console.log(`  • skipped ${skipped.length} (will SSR per request)`);
 
   // Before `finalize`, so a preset that copies `dist/` into a platform layout takes it along.
@@ -114,8 +116,9 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
     rootDir,
     distDir,
     staticDir: join(distDir, 'static'),
-    publicDir: distPublicDir,
+    publicDir: servedPublicDir,
     ssgDir,
+    routes: bundle.routes,
   });
 
   console.log(`  ✓ build complete — ${preset.deployHint}`);

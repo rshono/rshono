@@ -35,7 +35,9 @@ rshono build   # production build: client + server bundles + prerendered pages
 rshono start   # run the production build
 ```
 
-`--port` / `PORT` and `HOST` set where it listens; `--config <path>` points `build` at another config file.
+`--port` / `PORT` sets the port for `dev` and `start`. **`HOST` applies to `start` only** — `dev` always binds
+`127.0.0.1`, because its source maps embed the original source of your `'use server'` modules, and it warns if
+you set one. `--config <path>` points `build` at another config file.
 
 ## Project layout
 
@@ -132,6 +134,12 @@ carries a fresh page payload, so server-rendered UI updates after a mutation.
 action. [Server actions docs](https://www.rshono.com/docs/pages#server-actions), and
 [how to use them](https://www.rshono.com/docs/usage).
 
+Rspack compiles an app's whole `'use server'` graph into **one** server module, and calling any action loads
+it — so a module that throws while it evaluates takes every action in the app with it, not just its own.
+Nothing on the server imports these modules until an action is called, which used to make that a green build
+followed by a 500 on the first click. `rshono build` now loads them and warns if one will not, and at run
+time a failure to load is reported as an action fault, not answered as a bad request.
+
 ## Full Hono underneath
 
 - `{ type: 'endpoint' }` routes export a Hono `handler` from a server module.
@@ -212,7 +220,9 @@ server.use(secureHeaders({ contentSecurityPolicy: { scriptSrc: ["'self'", NONCE]
 
 `create-rshono` scaffolds the first two. Under `rshono dev` the framework widens `script-src` with
 `'unsafe-eval'` for React Refresh — never in a build — so one policy serves both, and a route with a
-nonce in play falls back to rendering per request. Everything else Hono ships works the same way:
+nonce in play falls back to rendering its _document_ per request: fixed bytes cannot carry a fresh nonce.
+Its flight payload has no nonce to go stale and is still served from disk, so `rshono build` marks such a
+page `(flight only)` rather than counting it as fully prerendered. Everything else Hono ships works the same way:
 `cors`, `basicAuth`, `jwt`, `timeout`, `requestId`, `ipRestriction`. A middleware that rejects by
 throwing an `HTTPException` keeps its own status rather than becoming the 500 page.
 [Middleware docs](https://www.rshono.com/docs/hono#security-middleware) · [Hono](https://hono.dev/docs).
@@ -265,9 +275,21 @@ Every target streams, which is the bar a new one has to clear.
 - **Streaming is the fragile part of a serverless target, and it fails silently** — `supportsResponseStreaming`
   on Vercel, `streamifyResponse` plus a `RESPONSE_STREAM` Function URL on Lambda. Getting those right is what
   the presets are for.
+- **Most of what `vercel` and `aws-lambda` upload is the source map.** `dist/server/main.mjs.map` is roughly
+  three quarters of `dist/server`, and both targets take the whole directory — `vercel` copies it into the
+  function, the `aws-lambda` handoff is "zip `dist/`". That is deliberate: the map is what turns the
+  `onServerError` funnel from minified frames into real ones, and it is never served to anyone. But it is
+  upload weight rather than cold-start weight — nothing parses it unless a stack trace is being mapped — so
+  delete it from the package if size matters more to you than readable production traces.
 - **Prerendered pages are never CDN-served**: one URL answers with a document or a flight payload depending on
   the `RSC` request header, and a path-keyed CDN cannot choose. `/_static` and `public/` do go straight to the
   CDN.
+- **`public/` beats a route on `cloudflare` and `vercel`, and loses to it on `node` and `aws-lambda`.** Where
+  the app owns the whole surface, `public/` is mounted after every route and answers only what none of them
+  claimed. Where a CDN sits in front it is part of the static output, so the platform answers from it before
+  the app is invoked — the framework cannot reorder either one. So `public/index.html` beside a page route at
+  `/` serves the file on two targets and renders the page on the other two. `rshono build` warns when a
+  `public/` file lands on a route's path, on the targets where it matters.
 - **The serverless targets bundle your dependencies**; `node` bundles only the ones a `'use client'` component
   pulls in. A function is an uploaded directory with no `node_modules` to resolve against, so `vercel`,
   `aws-lambda` and `cloudflare` compile everything in. The cost is that a native addon — or a package that
@@ -311,10 +333,45 @@ Every target streams, which is the bar a new one has to clear.
   proof that reloading will not help. A visitor without JavaScript is left on the fallback under a 200, and a
   crawler indexes that 200 as a soft 404. The fix is app-side: decide in Hono
   middleware, or in the page component body above the boundary. `rshono dev` warns when it happens.
+
+  **On a soft navigation there is no shell to beat, so every `notFound()` degrades.** A flight fetch is
+  committed as `200 text/x-component` the moment the render hands its stream back — before anything has been
+  awaited — so a `notFound()` from the _first line_ of a page component is already too late to be a 404. It
+  rides the payload as a digest, and the client recovers by reloading the page for real (once per URL per
+  tab, then a plain "Page not found" panel). Every in-app click that lands on something missing therefore
+  costs an extra round trip and a full document parse. **`redirect()` is not affected** — the same digest
+  becomes a soft `push()` to the new location, which is what the navigation was going to be anyway. Prefer a
+  `redirect()` where either would do, and decide in Hono middleware where the status still has to be a real 404.
+
+  **A page that _throws_ lands in the same place: the flight response is a `200`.** A document request for it
+  is a 500 answered by your `error` page, but the payload's status was committed before the render failed, so
+  the error rides it as a row and the client runtime paints its error UI — which is the design working, and
+  is what makes a soft navigation onto a broken page recoverable rather than a blank tab. What it costs is
+  observability: **an uptime monitor or a CDN log watching for 5xx sees nothing** for a soft navigation, and
+  the ratio between the two statuses depends on how much of your traffic is in-app clicks. Count failures
+  through `onServerError()`, which fires for both. Buffering the payload to learn whether it failed is the one
+  fix that is not available: it would cost every page its streaming.
+
 - **A page route answers `GET`, `POST` and `HEAD`.** Every other method is a 404 rather than a 405: the
   `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
   path for a distinction nothing acts on differently here. An endpoint route is the way to answer a `PUT`,
   `PATCH`, `DELETE` or `OPTIONS`.
+- **A page route refuses every cross-site form post**, not only one carrying a server action. A form post to
+  a page is how a `<form action={serverAction}>` reaches the server, and whether a given one holds an action
+  can only be known by reading the body — so the framework refuses on `Sec-Fetch-Site` and the request's
+  shape, before parsing, rather than buffering a body for anyone who asks. "Shape" is all three `enctype`
+  values a browser form can send — `application/x-www-form-urlencoded`, `multipart/form-data` and
+  `text/plain` — since what makes one forgeable from another site is the shape and not what is in it. The
+  cases this rules out are real ones: a **SAML ACS callback**, OIDC **`response_mode=form_post`**, and most
+  payment-gateway returns all arrive as a cross-site POST in exactly that shape. `csrf()`'s allowlist does
+  not widen it — this is the framework declining to run its own action mechanism, ahead of any app policy.
+  **Receive them on an `{ type: 'endpoint' }` route**, which calls your Hono handler directly and never
+  reaches the page renderer, then redirect to the page.
+- **`/_static` is reserved**, on every deploy target and under `rshono dev`: it is where the hashed client
+  bundle is served from, mounted ahead of the route table and answering its whole subtree. A route whose path
+  is `/_static` or sits below it is refused by name — it could never have answered a request. A parameterised
+  route that happens to overlap the prefix (`/:section/thing`) is left alone; it loses those paths and
+  answers the rest.
 - **A page's `ctx` prop is non-enumerable**, so `<Child {...props} />` hands a _server_ child
   `ctx: undefined` — silently, since a spread copies enumerables only, and the type still says it is there.
   It cannot be otherwise: an enumerable `ctx` would put `ctx.hono.env`, every binding and secret, into
@@ -329,6 +386,12 @@ Every target streams, which is the bar a new one has to clear.
   in — so `rshono dev` does not pick up an edit to either, and a rebuild that serves the old value looks like
   nothing happened. Restart it; it watches both and says so when one changes.
 - The dev proxy doesn't forward WebSocket upgrades to a custom sub-app; production is unaffected.
+- **`rshono dev` answers `/_static` itself, so your middleware does not run for an asset** — where a build
+  serves assets through the app and they carry HSTS, your CSP and everything else it sets. The dev front-end
+  owns the prefix on purpose: every request it proxies waits on the server rebuild, and the client bundle is
+  built by a separate compiler, so proxying assets would stall the browser's JS and CSS on a save that only
+  touched a server component. The cost is that a policy is developed against files it does not apply to;
+  check a header that has to be on an asset against `rshono build` and `rshono start`.
 - Dev source maps embed the original source of `'use server'` modules (dev binds 127.0.0.1 only, and
   production ships no client source maps).
 
@@ -353,6 +416,34 @@ Every target streams, which is the bar a new one has to clear.
 `pnpm --filter @rshono/core test:browser` runs the Playwright suite against a production build: hydration,
 soft navigation, `useNavigation`, client-initiated actions, boundary fallbacks and the fatal overlay — the
 client runtime, which no amount of asserting on HTML can reach.
+
+`test:coverage` gates the build tooling, **not the request hot path** — worth knowing before reading anything
+into the number. Node measures what this process loads, and the modules that answer a request only ever run
+inside the bundled testbed in a child process: `entry.rsc`, `entry.client`, `entry.ssr`, `boundaries`,
+`navigation` and every `deploy/*/runtime` appear nowhere in the report, and `runtime/` in it means `context`,
+`control`, `flight-inject`, `hot-update`, `request` and `validate-entries` alone. Those absent modules are the
+most thoroughly tested code in the package — by the e2e suites above, over HTTP, which is the only way to test
+them at all. So the percentage covers the builder, the CLI, the deploy build steps and the pure runtime
+helpers; treat its floors as a ratchet on those, and never as a statement about the framework as a whole.
+
+The other half can be measured on demand, and is worth a look before a release. Every process the suite
+spawns writes its own V8 coverage if you ask for it, and the testbed's bundle carries a source map that
+reaches back into this package's `src/`, so the request path can be remapped onto the files it came from:
+
+```bash
+# from the repository root, so the testbed the coverage points into is under the working directory
+NODE_V8_COVERAGE=.coverage-e2e node --test packages/core/test/prod.test.mjs
+npx c8 report --temp-directory .coverage-e2e --reporter=text --all=false --exclude-after-remap \
+  --exclude='**/node_modules/**' --exclude='**/testbed/src/**' --exclude='**/webpack/**' \
+  --exclude='**/test/**' --exclude='**/drift-*/**' --exclude='**/*.css'
+```
+
+One suite at a time, because a full run builds the testbed several times over — production, dev, cloudflare,
+vercel — and each bundle is a separate path holding the same sources, which no total can add up. Last taken
+this way, the production e2e suite alone reached **97.4% of `entry.rsc.tsx`** (92.3% of its branches),
+**100% of `entry.ssr.tsx`, `navigation.tsx` and the node runtime**, and 88% of `boundaries.tsx` — the rest of
+which is its client half, and belongs to the browser suite. That is why the gate is left where it is rather
+than tightened: the code it cannot see is not the code that is thin.
 
 ## How it works
 

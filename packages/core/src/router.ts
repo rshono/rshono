@@ -57,9 +57,12 @@ export interface PageProps<Path extends string = string, E extends Env = Env> {
    * `-Proto`). A fresh instance per request, so mutating it is local to the page; it is not
    * serializable, so hand a `'use client'` component `url.href` rather than `url`.
    *
-   * On a `render: 'static'` route this is the build-time URL — rendered once against `siteUrl`, so
-   * `url.searchParams` is always empty. Read the query from `useNavigation().url` in a `'use client'`
-   * component instead, or mark the route `render: 'dynamic'`.
+   * On a `render: 'static'` route this is the build-time URL — rendered once against `siteUrl`, so the
+   * origin is `siteUrl`'s and `url.searchParams` is always empty, on first paint and after a soft
+   * navigation alike. **`useNavigation().url` is the same frozen URL, not a way around it**: the payload
+   * carries one `href` and both readings come from it. Mark the route `render: 'dynamic'` if the page
+   * depends on the query; a `'use client'` component that only wants it after hydration can read
+   * `location.search` in an effect.
    */
   url: URL;
   /** Matched route params for this request, e.g. `{ id: '42' }` for `/profile/:id`. */
@@ -180,6 +183,12 @@ export interface PageRoute {
    *
    * A parameterised static route without this falls back to rendering per request, with a build
    * warning. Wildcard (`*`), optional and regex params cannot be prerendered.
+   *
+   * **Every value has to be one portable file name**, since that is what a prerendered page is stored as,
+   * and the build fails naming the value rather than writing a page nothing will serve. So: no
+   * `\ / : * ? " < > |` or control characters, no trailing `.` or space, and not a reserved Windows device
+   * name (`CON`, `NUL`, `COM1`, …) — the last two enforced everywhere, so a build that works on macOS is
+   * not one that fails in CI on Windows.
    *
    * @example
    * ```ts
@@ -325,7 +334,14 @@ export interface RouteConfig<TRoutes extends readonly Route[] = readonly Route[]
   routes: TRoutes;
   /** Page rendered with a 404 status for unmatched paths and for `notFound()` calls. */
   notFound?: FallbackPage;
-  /** Page rendered with a 500 status when a request throws. Receives {@link ErrorPageProps}. */
+  /**
+   * Page rendered with a 500 status when a request throws — a page component, a page module that will not
+   * load, an endpoint, a server action, or middleware. Receives {@link ErrorPageProps}.
+   *
+   * It is a *fresh* render, with its own flight payload, so it hydrates and behaves like any other page.
+   * An app that declares none gets the framework's plain 500 document instead. If the `error` page itself
+   * throws, that is reported too and the framework's document answers.
+   */
   error?: FallbackPage;
 }
 

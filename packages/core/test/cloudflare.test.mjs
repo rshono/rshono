@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { APP_ENV, buildApp, TESTBED_DIR, TESTBED_DIST, importServerBundle } from './helpers.mjs';
+import { APP_ENV, buildApp, MINIMAL_APP_DIR, TESTBED_DIR, TESTBED_DIST, importAppBundle, importServerBundle } from './helpers.mjs';
 
 /**
  * Every specifier the bundle imports *statically*, whether or not it was minified.
@@ -199,10 +199,14 @@ describe('serving from a Worker', () => {
     // answers instead; it is fetched once per isolate, which is why it is allowed in the list below.
     const asked = [];
     const counting = { fetch: (request) => (asked.push(new URL(request.url).pathname), ASSETS.fetch(request)) };
-    const res = await worker.fetch(new Request(`${ORIGIN}/docs/never-prerendered`), { ASSETS: counting, ...APP_ENV }, {
-      waitUntil() {},
-      passThroughOnException() {},
-    });
+    const res = await worker.fetch(
+      new Request(`${ORIGIN}/docs/never-prerendered`),
+      { ASSETS: counting, ...APP_ENV },
+      {
+        waitUntil() {},
+        passThroughOnException() {},
+      },
+    );
     await res.text();
 
     assert.equal(res.status, 200, 'the route still renders per request');
@@ -211,10 +215,46 @@ describe('serving from a Worker', () => {
     assert.deepEqual(pageReads, [], 'the index already says there is no page under that path');
   });
 
-  test('serves a public/ file through the binding', async () => {
+  test('serves a public/ file through the binding, and a route still beats one', async () => {
+    // The half of `mountPublicFallback` that is only true here. Vercel implements it as a no-op — `public/`
+    // is in the static output and not uploaded with the function, so a mount could never answer — and the
+    // contract used to say both CDN targets did. This one is live, because `public/` sits in the same
+    // binding the worker can read, so an assets configuration that routes to the worker first keeps its
+    // files rather than losing them.
     const res = await fetchWorker('/robots.txt');
     assert.equal(res.status, 200);
     assert.match(await res.text(), /User-agent/i);
+
+    // And it is mounted after the routes, so inside the worker the ordering the contract's first line
+    // describes actually holds. At the CDN the file wins instead, which is the divergence
+    // `publicRouteCollisions` warns about at build time — see C9.
+    const page = await fetchWorker('/users', { headers: { Accept: 'text/html' } });
+    const body = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(body, /^<!DOCTYPE html>/, 'a route path is answered by the route, not by the asset store');
+    assert.equal(page.headers.get('cache-control'), 'private, no-cache', 'and rendered, not served as a static asset');
+  });
+
+  test('ends the /_static mount in a terminal 404, whatever the client asked for', async () => {
+    // The miss a rolling deploy produces: an old instance is asked for a content-hashed chunk the new one
+    // has. It used to answer `next()`, so the request walked the whole route table, then the public/
+    // fallback, and landed in `app.notFound` — a full server render of the app's 404 page for anything
+    // asking for HTML, under a prefix no app can own, on the one target where the mount was not terminal.
+    for (const [name, headers] of [
+      ['a browser subresource', { Accept: '*/*' }],
+      ['a crawler or a hand-typed URL', { Accept: 'text/html' }],
+      ['a soft navigation', { RSC: '1' }],
+    ]) {
+      // The testbed, because it *has* a `notFound` page: an app without one answers the plain 404 either
+      // way, so it could not tell the fix from the bug.
+      const res = await fetchWorker('/_static/chunks/main.deadbeefdeadbeef.js', { headers });
+      const body = await res.text();
+      assert.equal(res.status, 404, `${name}: a missing chunk is a 404`);
+      assert.match(res.headers.get('content-type') ?? '', /text\/plain/, `${name}: and a plain one — no route below the mount runs`);
+      assert.equal(body, 'Not Found', `${name}: the same body the filesystem targets answer with`);
+      // A 404 is heuristically cacheable, and this URL is about to become valid — see ASSET_MISS_CACHE_CONTROL.
+      assert.equal(res.headers.get('cache-control'), 'private, no-cache', `${name}: must not be stored`);
+    }
   });
 
   test('never serves the prerender tree at its own prefix', async () => {
@@ -235,5 +275,43 @@ describe('serving from a Worker', () => {
     assert.equal(res.status, 200);
     assert.ok(body.startsWith('<!DOCTYPE html>'));
     assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'rendered, not served from the prerender');
+  });
+});
+
+/**
+ * The framework's response floor, against the one thing an app can return that it does not own.
+ *
+ * The minimal fixture rather than the testbed, and that is the whole point: the floor is registered first, so
+ * it unwinds *last*, and any middleware the app has of its own reaches the response before it does. An app
+ * with a `src/server.ts` therefore repairs the header bag — or throws in the floor's place — and can never
+ * show whether the floor is safe. This app has no middleware at all.
+ *
+ * On Workers, because `@hono/node-server` replaces the global `Response` with a lightweight class whose
+ * headers are always mutable — `Response.redirect()` included. So `node` and `vercel`, which is dev,
+ * `rshono start` and most of this suite, cannot see this bug; `cloudflare` and `aws-lambda` get the
+ * platform's own `Response`, whose bag is guarded `immutable`.
+ */
+describe('serving an app that has no middleware of its own', () => {
+  let minimalWorker;
+
+  before(async () => {
+    buildApp(MINIMAL_APP_DIR, { args: ['--deploy', 'cloudflare'] });
+    minimalWorker = (await importAppBundle(MINIMAL_APP_DIR, 'cloudflare')).default;
+  });
+
+  after(() => {
+    // Scaffolded by the build for a project that has none, and this fixture is not a Workers project.
+    rmSync(join(MINIMAL_APP_DIR, 'wrangler.jsonc'), { force: true });
+  });
+
+  test('decorates a response the handler returned but did not build', async () => {
+    // No binding: this app prerenders nothing, and the endpoint under test reads no asset.
+    const res = await minimalWorker.fetch(new Request(`${ORIGIN}/redirect`), {}, { waitUntil() {} });
+    await res.text();
+    assert.equal(res.status, 302, 'the handler’s own redirect must survive the floor, not become a 500');
+    assert.equal(res.headers.get('location'), `${ORIGIN}/`);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff', 'and the floor must still get its headers on');
+    assert.equal(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+    assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN');
   });
 });

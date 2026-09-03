@@ -1,4 +1,5 @@
 import type { Context, Hono } from 'hono';
+import { ASSET_MISS_CACHE_CONTROL } from '../../server/headers.js';
 import { createPageCache, ssgAssetPath, ssgFilePath, SSG_MANIFEST_FILE, toPrerenderedPage, type PrerenderedPage } from '../../server/prerendered.js';
 import type { DeployRuntime } from '../contract.js';
 
@@ -83,13 +84,33 @@ export const runtime: DeployRuntime = {
     // Normally dead — the CDN answers `/_static/*` before the worker is invoked — but keeps the deployment
     // correct, if slower, under an assets configuration that routes everything to the worker first.
     // `GET` covers `HEAD` — Hono dispatches one as the other. See `HTTPMethod`.
-    app.get('/_static/*', async (c, next) => {
+    //
+    // Terminal, like the filesystem mount's last handler, and this used to be `next()`: a miss walked the
+    // whole route table, then `mountPublicFallback`, and landed in `app.notFound` — which for anything asking
+    // for HTML is a full server render of the app's 404 page under a prefix no app can own. A browser asking
+    // for a real subresource sends `Accept: */*` and got the plain 404 either way, so what it cost was a
+    // render for a crawler, a probe, or a hand-typed URL. `RESERVED_PREFIX`'s doc in `validate-entries.ts`
+    // says the mount ends in a terminal 404 and the reserved-route check leans on it; on this target it did
+    // not. `null` — no assets binding at all — answers the same way: nothing else in the worker can serve
+    // this prefix, so falling through would only find a longer route to the same status.
+    app.get('/_static/*', async (c) => {
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);
-      return asset && asset.status !== 404 ? serveAsset(asset) : next();
+      if (asset && asset.status !== 404) return serveAsset(asset);
+      return c.text('Not Found', 404, { 'cache-control': ASSET_MISS_CACHE_CONTROL });
     });
   },
 
   mountPublicFallback(app: Hono): void {
+    // Live here and a no-op on `vercel`, which is the whole difference between the two CDN targets and is
+    // written up on {@link DeployRuntime.mountPublicFallback}. Normally dead for the same reason the
+    // `/_static` mount above is — the CDN answers first — but `public/` is in the *same* binding this can
+    // read, so an assets configuration that routes to the worker first keeps its files instead of losing
+    // them. Vercel has nothing equivalent: `public/` went into the static output and is not uploaded with
+    // the function, so there is nothing there for a mount to answer from.
+    //
+    // Registered after every route, so inside the worker a route still beats a `public/` file — the
+    // ordering the contract describes, reached on the one target whose CDN can be told to stand aside. At
+    // the CDN the file wins, which is what `publicRouteCollisions` warns about at build time.
     app.get('/*', async (c, next) => {
       // The prerender tree lives in the same store, but the app only serves it through `readPrerendered`.
       if (c.req.path.startsWith(`${SSG_PREFIX}/`)) return next();

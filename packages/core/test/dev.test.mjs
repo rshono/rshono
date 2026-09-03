@@ -92,14 +92,31 @@ test("csrf() works through the dev server's own proxy, in both directions", asyn
   assert.notEqual(genuine.status, 403, "the app's own origin must survive the dev proxy's extra hop");
 });
 
-test('a render failure shows the real error and stack in dev', async () => {
-  const res = await fetch(`${base}/crash?render=1`);
+test('a render failure reaches the app’s error page in dev, with the real error and stack', async () => {
+  const res = await fetch(`${base}/crash?render=1`, { headers: { Accept: 'text/html' } });
   assert.equal(res.status, 500);
   const html = await res.text();
-  // The dev-only copy, which appears nowhere else — asserting on the error message alone would also
-  // match the flight payload, which carries it in dev whether or not the document rendered it.
-  assert.match(html, /Server-side rendering failed before the page shell/, 'dev should explain what failed');
+  assert.match(html, /Something went wrong/, 'the app’s error page answers a render failure in dev too');
+  // Asserting on the message alone would also match the flight payload, which carries it in dev whether
+  // or not the document rendered it — so this pins the `<pre>` the error page puts the stack in.
   assert.match(html, /<pre[^>]*>Error: Intentional render failure/, 'dev should render the real message and stack');
+});
+
+test('dev answers /_static itself, so the app’s middleware does not run for an asset', async () => {
+  // A dev/prod divergence in a security-relevant place, pinned rather than left to be rediscovered.
+  // `prod-config.test.mjs` asserts the opposite for a build — an asset carries HSTS, the app's CSP and its
+  // `X-Response-Time`, because `/_static` is mounted inside the app there. In dev the front-end owns the
+  // prefix so an asset never reaches the worker, and that is deliberate: a proxied asset would wait on
+  // `workerGate`, which means the browser's JS stalling on a save that only touched a server component.
+  // See the comment on the mount in cli/dev.ts before changing this.
+  const page = await fetch(base);
+  await page.text();
+  assert.ok(page.headers.get('x-response-time'), 'a page goes through the app, so its middleware runs');
+
+  const asset = await fetch(`${base}/_static/chunks/main.js`);
+  await asset.text();
+  assert.equal(asset.status, 200, 'the browser still gets its bundle');
+  assert.equal(asset.headers.get('x-response-time'), null, 'and it is answered by the dev front-end, not the app');
 });
 
 test('public/ files are served at the web root in dev (through the worker proxy)', async () => {

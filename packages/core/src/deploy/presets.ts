@@ -1,5 +1,6 @@
 import type { RspackOptions } from '@rspack/core';
 import { finalizeCloudflareBuild } from './cloudflare/build.js';
+import type { Route } from '../router.js';
 import type { DeployTarget } from './contract.js';
 import { finalizeVercelBuild } from './vercel/build.js';
 
@@ -15,6 +16,12 @@ export interface DeployBuildContext {
   publicDir: string | null;
   /** Prerendered pages, `<root>/dist/ssg` — empty when the app has no `render: 'static'` routes. */
   ssgDir: string;
+  /**
+   * The app's route table, as the bundle validated it. Read by the two CDN presets: their platform serves
+   * the static output before the app is invoked, so a `public/` file that lands on a route's path answers
+   * instead of it — see `publicRouteCollisions`.
+   */
+  routes: readonly Route[];
 }
 
 /**

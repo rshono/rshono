@@ -85,6 +85,12 @@ export function RouterProvider({ href, params, children }: { href: string; param
  * during SSR — no hydration flicker — and update on every navigation. `router` holds the imperative
  * actions plus a `pending` flag, `true` while a soft navigation is in flight.
  *
+ * **On a `render: 'static'` route `url` is frozen at build time**, origin included and query empty. The
+ * payload is one prerendered set of bytes and this reads the `href` in it, so it is the page's own
+ * `PageProps.url` — the same value, not a live one. A page whose output depends on the query wants
+ * `render: 'dynamic'`; a component that only needs it after hydration can read `location.search` in an
+ * effect.
+ *
  * Hooks can't run in a server component; read the same data there from `getRequestContext()`.
  *
  * @example
