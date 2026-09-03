@@ -337,6 +337,15 @@ Every target streams, which is the bar a new one has to clear.
   becomes a soft `push()` to the new location, which is what the navigation was going to be anyway. Prefer a
   `redirect()` where either would do, and decide in Hono middleware where the status still has to be a real 404.
 
+  **A page that _throws_ lands in the same place: the flight response is a `200`.** A document request for it
+  is a 500 answered by your `error` page, but the payload's status was committed before the render failed, so
+  the error rides it as a row and the client runtime paints its error UI — which is the design working, and
+  is what makes a soft navigation onto a broken page recoverable rather than a blank tab. What it costs is
+  observability: **an uptime monitor or a CDN log watching for 5xx sees nothing** for a soft navigation, and
+  the ratio between the two statuses depends on how much of your traffic is in-app clicks. Count failures
+  through `onServerError()`, which fires for both. Buffering the payload to learn whether it failed is the one
+  fix that is not available: it would cost every page its streaming.
+
 - **A page route answers `GET`, `POST` and `HEAD`.** Every other method is a 404 rather than a 405: the
   `Allow` header a 405 owes the client means tracking the methods registered per path, which is state on a hot
   path for a distinction nothing acts on differently here. An endpoint route is the way to answer a `PUT`,

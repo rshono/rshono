@@ -823,6 +823,24 @@ test('onServerError sees the errors the framework catches, tagged by source, wit
   assert.doesNotMatch(logged, /#undefined/, 'the Hono context must carry the middleware variables, not an empty one');
 });
 
+test('a flight request for a page that throws is a 200 carrying the error, not a 500', async () => {
+  // The same failure, two statuses, and the asymmetry is load-bearing rather than an oversight: a flight
+  // response is committed as `200 text/x-component` the moment the render hands its stream back, before
+  // anything has been awaited, so no signal or fault can change it afterwards. The error rides the payload
+  // as a row and the client runtime paints its error UI, which is what makes a soft navigation onto a
+  // broken page recoverable instead of a blank tab. Buffering to learn the status first would cost every
+  // page its streaming — the trade M4 already settled — so this is pinned, not fixed.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?render=1`, { headers: { RSC: '1' } });
+  assert.equal(res.status, 200, 'the payload’s status is committed before the render can fail');
+  assert.match(res.headers.get('content-type'), /text\/x-component/);
+  assert.match(await res.text(), /^\d+:E\{/m, 'and the failure is a row in it');
+
+  // Which is why `onServerError()` is the place to count these: a 5xx watcher sees nothing here.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.match(getOutput().slice(logsBefore), /\[error-reporter\] render \/crash/, 'the reporting hook fires for both representations');
+});
+
 // `?boom=` makes the testbed's error page fail on demand too, the same way its 404 page does; see
 // components/500.tsx. The two pages are siblings and the framework has to treat their signals alike.
 test('an error page that redirects is honoured, not reported as a failure', async () => {
