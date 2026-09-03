@@ -328,7 +328,14 @@ export interface RouteConfig<TRoutes extends readonly Route[] = readonly Route[]
   routes: TRoutes;
   /** Page rendered with a 404 status for unmatched paths and for `notFound()` calls. */
   notFound?: FallbackPage;
-  /** Page rendered with a 500 status when a request throws. Receives {@link ErrorPageProps}. */
+  /**
+   * Page rendered with a 500 status when a request throws — a page component, a page module that will not
+   * load, an endpoint, a server action, or middleware. Receives {@link ErrorPageProps}.
+   *
+   * It is a *fresh* render, with its own flight payload, so it hydrates and behaves like any other page.
+   * An app that declares none gets the framework's plain 500 document instead. If the `error` page itself
+   * throws, that is reported too and the framework's document answers.
+   */
   error?: FallbackPage;
 }
 

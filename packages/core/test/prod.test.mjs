@@ -632,21 +632,23 @@ test('a thrown endpoint renders the error page from routes.ts, redacted, in both
   }
 });
 
-test('a render failure answers with a visible error document, not a blank page', async () => {
-  // SSR fails before any of the shell is sent, so the app's `error` page can't be reached — this is
-  // the framework's own last-resort 500. It used to put its message inside <noscript>, which meant a
-  // normal browser showed nothing at all.
-  const res = await fetch(`${base}/crash?render=1`);
+test('a page that throws in render answers with the app’s error page, not the framework document', async () => {
+  // The commonest 500 an app has, and the one path the `error` page used to be unreachable from: SSR
+  // fails before a byte of the shell is sent, so nothing is committed and the failure reaches
+  // `app.onError` — which renders the `error` page from a fresh render of its own.
+  const res = await fetch(`${base}/crash?render=1`, { headers: { Accept: 'text/html' } });
   assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/html/);
   const html = await res.text();
-  assert.match(html, /500 — Internal Server Error/, 'the failure document must carry a visible message');
-  assert.doesNotMatch(html, /<noscript>/, 'the message must be visible without disabling JavaScript');
-  assert.doesNotMatch(
-    html,
-    /<script[^>]+src=/,
-    'the failed render must not attach the client runtime: hydrating a payload from the same failed render would tear the document down and blank the message',
-  );
+  assert.match(html, /Something went wrong/, 'the app’s error page component must render');
+  assert.match(html, /Internal Server Error/, 'the error page shows the generic message');
   assert.doesNotMatch(html, /Intentional render failure/, 'prod must not leak the real error into the page');
+  assert.doesNotMatch(html, /500 — Internal Server Error<\/h1>/, 'the framework’s last-resort document must not be what answers');
+  // *Fresh* render, with a payload of its own, which is what makes re-throwing the shell failure safe.
+  // The framework document deliberately ships no runtime — hydrating the payload of the render that just
+  // failed would tear the page down over the message — and that reasoning does not apply to this one.
+  assert.match(html, /<script[^>]+src=/, 'the error page ships the client runtime like any other page');
+  assert.match(html, /__FLIGHT_DATA/, 'and a payload of its own to hydrate from');
 });
 
 test('a no-JS (progressive-enhancement) action that throws renders the error page', async () => {

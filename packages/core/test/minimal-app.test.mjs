@@ -63,9 +63,32 @@ test('with no error page, a thrown page falls back to the framework 500 without 
   const res = await fetch(`${base}/boom`, { headers: { Accept: 'text/html' } });
   assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'the framework’s own answers agree about caching');
   assert.equal(res.status, 500);
+  // A *document*, not the plain-text line. This app has nothing else to be given — no `error` page —
+  // so it is the whole of the "never a blank screen" promise, and a browser handed `text/plain` here
+  // would show one bare line where an app with an error page shows a page. The testbed suite pins the
+  // other half: an app that declares an `error` page gets it, even for a render failure.
+  assert.match(res.headers.get('content-type'), /text\/html/, 'a client that asked for HTML gets a document');
   const body = await res.text();
-  assert.match(body, /Internal Server Error/);
+  assert.match(body, /^<!DOCTYPE html>/);
+  assert.match(body, /500 — Internal Server Error/, 'the failure document must carry a visible message');
+  assert.doesNotMatch(body, /<noscript>/, 'the message must be visible without disabling JavaScript');
+  assert.doesNotMatch(
+    body,
+    /<script[^>]+src=/,
+    'the failed render must not attach the client runtime: there is no payload to hydrate from, and the one from the failed render would tear the document down and blank the message',
+  );
   assert.doesNotMatch(body, /blew up on purpose/, 'the real message must stay server-side in production');
+});
+
+test('with no error page, a client that did not ask for HTML still gets the plain line', async () => {
+  // `*/*` is a fetch, a probe or a health check — the document is for a browser, and this is the same
+  // split the plain 404 above already makes.
+  const res = await fetch(`${base}/boom`, { headers: { Accept: '*/*' } });
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type'), /text\/plain/);
+  assert.equal(res.headers.get('cache-control'), 'private, no-cache');
+  assert.match(res.headers.get('vary'), /\bRSC\b/);
+  assert.match(await res.text(), /^Internal Server Error$/);
 });
 
 test('the security and caching defaults apply with no config file at all', async () => {

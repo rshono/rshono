@@ -33,6 +33,7 @@ import { PRERENDER_NONCE_HEADER } from '../server/prerendered.js';
 import { beginPageRender, getRequestContext, publicUrl, readParams, reportServerError, runWithContext } from './context.js';
 import { isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
 import { renderHTML } from './entry.ssr.js';
+import { failureDocument } from './failure-document.js';
 // Type-only, so it is erased — the RSC layer does not take its own instance of the SSR layer's module.
 import type { CancellableTransformer } from './flight-inject.js';
 import { RouterProvider } from './navigation.js';
@@ -420,6 +421,10 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
       onError: (error) => reportServerError(error, { source: 'ssr', hono: c, message: '[rshono] SSR error:' }),
     });
   } catch (error) {
+    // The render is abandoned, so stop it: a boundary still resolving is work for a response that will never
+    // be sent, and it holds the tee's SSR branch open behind it. The `signal.aborted` guard in `onError`
+    // above is what keeps the resulting cancellations from being reported as render errors of their own.
+    renderAbort.abort(error);
     release();
     if (controlSignal) throw controlSignal;
     throw error;
@@ -444,7 +449,7 @@ async function renderComponent(c: Context, Page: ServerEntry<PageComponent>, opt
     release();
     throw controlSignal;
   }
-  return c.body(ssrResult.stream, (ssrResult.status ?? opts.status ?? 200) as ContentfulStatusCode, {
+  return c.body(ssrResult.stream, (opts.status ?? 200) as ContentfulStatusCode, {
     'content-type': 'text/html;charset=utf-8',
     ...prerenderNonceHeader(c),
   });
@@ -794,6 +799,13 @@ function buildApp(): Hono {
       } catch (renderError) {
         reportServerError(renderError, { source: 'request', hono: c, message: '[rshono] the error page failed to render:' });
       }
+    }
+    // A client that asked for HTML gets a document, even here: this is the last resort for an app with no
+    // `error` page, and for one whose `error` page threw in its turn, and a browser handed `text/plain` in
+    // either case shows a bare line of text where the app used to show a page. Everything else — a flight
+    // fetch, curl, a probe — gets the plain line, which is what it asked for.
+    if (!isRsc && acceptsHtml(c)) {
+      return c.html(failureDocument(error), 500, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
     }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';
     return plainRefusal(c, `Internal Server Error${detail}`, 500);

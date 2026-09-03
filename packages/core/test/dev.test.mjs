@@ -92,13 +92,13 @@ test("csrf() works through the dev server's own proxy, in both directions", asyn
   assert.notEqual(genuine.status, 403, "the app's own origin must survive the dev proxy's extra hop");
 });
 
-test('a render failure shows the real error and stack in dev', async () => {
-  const res = await fetch(`${base}/crash?render=1`);
+test('a render failure reaches the app’s error page in dev, with the real error and stack', async () => {
+  const res = await fetch(`${base}/crash?render=1`, { headers: { Accept: 'text/html' } });
   assert.equal(res.status, 500);
   const html = await res.text();
-  // The dev-only copy, which appears nowhere else — asserting on the error message alone would also
-  // match the flight payload, which carries it in dev whether or not the document rendered it.
-  assert.match(html, /Server-side rendering failed before the page shell/, 'dev should explain what failed');
+  assert.match(html, /Something went wrong/, 'the app’s error page answers a render failure in dev too');
+  // Asserting on the message alone would also match the flight payload, which carries it in dev whether
+  // or not the document rendered it — so this pins the `<pre>` the error page puts the stack in.
   assert.match(html, /<pre[^>]*>Error: Intentional render failure/, 'dev should render the real message and stack');
 });
 
