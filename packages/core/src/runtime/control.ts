@@ -38,6 +38,24 @@ export function isControlDigest(digest: unknown): digest is string {
   return typeof digest === 'string' && (digest === NOT_FOUND_DIGEST || digest.startsWith(REDIRECT_PREFIX));
 }
 
+/**
+ * Whether an error is React's stand-in for one that came out of a flight payload, rather than one that
+ * started life where it was caught. Here, beside {@link isControlDigest}, because both are the same
+ * question — what a `digest` tells you about where an error has been.
+ *
+ * A `digest` is what React puts on the far side of a payload boundary in place of the real error, so its
+ * presence *is* the provenance: the layer that wrote the payload met the original and reported it in full.
+ * Reporting the stand-in as well tags one fault with a second `source`, and in a build the copy carries no
+ * message at all — React redacts it — so the second line says nothing the first did not.
+ *
+ * `reportServerError` cannot see this for itself: it de-duplicates on object identity, and a stand-in is a
+ * different object. Every place a payload error can be reported a second time makes this test — the SSR
+ * shell path, the top-level handler, and the `error` page's own catch.
+ */
+export function cameFromPayload(error: unknown): boolean {
+  return typeof (error as { digest?: unknown } | null)?.digest === 'string';
+}
+
 export function parseRedirectDigest(digest: string): { location: string; status: number } | null {
   if (!digest.startsWith(REDIRECT_PREFIX)) return null;
   const rest = digest.slice(REDIRECT_PREFIX.length);

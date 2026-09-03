@@ -870,7 +870,35 @@ test('an error page that throws notFound() stays a reported 500 — it has nowhe
   assert.equal(res.status, 500);
   assert.match(await res.text(), /500 — Internal Server Error/, 'the framework document answers when the error page will not');
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.match(getOutput().slice(logsBefore), /the error page failed to render/, 'and it is reported');
+  // Reported, and as what it is. "the error page failed to render: NotFoundSignal" describes a bug in the
+  // page and sends its author looking for one; this is the framework declining to act on a signal, and the
+  // line has to say which.
+  const logged = getOutput().slice(logsBefore);
+  assert.match(logged, /notFound\(\) from the error page is not honoured/, 'the log says what happened, not that the page is broken');
+  assert.match(logged, /render the notFound page from inside the error path/, 'and why');
+  assert.doesNotMatch(logged, /the error page failed to render/, 'which is a different message, for a page that actually threw');
+});
+
+test('an error page that throws is a reported render failure, and the framework document still answers', async () => {
+  // The third `?boom=` shape and the one the message above must not be borrowed for: the error page has a
+  // bug. Nothing is left to escalate to — Hono calls `onError` inside its own catch — so this is answered
+  // where it is found.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?render=1&boom=throw`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  const html = await res.text();
+  assert.match(html, /500 — Internal Server Error/, 'the framework’s own document is the last resort');
+  assert.doesNotMatch(html, /Intentional error-page failure/, 'and it redacts in production like everything else');
+
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const logged = getOutput().slice(logsBefore);
+  // Two faults on one request — the page's and the error page's — and each is reported exactly once, as a
+  // `render`. The third line is the framework saying which of the two was the error page: stderr only,
+  // because what reaches it here is the payload's stand-in for a fault already reported.
+  assert.match(logged, /\[error-reporter\] render \/crash[^\n]*Intentional render failure/, 'the page’s own fault');
+  assert.match(logged, /\[error-reporter\] render \/crash[^\n]*Intentional error-page failure/, 'and the error page’s, each once');
+  assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'and nothing reported a third time');
+  assert.match(logged, /\[rshono\] the error page failed to render:/, 'with a line saying which render was the fallback');
 });
 
 test('an SSR-only failure is reported as `ssr`, once, and the error page answers it', async () => {

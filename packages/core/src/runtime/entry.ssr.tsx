@@ -2,7 +2,7 @@ import React from 'react';
 import type { ReactFormState } from 'react-dom/client';
 import { renderToReadableStream } from 'react-dom/server';
 import { createFromReadableStream } from 'react-server-dom-rspack/client';
-import { isControlDigest } from './control.js';
+import { cameFromPayload, isControlDigest } from './control.js';
 import { injectFlightPayload } from './flight-inject.js';
 import type { RscPayload } from './entry.rsc.js';
 
@@ -34,22 +34,6 @@ export interface RenderHTMLOptions {
    * detach the abort forwarder that would otherwise retain the whole rendered tree.
    */
   onDone?: () => void;
-}
-
-/**
- * Whether an error is React's stand-in for one that came out of the flight payload, rather than one that
- * started life in this render.
- *
- * A `digest` is what React puts on the client side of the payload boundary in place of the real error, so
- * its presence *is* the provenance: the layer that wrote the payload met the original and reported it in
- * full. Reporting the stand-in too would tag one fault with a second `source`, and in a build the copy
- * carries no message — React redacts it — so the second line says nothing the first did not.
- *
- * A control signal also crosses as a digest, which is why the callers test {@link isControlDigest} first
- * where it matters: those are not faults at all.
- */
-function cameFromPayload(error: unknown): boolean {
-  return typeof (error as { digest?: unknown } | null)?.digest === 'string';
 }
 
 /**

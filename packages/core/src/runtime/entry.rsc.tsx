@@ -31,7 +31,7 @@ import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent,
 import { appendVary, etagMatches } from '../server/headers.js';
 import { PRERENDER_NONCE_HEADER } from '../server/prerendered.js';
 import { beginPageRender, getRequestContext, publicUrl, readParams, reportServerError, runWithContext } from './context.js';
-import { isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
+import { cameFromPayload, isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
 import { renderHTML } from './entry.ssr.js';
 import { failureDocument } from './failure-document.js';
 // Type-only, so it is erased — the RSC layer does not take its own instance of the SSR layer's module.
@@ -783,14 +783,8 @@ function buildApp(): Hono {
       const res = error.getResponse();
       return c.newResponse(res.body, res);
     }
-    // Not a shell failure re-thrown from `renderComponent`. React's stand-in for an error that came out of
-    // the payload carries a `digest` and, in a build, no message — and the render that wrote that payload
-    // met the original and reported it as `render`. `reportServerError` de-duplicates on identity, which
-    // cannot see across that boundary: the stand-in is a different object. Same rule as `entry.ssr.tsx`'s
-    // two tests, in the third and last place a payload error can be reported twice from.
-    if (typeof (error as { digest?: unknown } | null)?.digest !== 'string') {
-      reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
-    }
+    // Not a shell failure re-thrown from `renderComponent`: {@link cameFromPayload} says why.
+    if (!cameFromPayload(error)) reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadErrorPage && (isRsc || acceptsHtml(c))) {
       const errorInfo: ErrorPageInfo = isDev
@@ -813,7 +807,18 @@ function buildApp(): Hono {
         // inside the error path, which can fail in its turn and has nowhere left to escalate to. It stays
         // reported.
         if (renderError instanceof RedirectSignal) return respondToControlSignal(c, renderError);
-        reportServerError(renderError, { source: 'request', hono: c, message: '[rshono] the error page failed to render:' });
+        // Not as a render failure, for a signal — that message describes a bug in the page, and this is the
+        // framework declining to act. An author who wrote `notFound()` in their `error` page and read "the
+        // error page failed to render: NotFoundSignal" would go looking for the wrong thing.
+        const message = isControlSignal(renderError)
+          ? '[rshono] notFound() from the error page is not honoured — it would render the notFound page from inside the error path. The framework 500 answers instead:'
+          : '[rshono] the error page failed to render:';
+        // An `error` page whose *own* render threw arrives here as a payload stand-in, its real fault
+        // already reported as `render` by the render that produced it. So the line still goes to stderr —
+        // with two `render` reports on one request it is what says which of them was the error page — but
+        // it is not a second report of one fault. {@link cameFromPayload}.
+        if (cameFromPayload(renderError)) console.error(message, renderError);
+        else reportServerError(renderError, { source: 'request', hono: c, message });
       }
     }
     // A client that asked for HTML gets a document, even here: this is the last resort for an app with no
