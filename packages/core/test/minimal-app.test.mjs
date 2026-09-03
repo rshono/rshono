@@ -406,3 +406,26 @@ test("a 'use client' module importing @rshono/core/server fails the build naming
   assert.match(output, /useNavigation\(\)/, 'and what to use instead');
   assert.doesNotMatch(output, /node:async_hooks|Unhandled scheme/, 'the resolver report names a builtin the author never wrote');
 });
+
+/*
+ * A `'use client'` page is a mistake the framework has a message for, and one line above it used to hide the
+ * message entirely. `page-entry-loader` prepends `'use server-entry'` to a page module that declares no
+ * directive of its own, and it only recognised a directive that came *first* — so a page opening
+ * `'use strict';` got the injection ahead of its own `'use client';`, and the injected directive is the one
+ * the compiler acts on. The build then exited 0 and shipped a page that fails inside React per request.
+ */
+test("a 'use client' page is refused whether or not something else comes first in its prologue", () => {
+  for (const head of ["'use client';", "'use strict';\n'use client';"]) {
+    const dir = appWithRoutes(HOME_AND("  { path: '/client', component: () => import('./pages/client-page') },\n"));
+    writeFileSync(
+      join(dir, 'src', 'pages', 'client-page.tsx'),
+      `${head}\nexport default function ClientPage() {\n  return (\n    <html lang="en">\n      <body>a client page</body>\n    </html>\n  );\n}\n`,
+    );
+
+    const { status, output } = runCli(dir, ['build']);
+    assert.equal(status, 1, `${JSON.stringify(head)}: the build must not exit 0:\n${output}`);
+    assert.match(output, /\[rshono\] The page component for "\/client" is missing its client-asset info/, 'the framework names the page');
+    assert.match(output, /a 'use client' page must be wrapped by a server component instead/, 'and says what to do about it');
+    assert.doesNotMatch(output, /build complete/, `${JSON.stringify(head)}: nothing that reads as the build having worked`);
+  }
+});

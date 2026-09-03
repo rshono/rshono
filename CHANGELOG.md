@@ -163,6 +163,15 @@ two refuse a build that succeeds today, on purpose.
   `Error`; a _middleware_ that throws a non-`Error` reaches the page too, but everything registered outside
   it is skipped, which no framework-side change could alter.
 
+- **A directive that is not first still counts.** `page-entry-loader` prepends `'use server-entry'` to a page
+  module that declares no directive of its own, and it recognised one only in first position — so a page
+  opening `'use strict';` above its `'use client';` got the injection anyway, and the injected directive is
+  the one the compiler acts on. The build then exited 0 and shipped a client page as a server entry, where
+  the same page with `'use client'` on line one is refused by name with the framework's message. It now
+  matches the whole directive prologue, the way `env-shadow-loader` already did — structurally, so a comment
+  that merely mentions `'use client'` is trivia and not a directive, and any other directive (`'use cache'`,
+  whatever React adds next) is stepped over rather than listed.
+
 - **The `/_static` mount ends in a terminal 404 on `cloudflare` too.** It answered `next()` for a miss, so a
   request for a chunk that is not there walked the whole route table, then the `public/` fallback, and landed
   in `app.notFound` — which for anything that asked for HTML is a full server render of the app's 404 page,

@@ -1997,6 +1997,55 @@ describe('the env-shadow prelude', () => {
   });
 });
 
+describe('page-entry-loader', () => {
+  const pageEntryLoader = createRequire(import.meta.url)('../dist/builder/page-entry-loader.cjs');
+  const BODY = '\nexport default function Page() {\n  return null;\n}\n';
+  /** Whether the loader left the module alone, which it must whenever the module declares a directive itself. */
+  const untouched = (head) => pageEntryLoader(head + BODY) === head + BODY;
+
+  test('leaves a module that already declares one of the three directives alone, wherever in the prologue it is', () => {
+    // The whole prologue, not only its first entry. A page opening `'use strict';` above its `'use client';`
+    // used to get `'use server-entry';` prepended — and the injected directive is the one the compiler acts
+    // on, so the page built clean and shipped instead of being refused by `assertPageModule`.
+    for (const head of [
+      "'use client';",
+      "'use server-entry';",
+      '"use server"',
+      "'use strict';\n'use client';",
+      '"use strict";\n"use client";',
+      "'use strict'\n'use client'",
+      "// banner\n/* block */\n'use strict';\n// why\n'use client';",
+      // Not one of the three, and not a list this has to be taught: `'use cache'` is React's, and the check
+      // is written as "any directive that is not those three".
+      "'use cache';\n'use server-entry';",
+      // A trailing comment used to end the match, because the old pattern required `;`, a newline or the end
+      // of the source right after the closing quote.
+      "'use client' // still a client page",
+    ]) {
+      assert.equal(untouched(head), true, `${JSON.stringify(head)} declares its own directive`);
+    }
+  });
+
+  test('prepends the directive to a page that declares none', () => {
+    for (const head of ['', "'use strict';", '// a plain page']) {
+      assert.equal(pageEntryLoader(head + BODY), `'use server-entry';${head}${BODY}`, `${JSON.stringify(head)} needs the directive`);
+    }
+  });
+
+  test('reads directives structurally, so a comment that mentions one is not one', () => {
+    // The regression the wider match must not buy: a page that says in a comment what it used to be, or a
+    // module-level string, would otherwise be left without the directive it needs — and fail the build.
+    for (const head of [
+      "// this page used to be 'use client';",
+      "/* 'use client' lived here */",
+      "const label = 'use client';",
+      "'use clientish';",
+    ]) {
+      assert.equal(untouched(head), false, `${JSON.stringify(head)} is not a directive`);
+    }
+  });
+});
+
 describe('env-shadow-loader', () => {
   const envShadowLoader = createRequire(import.meta.url)('../dist/builder/env-shadow-loader.cjs');
   const PRELUDE = 'const process = { env: {} }; ';
