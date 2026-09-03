@@ -783,7 +783,14 @@ function buildApp(): Hono {
       const res = error.getResponse();
       return c.newResponse(res.body, res);
     }
-    reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
+    // Not a shell failure re-thrown from `renderComponent`. React's stand-in for an error that came out of
+    // the payload carries a `digest` and, in a build, no message — and the render that wrote that payload
+    // met the original and reported it as `render`. `reportServerError` de-duplicates on identity, which
+    // cannot see across that boundary: the stand-in is a different object. Same rule as `entry.ssr.tsx`'s
+    // two tests, in the third and last place a payload error can be reported twice from.
+    if (typeof (error as { digest?: unknown } | null)?.digest !== 'string') {
+      reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
+    }
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadErrorPage && (isRsc || acceptsHtml(c))) {
       const errorInfo: ErrorPageInfo = isDev

@@ -808,13 +808,38 @@ test('onServerError sees the errors the framework catches, tagged by source, wit
 
   const logged = getOutput().slice(logsBefore);
   assert.match(logged, /\[error-reporter\] request \/api\/boom #[^:]+: Intentional endpoint failure/, 'a thrown endpoint must be reported');
-  assert.match(logged, /\[error-reporter\] (?:render|ssr) \/crash/, 'a failed render must be reported');
+  // `render`, by name. This used to accept `render|ssr` and so passed however many times the same fault
+  // was reported and under whichever source — while a thrown page component was in fact reported twice,
+  // as `render` and again as `ssr`, the second a message-free copy React redacted on its way across the
+  // payload boundary. An error tracker counting incidents saw two.
+  assert.match(logged, /\[error-reporter\] render \/crash/, 'a failed render is reported as a render');
+  assert.doesNotMatch(logged, /\[error-reporter\] ssr \/crash/, 'and once: the SSR layer must not report the payload’s stand-in for it');
+  assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'nor must the top-level handler it is re-thrown to');
   assert.match(logged, /\[rshono\] request error:/, 'stderr stays the fallback signal even with a reporter wired up');
   // The handler logs from inside `waitUntil` and reads `hono.var.requestId`, so both assertions above also
   // prove the two reach a handler at all — and the `request` one proves it for the source reported outside
   // the ambient context, where `getRequestContext()` throws. That was the whole gap: reporting is what this
   // hook exists for, and on a serverless target a report with nothing holding the invocation open is cut off.
   assert.doesNotMatch(logged, /#undefined/, 'the Hono context must carry the middleware variables, not an empty one');
+});
+
+test('an SSR-only failure is reported as `ssr`, once, and the error page answers it', async () => {
+  // The other half of the report rule. A `'use client'` component that throws on the server fails SSR on
+  // a payload the RSC layer never saw a problem with, so nothing has reported it — and this is the source
+  // that exists for it. It matters because the framework now *declines* to report an error carrying a
+  // payload digest, in three places; get that test wrong and it swallows this too, silently.
+  const logsBefore = getOutput().length;
+  const res = await fetch(`${base}/crash?ssr=1`, { headers: { Accept: 'text/html' } });
+  assert.equal(res.status, 500);
+  const html = await res.text();
+  assert.match(html, /Something went wrong/, 'the app’s error page answers an SSR failure too');
+  assert.doesNotMatch(html, /Intentional SSR-only failure/, 'the real error detail must be redacted in prod');
+
+  await new Promise((resolve) => setTimeout(resolve, 200)); // the child's stdout reaches us asynchronously
+  const logged = getOutput().slice(logsBefore);
+  assert.match(logged, /\[error-reporter\] ssr \/crash #[^:]+: Intentional SSR-only failure/, 'an error that started in SSR is an ssr error');
+  assert.doesNotMatch(logged, /\[error-reporter\] render \/crash/, 'the RSC render was clean — nothing there to report');
+  assert.doesNotMatch(logged, /\[error-reporter\] request \/crash/, 'and re-throwing it to the top-level handler must not report it again');
 });
 
 test('<AsyncBoundary> renders its children on the happy path', async () => {

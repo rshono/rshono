@@ -1,6 +1,7 @@
 import type { PageProps } from '@rshono/core';
 import { CrashForm } from './crash-form';
 import { Layout } from './layout';
+import { SsrCrash } from './ssr-crash';
 
 export default function Crash({ url }: PageProps) {
   // ?render=1 throws during the render itself rather than from an action. That fails SSR before any of
@@ -24,6 +25,8 @@ export default function Crash({ url }: PageProps) {
           <a href="/crash?render=1">Throw during render instead</a> — SSR fails before the shell is sent, and the <code>error</code> page answers that
           too.
         </p>
+        {/* ?ssr=1 fails the SSR pass on a payload that is perfectly fine — the other half of the same story. */}
+        {url.searchParams.get('ssr') === '1' && <SsrCrash />}
       </div>
     </Layout>
   );

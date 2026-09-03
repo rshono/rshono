@@ -12,9 +12,16 @@ export interface RenderHTMLOptions {
   signal?: AbortSignal;
   nonce?: string;
   /**
-   * Called when SSR fails before the shell is sent, just before {@link renderHTML} re-throws. Reporting is
-   * the RSC layer's job: this module is compiled into the SSR layer, which gets its own instance of every
-   * module it imports, so a handler registered through `@rshono/core/server` is not reachable from here.
+   * Called when SSR fails before the shell is sent with an error nothing else has seen, just before
+   * {@link renderHTML} re-throws. Reporting is the RSC layer's job: this module is compiled into the SSR
+   * layer, which gets its own instance of every module it imports, so a handler registered through
+   * `@rshono/core/server` is not reachable from here.
+   *
+   * **A defensive floor, and expected to stay quiet.** Every failure React announces reaches
+   * {@link RenderHTMLOptions.onError} first, and both of the shapes that then abort the shell are already
+   * accounted for: one that came out of the payload was reported by the RSC layer, and one that started
+   * here was reported by `onError` itself. What is left is a rejection React never announced — the same
+   * shape as the client runtime's "produced no result" branch, and kept for the same reason.
    */
   onShellError?: (error: unknown) => void;
   /**
@@ -27,6 +34,22 @@ export interface RenderHTMLOptions {
    * detach the abort forwarder that would otherwise retain the whole rendered tree.
    */
   onDone?: () => void;
+}
+
+/**
+ * Whether an error is React's stand-in for one that came out of the flight payload, rather than one that
+ * started life in this render.
+ *
+ * A `digest` is what React puts on the client side of the payload boundary in place of the real error, so
+ * its presence *is* the provenance: the layer that wrote the payload met the original and reported it in
+ * full. Reporting the stand-in too would tag one fault with a second `source`, and in a build the copy
+ * carries no message — React redacts it — so the second line says nothing the first did not.
+ *
+ * A control signal also crosses as a digest, which is why the callers test {@link isControlDigest} first
+ * where it matters: those are not faults at all.
+ */
+function cameFromPayload(error: unknown): boolean {
+  return typeof (error as { digest?: unknown } | null)?.digest === 'string';
 }
 
 /**
@@ -54,7 +77,7 @@ export async function renderHTML(rscStream: ReadableStream<Uint8Array>, options:
   // one nothing else will report.
   let reported: unknown;
   const onError = (error: unknown): void => {
-    if (typeof (error as { digest?: unknown } | null)?.digest === 'string') return;
+    if (cameFromPayload(error)) return;
     if (options.signal?.aborted) return; // an abort is the client leaving, not a fault
     reported = error;
     options.onError?.(error);
@@ -78,8 +101,12 @@ export async function renderHTML(rscStream: ReadableStream<Uint8Array>, options:
       // Nothing holds it either way.
     });
     if (isControlDigest((error as { digest?: unknown } | null)?.digest)) throw error;
-    // `onError` runs first for the failure that aborts the shell, so this reports only what it let through.
-    if (!options.signal?.aborted && error !== reported) options.onShellError?.(error);
+    // `onError` runs first for the failure that aborts the shell, so this reports only what it let through:
+    // not an error `onError` forwarded, and not one it dropped as a payload stand-in. Without the second
+    // test this was the *only* live path to `onShellError` — a thrown page component was reported twice,
+    // as `render` and then as a message-free `ssr` copy of itself, while the SSR-only failure the hook is
+    // named for never reached it at all.
+    if (!options.signal?.aborted && error !== reported && !cameFromPayload(error)) options.onShellError?.(error);
     throw error;
   }
 
