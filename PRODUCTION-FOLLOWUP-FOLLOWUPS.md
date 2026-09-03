@@ -1,5 +1,11 @@
 # Follow-ups from fixing the follow-ups
 
+> **Superseded as a working list by [`bugs.jsonl`](./bugs.jsonl).** All three findings here are fixed. This document stays as the
+> write-up — the reproductions and the reasoning are the part worth keeping — but the status of any finding,
+> and the commit that fixed it, is in `bugs.jsonl`. One JSON object per line: `id`, `severity`, `status`,
+> `kind`, `source`, `title`, `files`, `fix`, `commit`, `notes`. `notes` is the regression risk, which is what
+> stops a fix being reintroduced as a bug.
+
 What fixing [`PRODUCTION-FOLLOWUPS.md`](./PRODUCTION-FOLLOWUPS.md) turned up: things that were not in either
 review, or that those fixes themselves left behind. Nothing here blocks 1.0.0, and nothing here is a
 regression of anything struck through in the other two documents.

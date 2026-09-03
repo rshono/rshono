@@ -1,5 +1,11 @@
 # Pre-Production Review — `packages/core` 1.0.0
 
+> **Superseded as a working list by [`bugs.jsonl`](./bugs.jsonl).** All 14 findings here are fixed. This document stays as the
+> write-up — the reproductions and the reasoning are the part worth keeping — but the status of any finding,
+> and the commit that fixed it, is in `bugs.jsonl`. One JSON object per line: `id`, `severity`, `status`,
+> `kind`, `source`, `title`, `files`, `fix`, `commit`, `notes`. `notes` is the regression risk, which is what
+> stops a fix being reintroduced as a bug.
+
 Final review before 1.0.0. Every finding was reproduced against a real build of `apps/testbed` and a
 running production server — nothing here is inferred from reading alone.
 
