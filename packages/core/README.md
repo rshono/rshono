@@ -350,6 +350,11 @@ Every target streams, which is the bar a new one has to clear.
   not widen it — this is the framework declining to run its own action mechanism, ahead of any app policy.
   **Receive them on an `{ type: 'endpoint' }` route**, which calls your Hono handler directly and never
   reaches the page renderer, then redirect to the page.
+- **`/_static` is reserved**, on every deploy target and under `rshono dev`: it is where the hashed client
+  bundle is served from, mounted ahead of the route table and answering its whole subtree. A route whose path
+  is `/_static` or sits below it is refused by name — it could never have answered a request. A parameterised
+  route that happens to overlap the prefix (`/:section/thing`) is left alone; it loses those paths and
+  answers the rest.
 - **A page's `ctx` prop is non-enumerable**, so `<Child {...props} />` hands a _server_ child
   `ctx: undefined` — silently, since a spread copies enumerables only, and the type still says it is there.
   It cannot be otherwise: an enumerable `ctx` would put `ctx.hono.env`, every binding and secret, into

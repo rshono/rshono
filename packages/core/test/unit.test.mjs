@@ -2335,6 +2335,25 @@ describe('validateRoutesModule', () => {
     }
   });
 
+  test('refuses a route under the /_static prefix the framework mounts ahead of the table', () => {
+    // The failure this check exists to prevent, one prefix out of its reach: the shadow check compares the
+    // app's routes with each other, and `mountStaticAssets` registers `/_static` *before* any of them and
+    // ends in a terminal 404. So these built clean and then 404'd — on all four deploy targets and in dev.
+    const at = (path) => ({ ...page, path });
+    rejects([at('/_static')], /routes\[0\] \("\/_static"\) would never run — the framework serves the client bundle at \/_static/);
+    rejects([at('/_static/thing')], /would never run/, 'and anything below it');
+    rejects([{ ...endpoint, path: '/_static/api' }], /would never run/, 'an endpoint is mounted no earlier than a page');
+    rejects([at('/_static/*')], /would never run/, 'a wildcard under the prefix is dead the same way');
+    rejects([at('/_static')], /reserved on every deploy target and under `rshono dev`/, 'and says where it is reserved');
+
+    // The boundary is the `/`, and only a *literal* path is refused: a parameterised route that happens to
+    // match under the prefix loses those requests and answers everything else, which is the router's
+    // business rather than this rule's. Refusing one of these would fail a build that was correct.
+    for (const path of ['/_staticky', '/_static-files', '/:section/thing', '/*', '/x/_static']) {
+      assert.deepEqual(validateRoutesModule([at(path)]).routes[0].path, path, path);
+    }
+  });
+
   test('checks the two framework-owned pages as well', () => {
     rejects({ routes: [page], notFound: {} }, /`notFound` must be a page/);
     rejects({ routes: [page], error: () => null }, /`error` must be a page/);

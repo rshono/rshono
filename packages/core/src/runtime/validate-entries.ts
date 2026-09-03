@@ -26,6 +26,18 @@ const METHODS = new Set([...CONCRETE_METHODS, 'all']);
 /** What a page route's `render` accepts. */
 const RENDER_MODES = ['static', 'dynamic'];
 
+/**
+ * The one path prefix the framework claims on every deploy target: the hashed client bundle, mounted by
+ * `runtime.mountStaticAssets` ahead of the route table, ending in a terminal 404 — so nothing under it
+ * reaches a page. Written out here rather than imported, because the mounts live in the deploy runtimes
+ * (`deploy/filesystem.ts`, `deploy/cloudflare/runtime.ts`) and in `cli/dev.ts`, none of which this module
+ * can pull in.
+ *
+ * It is the only one. `/_rshono/hmr` is dev-only and an exact path rather than a prefix, and Cloudflare's
+ * `__ssg` is an asset path no app would name.
+ */
+const RESERVED_PREFIX = '/_static';
+
 function fail(message: string): never {
   throw new Error(`[rshono] ${message}`);
 }
@@ -180,9 +192,24 @@ function covers(prefix: string, key: string): boolean {
 }
 
 /**
- * Refuses a route the table already answers in full. Hono matches in registration order, so a later entry
- * whose every method and path is spoken for is dead code — and the build that produced it exits 0 with
- * nothing to say, which is how a duplicated `path` survives.
+ * Whether a path sits inside {@link RESERVED_PREFIX}'s subtree, which is the prefix and everything below
+ * it. The boundary is the `/`: `/_staticky` is an ordinary path and answers normally.
+ */
+function isReserved(path: string): boolean {
+  return path === RESERVED_PREFIX || path.startsWith(`${RESERVED_PREFIX}/`);
+}
+
+/**
+ * Refuses a route the table already answers in full, or that the framework's own mount already answers.
+ * Hono matches in registration order, so a later entry whose every method and path is spoken for is dead
+ * code — and the build that produced it exits 0 with nothing to say, which is how a duplicated `path`
+ * survives.
+ *
+ * The framework's mount is checked first and by name. The rest of this function compares the app's routes
+ * with *each other*, so the prefixes the framework registers ahead of them were invisible to it: a route at
+ * `/_static/thing` built clean and then 404'd, on every target and in dev. Only a literal path is refused —
+ * a parameterised route that happens to match under the prefix, `/:section/thing` or a root `/*`, still
+ * answers everything else and is none of this rule's business.
  *
  * Method by method, and only when *all* of them are taken: one path split between a `'get'` endpoint and a
  * `'post'` one shadows nothing, and neither does a catch-all registered behind a route that claims one
@@ -214,6 +241,13 @@ function assertNothingIsShadowed(routes: readonly Route[]): void {
 
   routes.forEach((route, index) => {
     const name = label(route, index);
+    if (isReserved(route.path)) {
+      fail(
+        `src/routes.ts: ${name} would never run — the framework serves the client bundle at ${RESERVED_PREFIX}, ` +
+          `mounted ahead of the route table and answering that whole subtree, so ${RESERVED_PREFIX} is reserved on every ` +
+          'deploy target and under `rshono dev`. Give the route a path of its own.',
+      );
+    }
     const methods = methodsOf(route);
     const keys = keysFor(route.path);
     const claimants = methods.flatMap((method) => keys.map((key) => claimantOf(method, key)));
