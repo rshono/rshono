@@ -12,9 +12,13 @@ those.
 ## 1.0.0-rc.19
 
 A pass over the two published packages against four questions — is the API correct and minimal, is there dead
-code, is the framework easy to understand, does it fail gracefully — and everything it turned up. Three
-entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5xx while prerendering**, and
-**`defineRoutes`' typing**. Read those three before upgrading.
+code, is the framework easy to understand, does it fail gracefully — and everything it turned up, followed by
+a release review of `packages/core` and the eleven findings that came out of it.
+
+Six entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5xx while prerendering**,
+**`defineRoutes`' typing**, **the `error` page answering a thrown page component**, **a route under
+`/_static`**, and **the `staticPaths` values a build accepts**. Read those six before upgrading — the last
+two refuse a build that succeeds today, on purpose.
 
 ### Security
 
@@ -34,6 +38,37 @@ entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5
   bindings are objects on purpose. `ctx.hono.env` still reaches the raw argument.
 
 ### Changed
+
+- **The `error` page answers a page component that throws.** `RouteConfig.error` says "rendered with a 500
+  status when a request throws", and for the commonest server error there is — a failed query, a null
+  dereference — it was not: `renderHTML` caught its own shell failure and returned it as an ordinary 500, so
+  nothing above ever knew the render had failed and `app.onError`, where the `error` page lives, was never
+  reached. A page module that would not load and a thrown endpoint did reach it, which made the gap look like
+  one path misbehaving rather than the promise being false on the likeliest one. Nothing has reached the
+  socket when the shell fails, so the fault is re-thrown and answered where every other request failure is;
+  the `error` page renders fresh, with its own payload and the client runtime, and hydrates like any page.
+  An app with **no** `error` page now gets the framework's 500 **document** where a browser previously got
+  `text/plain` on this path, and a client that asked for neither HTML nor a payload still gets the plain
+  line. A flight request is unchanged: it is a 200 carrying the error, because its status is committed before
+  the render can fail — now stated in the README beside the same point about `notFound()`.
+
+- **A route under `/_static` fails the route check.** `mountStaticAssets` registers that prefix ahead of the
+  page routes and the assets app ends in a terminal 404, so a route at `/_static/thing` built clean and then
+  404'd, on every deploy target and in dev — exactly what `assertNothingIsShadowed` exists to prevent, one
+  prefix out of its reach. It is refused by name now. Only a literal path: a parameterised route that happens
+  to overlap the prefix loses those requests and answers the rest, and refusing it would fail a build that
+  was correct. **This check runs at every server start, not only at build**, so an app that boots today while
+  serving everything except its dead `/_static` route will refuse to boot after upgrading.
+
+- **`staticPaths` refuses the segment names Windows cannot store.** `isStorableSegment` already refused
+  `\ / : * ? " < > |` and the control characters, so a value that cannot be one portable file name fails the
+  build rather than writing a page on one machine and not another. Two Windows rules were missing and neither
+  is discoverable from a macOS or Linux build: the reserved device names (`CON`, `PRN`, `AUX`, `NUL`,
+  `COM0`-`COM9`, `LPT0`-`LPT9`, with or without an extension) and a trailing `.` or space. The first fails
+  `mkdir` on Windows with an error naming a path nobody wrote; the second is worse, because Win32 **strips**
+  it and the page lands where no request will look — the exact failure `ssgFilePath` exists to prevent. So a
+  docs slug of `con` or `v1.` builds and serves on Linux today and after this builds nowhere, which is the
+  trade `:` and `*` already make. `console`, `comic`, `contents`, `v1.2` and `a b` are unaffected.
 
 - **A 5xx while prerendering fails the build.** `renderVariant` only asked whether the status was 200, so
   every non-200 got the same sentence — `⚠ "/x" rendered 500 at build time — skipping, will SSR per request` —
@@ -113,6 +148,53 @@ entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5
   scaffolded README and `docs/configuration.md`, all three of which described `.env` loading without it.
 
 ### Fixed
+
+- **One fault is reported once.** `reportServerError` keeps a WeakSet so a fault crossing several stages is
+  reported once, and it held everywhere except a thrown page component: an app wired to Sentry got the real
+  error as `render` and then a message-free duplicate as `ssr`, because the WeakSet keys on object identity
+  and React hands the SSR layer a fresh, redacted stand-in carrying only a `digest`. That digest **is** the
+  provenance, so the test `entry.ssr.tsx` already made for it is now one function in `control.ts` and is made
+  in all three places a payload fault could be reported twice from — the shell path, the top-level handler,
+  and the `error` page's own catch, where a throwing `error` page was reported twice for the same reason.
+  `onShellError` becomes what it says it is: a floor for a rejection React never announced.
+
+- **A `redirect()` from the `error` page is a redirect.** It was a 500 plus "the error page failed to
+  render: RedirectSignal" in the app's error tracker, while the `notFound` page's identical branch answered
+  the redirect — nothing is committed when the signal arrives and answering it cannot fail. `notFound()` from
+  the `error` page is still not honoured, because it would render the `notFound` page from inside the error
+  path, but it no longer claims the page is broken: the line says the framework declined and why. One thing
+  to know rather than discover: an `error` page redirecting to a URL that also fails is now a loop the
+  browser ends, where it used to terminate as a 500.
+
+- **A rebuild drops a `public/` file that is no longer there.** `dist/public` was the one output directory
+  assembled with a `cpSync` and no `rm` first, so a file deleted from `public/` survived there and went on
+  being served by `rshono start` permanently — and deleting `public/` outright left the whole of the old tree
+  in place, since the copy is conditional. The two CDN presets clear their own output but read this
+  directory, so a stale file propagated into the uploaded assets too.
+
+- **`rshono build` warns when a `public/` file shadows a route** on `cloudflare` and `vercel`.
+  `mountPublicFallback` mounts `public/` after every route, so it answers only unclaimed paths — the whole
+  story on `node` and `aws-lambda`, and not where a CDN sits in front, which answers from the static output
+  before the app is invoked. So `public/index.html` beside a page route at `/` serves the file on two targets
+  and renders the page on the other two, and the difference only appeared after deploying. The framework
+  cannot reorder either platform; the contract line is corrected, the README says which targets do which, and
+  the build compares the two. It compares what a _request_ resolves to rather than filenames — an
+  `index.html` answers its directory — and per target, since Cloudflare's asset handling also drops `.html`
+  and Vercel's does not without `cleanUrls`.
+
+- **Every CLI failure path drains its output before exiting.** `cli/exit.ts` exists because a piped
+  stdout/stderr is asynchronous on POSIX — every CI job, and any `rshono build | tee` — so `process.exit`
+  drops what has not left the buffer, which on a failure path is the report saying why. Four paths called
+  `process.exit` directly: an invalid `--port`/`PORT`, both of `rshono start`'s refusals, and `rshono dev`'s
+  port-in-use. Nothing in `dist/cli` reaches `process.exit` now except the helper that drains first, and a
+  test keeps it that way.
+
+- **`rshono dev` answers `/_static` itself, and now says so.** A build serves assets through the app, so they
+  carry HSTS, your CSP and anything else your middleware sets; the dev front-end owns the prefix, so they
+  carry none of it, and a policy is developed against the files it is most likely to break. Documented in
+  preference to moving it: every request the front-end proxies waits on the server rebuild, and the client
+  bundle is built by a separate compiler, so proxying assets would stall the browser's JS and CSS on a save
+  that only touched a server component.
 
 - **A `/_static` 404 carries a `Cache-Control`.** `cacheControl` returns early for anything that is not
   200/206 and the terminal `c.text('Not Found', 404)` set no header of its own. A 404 is heuristically
