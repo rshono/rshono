@@ -9,18 +9,44 @@ from a maintainer's machine with `pnpm release` — see CONTRIBUTING.md.
 Releases before `1.0.0-rc.14` predate this file and are not reconstructed here; `git log` is the record for
 those.
 
-## 1.0.0-rc.19
+## 1.0.0-rc.20
 
-A pass over the two published packages against four questions — is the API correct and minimal, is there dead
-code, is the framework easy to understand, does it fail gracefully — and everything it turned up, followed by
-a release review of `packages/core` and the eleven findings that came out of it.
+A sustained review of `packages/core` since rc.19 — the request path and its error paths, the four deploy
+targets, the builder, the CLI, and the two shapes a server action arrives in — and the forty-three findings
+it produced. Every entry below is a defect found by reading the code against what its own comments, the
+README and `SECURITY.md` already promise; there is no new API here.
 
-Six entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5xx while prerendering**,
-**`defineRoutes`' typing**, **the `error` page answering a thrown page component**, **a route under
-`/_static`**, and **the `staticPaths` values a build accepts**. Read those six before upgrading — the last
-two refuse a build that succeeds today, on purpose.
+Six entries change behaviour on an app that builds today: **the `error` page answering a thrown page
+component**, **a route under `/_static`**, **the `staticPaths` values a build accepts**, **the route check’s
+two further dead-route shapes**, **a cross-site `text/plain` form post**, and **a `/_static` miss on
+`cloudflare`**. Read those six before upgrading — the middle three refuse a build, or a server start, that
+succeeds today, on purpose.
 
 ### Security
+
+- **A malformed server-action request no longer pages the error tracker.** An action id is a bare string
+  literal in the client chunks, so anyone can read one and post it with a body that will not decode. Both
+  decoders that body reaches sat outside the guard the action call itself is in, so an undecodable one
+  escaped to `onError` as a `request` fault: a 500, the app's `error` page, and an `onServerError` report per
+  request — an unauthenticated way to mint 500s and page whoever owns the tracker. The body read and
+  `decodeReply` now answer `400 Bad Request: malformed server action request` before anything runs, and
+  `decodeFormState` — which runs _after_ the action has had its effects, so it cannot refuse the request —
+  renders the page with no form state, which is exactly what a form without `useActionState` gets. Silent in
+  a build for the same reason the 400 is; a `console.warn` in dev, where the likely cause is a React or
+  bundler version whose form fields the framework does not understand.
+
+- **A prerendered document no longer carries a build-time CSP nonce.** `secureHeaders()` mints a nonce per
+  request and the framework stamps it onto the bootstrap scripts and the `<meta>` React hydrates from. The
+  prerender pass renders through the app's full middleware, so it minted one at _build_ time and froze that
+  value into every copy of the file — and which of two bad things followed depended on the policy. Under a
+  global nonce policy the document was re-rendered per request anyway, since the request has a nonce of its
+  own, so the file was never served and the build reported prerendering pages the deployment would never
+  read. Under a policy scoped to some other path nothing forced a re-render, and the stale build-time nonce
+  shipped, picked up by the client as `__webpack_nonce__`. The pass now asks for a document with no nonce,
+  which is what the flight variant already got, and a page whose render minted one is marked **(flight
+  only)** in the build summary: its payload is served from disk and its document is not. The documents are
+  written all the same — whether a nonce is minted is a request-time decision, and an app is free to switch
+  the policy on from the environment.
 
 - **The cross-site form refusal no longer reads `x-rsc-action` differently from the classifier that decodes
   the post.** One decides what is refused, the other what is decoded, and they tested the same header two
@@ -32,21 +58,6 @@ two refuse a build that succeeds today, on purpose.
   and any app with `csrf()` registered caught it regardless. It mattered because this refusal is the whole of
   what an app with no `src/server.ts` has, and a predicate that fails open on a shape nothing sends today is
   one that fails open the day something does. Both now read the value.
-
-- **`getRequestContext().env` no longer merges the platform's own `fetch` argument.** `c.env` is the second
-  argument to `app.fetch(request, env)` — the app's bindings on Workers, and on every other target the
-  adapter's private state: `{ incoming, outgoing }` on Node and Vercel, the whole invocation on
-  `aws-lambda`. It was spread into `ctx.env` unfiltered, behind names the type declares
-  `string | undefined`. So `ctx.env.ANYTHING.startsWith(…)` type-checked over a live socket wrapper,
-  `JSON.stringify(ctx.env)` threw on a circular structure on two targets, and on Lambda the request's own
-  headers, cookies and `authorization` were readable through `ctx.env` and serialized cleanly into anything it
-  was spread into — the same class of leak the `ctx` page prop is made non-enumerable to prevent, reached
-  through a different door.
-
-  The selected preset now declares whether its platform supplies bindings, `resolveServerConfig` bakes that
-  into the bundle beside `trustProxy`, and the merge runs on exactly that condition. Only `cloudflare` sets
-  it, so `ctx.env` is `process.env` alone everywhere else. Filtering by value type would not do: KV, D1 and R2
-  bindings are objects on purpose. `ctx.hono.env` still reaches the raw argument.
 
 ### Changed
 
@@ -80,6 +91,239 @@ two refuse a build that succeeds today, on purpose.
   it and the page lands where no request will look — the exact failure `ssgFilePath` exists to prevent. So a
   docs slug of `con` or `v1.` builds and serves on Linux today and after this builds nowhere, which is the
   trade `:` and `*` already make. `console`, `comic`, `contents`, `v1.2` and `a b` are unaffected.
+
+- **The route check refuses two more shapes of dead route.** `assertNothingIsShadowed` compared paths as
+  written, so it caught a duplicated `path` and nothing else. Hono matches on the _pattern_, and a
+  parameter's name is not part of one: `/u/:id` followed by `/u/:name` is the same route twice, and whichever
+  is second never runs. Nor is a `*` before the last segment, which matches exactly one non-empty segment
+  just as an unconstrained parameter does — so `/a/*` registered ahead of `/a/b` made the second unreachable.
+  Both are refused by name now, and a trailing `*` is understood to claim its whole subtree, the bare prefix
+  included. **This refuses a build — and a server start — that succeeds today**, which is the point: the
+  route it refuses could never have answered a request. Where the normalisation stops is written down beside
+  it, and which way it must lean: two `{regex}` constraints that mean the same thing are still compared as
+  text, so `/a/:id{[0-9]+}` then `/a/:id{\d+}` passes. An unreachable route slipping through costs a dead
+  route; a live one wrongly refused costs a build that was correct.
+
+### Added
+
+- **`rshono build` loads the app's server actions.** Nothing on the server imports a `'use server'` module
+  until an action is called — a `'use client'` component that calls one gets a `createServerReference` stub,
+  and the only thing holding the module is the manifest — so an action module is the one part of an app a
+  build never touched, and one that will not evaluate was a 500 on the first action anyone called in
+  production. Worse than it sounds, because Rspack compiles an app's whole `'use server'` graph into a single
+  server module: the failure is not one action, it is every action in the app. The build now loads one action
+  per module and warns, naming how many of the app's actions that module holds. A warning rather than a
+  failure, for the reason the route-module check warns: a module can legitimately decline to evaluate in a
+  build — one that reads a secret out of the environment, say — and a build is not where that gets decided.
+
+### Fixed
+
+- **Server bundles no longer ship React's development builds.** The SSR layer is compiled with a prelude that
+  shadows `process` with the `PUBLIC_`-only view of the environment, which is what keeps a secret read from a
+  `'use client'` component out of SSR'd HTML. DefinePlugin respects lexical scope, so that module-scope
+  binding hid `process.env.NODE_ENV` from it as well — and with the read left as a runtime branch, every
+  `if (process.env.NODE_ENV === 'production')` wrapper stayed a live condition and _both_ halves survived.
+  Six development builds — `react`, `react-dom` and `react-server-dom-rspack`, twice over — shipped inside
+  every server bundle, on every deploy target, about half of `dist/server/main.mjs`. The loader now hands
+  that one read back to the optimiser before the prelude takes it away, which changes no value: `NODE_ENV` is
+  the one key of the prelude's own literal that is the build's mode rather than the host's environment, so
+  the shadow's security property is untouched. **−50.7% on the `node` target.** The substitution is textual,
+  so it is a scanner rather than a `replace()`: comments, strings and templates are matched ahead of the
+  target and handed back as they were, which is what keeps `throw new Error('set process.env.NODE_ENV')`
+  intact.
+
+- **A handler may return a `Response` it did not build.** `Response.redirect(…)` and every `fetch()` result
+  carry a header bag guarded `immutable`, and handing one back verbatim is ordinary Hono — proxying an
+  upstream is the commonest thing a Worker does. The framework's response floor wrote its baseline headers
+  with `c.res.headers.set(…)`, which throws `TypeError: immutable` on one of those: the throw reached
+  `onError`, the app's 500 page went out in place of the redirect, and the app's error tracker got
+  `immutable` plus a minified frame naming nothing that could be acted on. **On `cloudflare` and
+  `aws-lambda` only**, which is what made it worth finding: `@hono/node-server` replaces the global
+  `Response` with a lightweight class whose headers are always mutable, so `node` and `vercel` — dev,
+  `rshono start`, and nearly every suite — answered the redirect correctly all along. The floor now collects
+  what a response is missing and writes the first of them through `c.header()`, which rebuilds a finalized
+  response before writing exactly as `serveAsset` already did by hand for the framework's own asset
+  responses; a response that needs nothing is not rebuilt at all. The `SSG_CACHE_CONTROL` doc recipe for
+  overriding a prerendered page's caching from middleware now uses `c.header()` for the same reason.
+
+- **A thrown non-`Error` reaches the `error` page.** Hono's dispatcher hands `app.onError` only what is
+  `instanceof Error` and re-throws everything else, so `throw 'a plain string'` — or a rejected string, or a
+  thrown object — rejected `app.fetch` and was answered outside the app entirely: a bodiless 500 with no
+  `error` page, nothing on stderr, no `onServerError` report, and, because nothing below the response floor
+  ever unwound, not even `x-content-type-options`, `referrer-policy` or `x-frame-options`. A throw that was
+  merely written badly therefore answered strictly worse than a real `Error` beside it, and
+  `RouteConfig.error` promises the page for a throw from "an endpoint, a server action, or middleware" — all
+  three reachable this way. Anything that is not an `Error` is now wrapped in one carrying it as `cause`,
+  with the value named in the message; an `Error` of any kind is untouched, which is what keeps the control
+  signals, the payload stand-ins and the report de-duplication intact. An endpoint and a page route convert
+  at their own handler, so the app's middleware unwinds over the `error` page exactly as it does for an
+  `Error`; a _middleware_ that throws a non-`Error` reaches the page too, but everything registered outside
+  it is skipped, which no framework-side change could alter.
+
+- **An action whose module cannot be loaded is a reported 500, not a silent 400.** The guard that answers 400
+  for a body the server cannot decode covered `loadServerAction` too, which is not the caller's to get wrong:
+  the id has already passed an `Object.hasOwn` against the manifest, so no client can steer it, and what is
+  left is the deployment missing part of itself — a chunk `__webpack_require__` cannot find after a partial
+  deploy, or a module that throws as it evaluates. A 400 there told the one caller inside that guard who was
+  _right_ that they were wrong, and told the operator who needs paging nothing at all. It has its own catch
+  now, reported as `source: 'action'` and re-thrown, so the app's `error` page answers.
+
+- **A broken deployment no longer answers a no-JS form post with a silent 400.** `decodeAction` does two
+  things in one call: it reads the caller's body, and it `__webpack_require__`s the module the action lives
+  in. Both sat behind the one `catch` that answers `400 Bad Request: malformed server action request` — the
+  refusal that is deliberately silent, because action ids are public and reporting from there would be an
+  unauthenticated way to page whoever owns the error tracker. So an action module that would not evaluate
+  told the caller their request was malformed, when it was not, and told the operator nothing at all. The
+  same fault reached through a client-initiated call has answered 500 with the app's `error` page, reported
+  as `source: 'action'`, since the guard around `loadServerAction` was split out; the form path — which is
+  what a browser sends before hydration and with JavaScript off — kept the old behaviour. Rspack compiles an
+  app's whole `'use server'` graph into a single server module, so this was every form post in the app, not
+  one. The body read now has its own guard, and a `decodeAction` failure asks whether the app's actions can
+  be loaded at all before it blames the caller. A malformed body, an unknown action id and undecodable
+  `useActionState` metadata are all still a silent 400.
+
+- **A cross-site `enctype="text/plain"` form post is refused too.** The refusal was keyed on the request
+  classification, which names the two content types React writes an action as — so `text/plain`, the third
+  and last `enctype` a browser `<form>` can send with no preflight, was classified as an ordinary document
+  request and rendered the page, while the README promised that a page route refuses _every_ cross-site form
+  post. Nothing could run an action through it (`decodeAction` is only reached for the other two, so
+  SECURITY.md's boundary held) and the cost was a forced authenticated page render, which a cross-site GET
+  can already produce. What was wrong was the stated scope, and the fix is the direction that makes the
+  claim true: the check now runs on the request's _shape_ — a POST a browser form could have produced, all
+  three enctypes — because what makes a form post forgeable from another site is the shape and not what
+  happens to be in the body. `text/plain` is deliberately **not** added to the classification: `decodeAction`
+  reads the body with `request.formData()`, which throws on one, so that repair would turn every same-origin
+  `text/plain` POST into a 400. A cross-site `application/json` POST is still let through — no browser can
+  send one without a preflight the framework never answers.
+
+- **The cross-site 403 names what it refused.** The message blamed a server action, which is the one thing
+  the check cannot know: it runs on the request's shape before the body is read, because deciding whether a
+  post carries an action means buffering an untrusted body to look for a `$ACTION_*` field. Most of the posts
+  it refuses have no action in them at all. It names the real constraint instead — a page route cannot accept
+  a cross-site form post — and the way round it, an `{ type: 'endpoint' }` route, which calls your Hono
+  handler directly and never reaches the page renderer. The limitation is in the README's list with the
+  callbacks it rules out: a SAML ACS endpoint, OIDC `response_mode=form_post`, and most payment-gateway
+  returns all arrive in exactly that shape.
+
+- **A directive that is not first still counts.** `page-entry-loader` prepends `'use server-entry'` to a page
+  module that declares no directive of its own, and it recognised one only in first position — so a page
+  opening `'use strict';` above its `'use client';` got the injection anyway, and the injected directive is
+  the one the compiler acts on. The build then exited 0 and shipped a client page as a server entry, where
+  the same page with `'use client'` on line one is refused by name with the framework's message. It now
+  matches the whole directive prologue, the way `env-shadow-loader` already did — structurally, so a comment
+  that merely mentions `'use client'` is trivia and not a directive, and any other directive (`'use cache'`,
+  whatever React adds next) is stepped over rather than listed.
+
+- **The `/_static` mount ends in a terminal 404 on `cloudflare` too.** It answered `next()` for a miss, so a
+  request for a chunk that is not there walked the whole route table, then the `public/` fallback, and landed
+  in `app.notFound` — which for anything that asked for HTML is a full server render of the app's 404 page,
+  under a prefix no app can own. The filesystem targets have always ended that mount in a plain 404, and
+  both `RESERVED_PREFIX`'s doc and the reserved-route check above lean on the mount answering its whole
+  subtree on every target. A browser fetching a real subresource sends `Accept: */*` and got the plain 404
+  either way, so what this cost was a render for a crawler, a probe or a hand-typed URL — and the
+  `Cache-Control` that keeps a shared cache from storing a 404 for a content-hashed URL that is about to
+  become valid, which the filesystem mount states and this one inherited by accident. Both now take it from
+  one constant.
+
+- **One fault is reported once.** `reportServerError` keeps a WeakSet so a fault crossing several stages is
+  reported once, and it held everywhere except a thrown page component: an app wired to Sentry got the real
+  error as `render` and then a message-free duplicate as `ssr`, because the WeakSet keys on object identity
+  and React hands the SSR layer a fresh, redacted stand-in carrying only a `digest`. That digest **is** the
+  provenance, so the test `entry.ssr.tsx` already made for it is now one function in `control.ts` and is made
+  in all three places a payload fault could be reported twice from — the shell path, the top-level handler,
+  and the `error` page's own catch, where a throwing `error` page was reported twice for the same reason.
+  `onShellError` becomes what it says it is: a floor for a rejection React never announced.
+
+- **A `redirect()` from the `error` page is a redirect.** It was a 500 plus "the error page failed to
+  render: RedirectSignal" in the app's error tracker, while the `notFound` page's identical branch answered
+  the redirect — nothing is committed when the signal arrives and answering it cannot fail. `notFound()` from
+  the `error` page is still not honoured, because it would render the `notFound` page from inside the error
+  path, but it no longer claims the page is broken: the line says the framework declined and why. One thing
+  to know rather than discover: an `error` page redirecting to a URL that also fails is now a loop the
+  browser ends, where it used to terminate as a 500.
+
+- **A rebuild drops a `public/` file that is no longer there.** `dist/public` was the one output directory
+  assembled with a `cpSync` and no `rm` first, so a file deleted from `public/` survived there and went on
+  being served by `rshono start` permanently — and deleting `public/` outright left the whole of the old tree
+  in place, since the copy is conditional. The two CDN presets clear their own output but read this
+  directory, so a stale file propagated into the uploaded assets too.
+
+- **`rshono build` warns when a `public/` file shadows a route** on `cloudflare` and `vercel`.
+  `mountPublicFallback` mounts `public/` after every route, so it answers only unclaimed paths — the whole
+  story on `node` and `aws-lambda`, and not where a CDN sits in front, which answers from the static output
+  before the app is invoked. So `public/index.html` beside a page route at `/` serves the file on two targets
+  and renders the page on the other two, and the difference only appeared after deploying. The framework
+  cannot reorder either platform; the contract line is corrected, the README says which targets do which, and
+  the build compares the two. It compares what a _request_ resolves to rather than filenames — an
+  `index.html` answers its directory — and per target, since Cloudflare's asset handling also drops `.html`
+  and Vercel's does not without `cleanUrls`.
+
+- **Every plain-text refusal on a page route carries the same headers.** The two action 400s, the cross-site
+  403, both 404s and the last-resort 500 each made their own choice about `Cache-Control` and `Vary`, and the
+  header bag is the part that gets forgotten — four call sites had made three different decisions, which left
+  the next one to guess. One `plainRefusal` answers all of them now, with `private, no-cache` and
+  `Vary: RSC`. It matters in one case and is consistency in the rest: a 404 is heuristically cacheable under
+  RFC 9111, so without it a shared cache was free to store the plain-text one, while the rendered HTML 404
+  beside it — the same answer to the same request from a client that asked for HTML — was correctly private.
+
+- **A CLI failure prints a sentence, not a Node stack.** `parseArgs` was the first statement of `main`, with
+  nothing between it and the top-level `catch` that prints the raw error object, so `rshono build --porf
+3000` answered with nine frames of Node internals — where an unknown command and an unparseable `--port`
+  each answered with one line. The same shape covered every `[rshono]` failure out of `dev` and `build`,
+  `createConfigs` among them, which is where a missing `src/routes.ts` is found: the likeliest first-run
+  mistake in the whole tool printed an `Error` object with framework frames in it. There is one rule now, in
+  one place: a message starting with `[rshono]` is printed as the line it is, and anything else keeps its
+  stack, because for anything else that stack is the report.
+
+- **Every CLI failure path drains its output before exiting.** `cli/exit.ts` exists because a piped
+  stdout/stderr is asynchronous on POSIX — every CI job, and any `rshono build | tee` — so `process.exit`
+  drops what has not left the buffer, which on a failure path is the report saying why. Four paths called
+  `process.exit` directly: an invalid `--port`/`PORT`, both of `rshono start`'s refusals, and `rshono dev`'s
+  port-in-use. Nothing in `dist/cli` reaches `process.exit` now except the helper that drains first, and a
+  test keeps it that way.
+
+- **`rshono dev` answers `/_static` itself, and now says so.** A build serves assets through the app, so they
+  carry HSTS, your CSP and anything else your middleware sets; the dev front-end owns the prefix, so they
+  carry none of it, and a policy is developed against the files it is most likely to break. Documented in
+  preference to moving it: every request the front-end proxies waits on the server rebuild, and the client
+  bundle is built by a separate compiler, so proxying assets would stall the browser's JS and CSS on a save
+  that only touched a server component.
+
+- **Documentation.** `PageProps.url` no longer prescribes `useNavigation().url` for reading a static route's
+  query — on a `render: 'static'` route both carry the same build-time URL, and `render: 'dynamic'` or a
+  `location`-reading effect are the only ways to see it. The README now says that every `notFound()` on a
+  soft navigation costs a document reload where `redirect()` costs nothing, so prefer a redirect where either
+  would do; that a flight request for a page that _throws_ is a `200` on the wire, so an uptime monitor
+  watching for 5xx sees nothing and failures want counting through `onServerError()`; that `HOST` applies to
+  `rshono start` and not to `dev`, which binds `127.0.0.1` unconditionally and now warns when the variable is
+  set; and that `ctx.env`'s `process.env` half is snapshotted once per process rather than per request. The
+  coverage note says which code the gate cannot see, and `dist` no longer ships `.d.ts.map` files.
+
+## 1.0.0-rc.19
+
+A pass over the two published packages against four questions — is the API correct and minimal, is there dead
+code, is the framework easy to understand, does it fail gracefully — and everything it turned up. Three
+entries below change behaviour on an app that builds today: **`ctx.env`**, **a 5xx while prerendering**, and
+**`defineRoutes`' typing**. Read those three before upgrading.
+
+### Security
+
+- **`getRequestContext().env` no longer merges the platform's own `fetch` argument.** `c.env` is the second
+  argument to `app.fetch(request, env)` — the app's bindings on Workers, and on every other target the
+  adapter's private state: `{ incoming, outgoing }` on Node and Vercel, the whole invocation on
+  `aws-lambda`. It was spread into `ctx.env` unfiltered, behind names the type declares
+  `string | undefined`. So `ctx.env.ANYTHING.startsWith(…)` type-checked over a live socket wrapper,
+  `JSON.stringify(ctx.env)` threw on a circular structure on two targets, and on Lambda the request's own
+  headers, cookies and `authorization` were readable through `ctx.env` and serialized cleanly into anything it
+  was spread into — the same class of leak the `ctx` page prop is made non-enumerable to prevent, reached
+  through a different door.
+
+  The selected preset now declares whether its platform supplies bindings, `resolveServerConfig` bakes that
+  into the bundle beside `trustProxy`, and the merge runs on exactly that condition. Only `cloudflare` sets
+  it, so `ctx.env` is `process.env` alone everywhere else. Filtering by value type would not do: KV, D1 and R2
+  bindings are objects on purpose. `ctx.hono.env` still reaches the raw argument.
+
+### Changed
 
 - **A 5xx while prerendering fails the build.** `renderVariant` only asked whether the status was 200, so
   every non-200 got the same sentence — `⚠ "/x" rendered 500 at build time — skipping, will SSR per request` —
@@ -159,129 +403,6 @@ two refuse a build that succeeds today, on purpose.
   scaffolded README and `docs/configuration.md`, all three of which described `.env` loading without it.
 
 ### Fixed
-
-- **A broken deployment no longer answers a no-JS form post with a silent 400.** `decodeAction` does two
-  things in one call: it reads the caller's body, and it `__webpack_require__`s the module the action lives
-  in. Both sat behind the one `catch` that answers `400 Bad Request: malformed server action request` — the
-  refusal that is deliberately silent, because action ids are public and reporting from there would be an
-  unauthenticated way to page whoever owns the error tracker. So an action module that would not evaluate
-  told the caller their request was malformed, when it was not, and told the operator nothing at all. The
-  same fault reached through a client-initiated call has answered 500 with the app's `error` page, reported
-  as `source: 'action'`, since the guard around `loadServerAction` was split out; the form path — which is
-  what a browser sends before hydration and with JavaScript off — kept the old behaviour. Rspack compiles an
-  app's whole `'use server'` graph into a single server module, so this was every form post in the app, not
-  one. The body read now has its own guard, and a `decodeAction` failure asks whether the app's actions can
-  be loaded at all before it blames the caller. A malformed body, an unknown action id and undecodable
-  `useActionState` metadata are all still a silent 400.
-
-- **A thrown non-`Error` reaches the `error` page.** Hono's dispatcher hands `app.onError` only what is
-  `instanceof Error` and re-throws everything else, so `throw 'a plain string'` — or a rejected string, or a
-  thrown object — rejected `app.fetch` and was answered outside the app entirely: a bodiless 500 with no
-  `error` page, nothing on stderr, no `onServerError` report, and, because nothing below the response floor
-  ever unwound, not even `x-content-type-options`, `referrer-policy` or `x-frame-options`. A throw that was
-  merely written badly therefore answered strictly worse than a real `Error` beside it, and
-  `RouteConfig.error` promises the page for a throw from "an endpoint, a server action, or middleware" — all
-  three reachable this way. Anything that is not an `Error` is now wrapped in one carrying it as `cause`,
-  with the value named in the message; an `Error` of any kind is untouched, which is what keeps the control
-  signals, the payload stand-ins and the report de-duplication intact. An endpoint and a page route convert
-  at their own handler, so the app's middleware unwinds over the `error` page exactly as it does for an
-  `Error`; a _middleware_ that throws a non-`Error` reaches the page too, but everything registered outside
-  it is skipped, which no framework-side change could alter.
-
-- **A directive that is not first still counts.** `page-entry-loader` prepends `'use server-entry'` to a page
-  module that declares no directive of its own, and it recognised one only in first position — so a page
-  opening `'use strict';` above its `'use client';` got the injection anyway, and the injected directive is
-  the one the compiler acts on. The build then exited 0 and shipped a client page as a server entry, where
-  the same page with `'use client'` on line one is refused by name with the framework's message. It now
-  matches the whole directive prologue, the way `env-shadow-loader` already did — structurally, so a comment
-  that merely mentions `'use client'` is trivia and not a directive, and any other directive (`'use cache'`,
-  whatever React adds next) is stepped over rather than listed.
-
-- **The `/_static` mount ends in a terminal 404 on `cloudflare` too.** It answered `next()` for a miss, so a
-  request for a chunk that is not there walked the whole route table, then the `public/` fallback, and landed
-  in `app.notFound` — which for anything that asked for HTML is a full server render of the app's 404 page,
-  under a prefix no app can own. The filesystem targets have always ended that mount in a plain 404, and
-  both `RESERVED_PREFIX`'s doc and the reserved-route check above lean on the mount answering its whole
-  subtree on every target. A browser fetching a real subresource sends `Accept: */*` and got the plain 404
-  either way, so what this cost was a render for a crawler, a probe or a hand-typed URL — and the
-  `Cache-Control` that keeps a shared cache from storing a 404 for a content-hashed URL that is about to
-  become valid, which the filesystem mount states and this one inherited by accident. Both now take it from
-  one constant.
-
-- **A cross-site `enctype="text/plain"` form post is refused too.** The refusal was keyed on the request
-  classification, which names the two content types React writes an action as — so `text/plain`, the third
-  and last `enctype` a browser `<form>` can send with no preflight, was classified as an ordinary document
-  request and rendered the page, while the README promised that a page route refuses _every_ cross-site form
-  post. Nothing could run an action through it (`decodeAction` is only reached for the other two, so
-  SECURITY.md's boundary held) and the cost was a forced authenticated page render, which a cross-site GET
-  can already produce. What was wrong was the stated scope, and the fix is the direction that makes the
-  claim true: the check now runs on the request's _shape_ — a POST a browser form could have produced, all
-  three enctypes — because what makes a form post forgeable from another site is the shape and not what
-  happens to be in the body. `text/plain` is deliberately **not** added to the classification: `decodeAction`
-  reads the body with `request.formData()`, which throws on one, so that repair would turn every same-origin
-  `text/plain` POST into a 400. A cross-site `application/json` POST is still let through — no browser can
-  send one without a preflight the framework never answers.
-
-- **A handler may return a `Response` it did not build.** `Response.redirect(…)` and every `fetch()` result
-  carry a header bag guarded `immutable`, and handing one back verbatim is ordinary Hono — proxying an
-  upstream is the commonest thing a Worker does. The framework's response floor wrote its baseline headers
-  with `c.res.headers.set(…)`, which throws `TypeError: immutable` on one of those: the throw reached
-  `onError`, the app's 500 page went out in place of the redirect, and the app's error tracker got
-  `immutable` plus a minified frame naming nothing that could be acted on. **On `cloudflare` and
-  `aws-lambda` only**, which is what made it worth finding: `@hono/node-server` replaces the global
-  `Response` with a lightweight class whose headers are always mutable, so `node` and `vercel` — dev,
-  `rshono start`, and nearly every suite — answered the redirect correctly all along. The floor now collects
-  what a response is missing and writes the first of them through `c.header()`, which rebuilds a finalized
-  response before writing exactly as `serveAsset` already did by hand for the framework's own asset
-  responses; a response that needs nothing is not rebuilt at all. The `SSG_CACHE_CONTROL` doc recipe for
-  overriding a prerendered page's caching from middleware now uses `c.header()` for the same reason.
-
-- **One fault is reported once.** `reportServerError` keeps a WeakSet so a fault crossing several stages is
-  reported once, and it held everywhere except a thrown page component: an app wired to Sentry got the real
-  error as `render` and then a message-free duplicate as `ssr`, because the WeakSet keys on object identity
-  and React hands the SSR layer a fresh, redacted stand-in carrying only a `digest`. That digest **is** the
-  provenance, so the test `entry.ssr.tsx` already made for it is now one function in `control.ts` and is made
-  in all three places a payload fault could be reported twice from — the shell path, the top-level handler,
-  and the `error` page's own catch, where a throwing `error` page was reported twice for the same reason.
-  `onShellError` becomes what it says it is: a floor for a rejection React never announced.
-
-- **A `redirect()` from the `error` page is a redirect.** It was a 500 plus "the error page failed to
-  render: RedirectSignal" in the app's error tracker, while the `notFound` page's identical branch answered
-  the redirect — nothing is committed when the signal arrives and answering it cannot fail. `notFound()` from
-  the `error` page is still not honoured, because it would render the `notFound` page from inside the error
-  path, but it no longer claims the page is broken: the line says the framework declined and why. One thing
-  to know rather than discover: an `error` page redirecting to a URL that also fails is now a loop the
-  browser ends, where it used to terminate as a 500.
-
-- **A rebuild drops a `public/` file that is no longer there.** `dist/public` was the one output directory
-  assembled with a `cpSync` and no `rm` first, so a file deleted from `public/` survived there and went on
-  being served by `rshono start` permanently — and deleting `public/` outright left the whole of the old tree
-  in place, since the copy is conditional. The two CDN presets clear their own output but read this
-  directory, so a stale file propagated into the uploaded assets too.
-
-- **`rshono build` warns when a `public/` file shadows a route** on `cloudflare` and `vercel`.
-  `mountPublicFallback` mounts `public/` after every route, so it answers only unclaimed paths — the whole
-  story on `node` and `aws-lambda`, and not where a CDN sits in front, which answers from the static output
-  before the app is invoked. So `public/index.html` beside a page route at `/` serves the file on two targets
-  and renders the page on the other two, and the difference only appeared after deploying. The framework
-  cannot reorder either platform; the contract line is corrected, the README says which targets do which, and
-  the build compares the two. It compares what a _request_ resolves to rather than filenames — an
-  `index.html` answers its directory — and per target, since Cloudflare's asset handling also drops `.html`
-  and Vercel's does not without `cleanUrls`.
-
-- **Every CLI failure path drains its output before exiting.** `cli/exit.ts` exists because a piped
-  stdout/stderr is asynchronous on POSIX — every CI job, and any `rshono build | tee` — so `process.exit`
-  drops what has not left the buffer, which on a failure path is the report saying why. Four paths called
-  `process.exit` directly: an invalid `--port`/`PORT`, both of `rshono start`'s refusals, and `rshono dev`'s
-  port-in-use. Nothing in `dist/cli` reaches `process.exit` now except the helper that drains first, and a
-  test keeps it that way.
-
-- **`rshono dev` answers `/_static` itself, and now says so.** A build serves assets through the app, so they
-  carry HSTS, your CSP and anything else your middleware sets; the dev front-end owns the prefix, so they
-  carry none of it, and a policy is developed against the files it is most likely to break. Documented in
-  preference to moving it: every request the front-end proxies waits on the server rebuild, and the client
-  bundle is built by a separate compiler, so proxying assets would stall the browser's JS and CSS on a save
-  that only touched a server component.
 
 - **A `/_static` 404 carries a `Cache-Control`.** `cacheControl` returns early for anything that is not
   200/206 and the terminal `c.text('Not Found', 404)` set no header of its own. A 404 is heuristically
