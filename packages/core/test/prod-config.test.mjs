@@ -254,11 +254,10 @@ describe('a server.ts with no csrf()', () => {
 
   test('a page route refuses every cross-site form post; an endpoint route is how you take one', async () => {
     // With `csrf()` off, this is the framework's own check and nothing else. It runs on `Sec-Fetch-Site` and
-    // the content type, *before* the body is read — `parseRenderRequest` calls any form-content-type POST
-    // with no `x-rsc-action` header a form action, because deciding otherwise means buffering an untrusted
-    // body to look for a `$ACTION_*` field. So the refusal is not "an action from another site": it is every
-    // cross-site form post to a page, action or no action, which is the arrival shape of SAML ACS, OIDC
-    // `response_mode=form_post` and most payment-gateway returns.
+    // the request's shape, *before* the body is read, because deciding whether a post carries an action means
+    // buffering an untrusted body to look for a `$ACTION_*` field. So the refusal is not "an action from
+    // another site": it is every cross-site form post to a page, action or no action, which is the arrival
+    // shape of SAML ACS, OIDC `response_mode=form_post` and most payment-gateway returns.
     const post = (path, contentType) =>
       fetch(`${app.base}${path}`, {
         method: 'POST',
@@ -278,11 +277,31 @@ describe('a server.ts with no csrf()', () => {
     assert.equal(page.headers.get('cache-control'), 'private, no-cache', 'a refusal is not something to store');
     assert.match(page.headers.get('vary') ?? '', /\bRSC\b/);
 
-    // Keyed on the content type, not on the presence of an action: the same request with a non-form body is
-    // let through, which is what makes the limitation about form posts rather than about actions.
+    // All three `enctype` values a browser form can send, and this is the one that used to be let through:
+    // React never writes `text/plain`, so it is the one shape the framework never decodes as an action — and
+    // keying the refusal on that classification rather than on the shape left it rendering the page. Nothing
+    // could run an action through it, but "refuses every cross-site form post" was not true as written.
+    const plain = await post('/login', 'text/plain');
+    assert.equal(plain.status, 403, 'the third enctype a browser form can post is a form post too');
+    assert.match(await plain.text(), /cross-site form post to a page route/);
+
+    // Keyed on the shape, not on the presence of an action: the same request with a body no browser form can
+    // produce is let through, which is what makes the limitation about form posts rather than about actions.
+    // A cross-origin `application/json` POST needs a preflight the framework never answers, so a browser
+    // cannot make this request at all — only a client that is not a CSRF victim can.
     const asJson = await post('/login', 'application/json');
     await asJson.text();
     assert.notEqual(asJson.status, 403, 'a non-form content type is not the shape a browser can forge');
+
+    // And the widening must not touch a post from the app's own pages. `same-origin` is the label a browser
+    // puts on one, and it settles the question on its own — the page renders, as it did before, and no action
+    // can be decoded out of a `text/plain` body either way.
+    const own = await fetch(`${app.base}/login`, {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'same-origin', 'content-type': 'text/plain' },
+      body: 'not an action',
+    });
+    assert.equal(own.status, 200, 'a same-origin text/plain post still renders the page');
 
     // And the documented remedy works: an endpoint calls the app handler directly, so it never reaches this.
     const endpoint = await post('/api/acs', 'application/x-www-form-urlencoded');

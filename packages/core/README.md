@@ -358,10 +358,12 @@ Every target streams, which is the bar a new one has to clear.
   `PATCH`, `DELETE` or `OPTIONS`.
 - **A page route refuses every cross-site form post**, not only one carrying a server action. A form post to
   a page is how a `<form action={serverAction}>` reaches the server, and whether a given one holds an action
-  can only be known by reading the body — so the framework refuses on `Sec-Fetch-Site` and the content type,
-  before parsing, rather than buffering a body for anyone who asks. The shapes this rules out are real ones:
-  a **SAML ACS callback**, OIDC **`response_mode=form_post`**, and most payment-gateway returns all arrive as
-  a cross-site `application/x-www-form-urlencoded` or `multipart/form-data` POST. `csrf()`'s allowlist does
+  can only be known by reading the body — so the framework refuses on `Sec-Fetch-Site` and the request's
+  shape, before parsing, rather than buffering a body for anyone who asks. "Shape" is all three `enctype`
+  values a browser form can send — `application/x-www-form-urlencoded`, `multipart/form-data` and
+  `text/plain` — since what makes one forgeable from another site is the shape and not what is in it. The
+  cases this rules out are real ones: a **SAML ACS callback**, OIDC **`response_mode=form_post`**, and most
+  payment-gateway returns all arrive as a cross-site POST in exactly that shape. `csrf()`'s allowlist does
   not widen it — this is the framework declining to run its own action mechanism, ahead of any app policy.
   **Receive them on an `{ type: 'endpoint' }` route**, which calls your Hono handler directly and never
   reaches the page renderer, then redirect to the page.

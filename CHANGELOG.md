@@ -163,6 +163,20 @@ two refuse a build that succeeds today, on purpose.
   `Error`; a _middleware_ that throws a non-`Error` reaches the page too, but everything registered outside
   it is skipped, which no framework-side change could alter.
 
+- **A cross-site `enctype="text/plain"` form post is refused too.** The refusal was keyed on the request
+  classification, which names the two content types React writes an action as — so `text/plain`, the third
+  and last `enctype` a browser `<form>` can send with no preflight, was classified as an ordinary document
+  request and rendered the page, while the README promised that a page route refuses _every_ cross-site form
+  post. Nothing could run an action through it (`decodeAction` is only reached for the other two, so
+  SECURITY.md's boundary held) and the cost was a forced authenticated page render, which a cross-site GET
+  can already produce. What was wrong was the stated scope, and the fix is the direction that makes the
+  claim true: the check now runs on the request's _shape_ — a POST a browser form could have produced, all
+  three enctypes — because what makes a form post forgeable from another site is the shape and not what
+  happens to be in the body. `text/plain` is deliberately **not** added to the classification: `decodeAction`
+  reads the body with `request.formData()`, which throws on one, so that repair would turn every same-origin
+  `text/plain` POST into a 400. A cross-site `application/json` POST is still let through — no browser can
+  send one without a preflight the framework never answers.
+
 - **A handler may return a `Response` it did not build.** `Response.redirect(…)` and every `fetch()` result
   carry a header bag guarded `immutable`, and handing one back verbatim is ordinary Hono — proxying an
   upstream is the commonest thing a Worker does. The framework's response floor wrote its baseline headers

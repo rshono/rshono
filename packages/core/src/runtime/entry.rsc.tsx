@@ -37,7 +37,7 @@ import { failureDocument } from './failure-document.js';
 // Type-only, so it is erased — the RSC layer does not take its own instance of the SSR layer's module.
 import type { CancellableTransformer } from './flight-inject.js';
 import { RouterProvider } from './navigation.js';
-import { asksForRsc, isActionRequest, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
+import { asksForRsc, isActionRequest, isBrowserFormPost, parseRenderRequest, requestWantsRsc, RSC_VARY_HEADER, wantsRsc } from './request.js';
 import { assertEndpointModule, assertPageModule, assertRouteModules, validateRoutesModule, validateServerApp } from './validate-entries.js';
 
 const serverApp = validateServerApp(serverAppModule);
@@ -166,9 +166,9 @@ function prerenderNonceHeader(c: Context): Record<string, string> | null {
  *
  * - A client-initiated action carries `x-rsc-action`, which is not a CORS-simple header. A cross-origin caller
  *   needs a preflight it will not be given, so that shape cannot be forged from a browser at all.
- * - A form post is `multipart/form-data` or `application/x-www-form-urlencoded` with no header of its own —
+ * - A form post is one of the three `enctype` values a browser `<form>` can send, with no header of its own —
  *   the content types that need no preflight. It is forgeable, and an app with no `src/server.ts` has nothing
- *   standing in front of it.
+ *   standing in front of it. All three, not the two React writes: see {@link isBrowserFormPost}.
  *
  * Both halves are required, because either alone refuses something real:
  *
@@ -191,15 +191,14 @@ function prerenderNonceHeader(c: Context): Record<string, string> | null {
  * browser actually used — which behind a proxy, `rshono dev`'s included, is not the one the server was reached
  * on.
  *
- * **The cost is wider than "an action you meant to allow".** This runs on content type alone, before the body
- * is read — `parseRenderRequest` calls any form-content-type POST with no `x-rsc-action` header a
- * `form-action`, because deciding otherwise would mean buffering an untrusted body to look for a `$ACTION_*`
- * field. So a **page route cannot accept any cross-site form post at all**, whether or not an action is in
- * it: a SAML ACS callback, OIDC `response_mode=form_post`, and most payment-gateway returns all arrive in
- * exactly this shape and are all refused, `csrf()`'s allowlist included. Refusing before parsing is the right
- * trade — the alternative is reading a body from anyone who asks — but it is a real limitation and the 403
- * and the README both say so. An `{ type: 'endpoint' }` route is the way to accept one: those call the app
- * handler directly and never reach `renderPage`, so they never reach this.
+ * **The cost is wider than "an action you meant to allow".** This runs on the request's shape alone, before
+ * the body is read, because knowing whether a given post carries an action means buffering an untrusted body
+ * to look for a `$ACTION_*` field. So a **page route cannot accept any cross-site form post at all**, whether
+ * or not an action is in it: a SAML ACS callback, OIDC `response_mode=form_post`, and most payment-gateway
+ * returns all arrive in exactly this shape and are all refused, `csrf()`'s allowlist included. Refusing
+ * before parsing is the right trade — the alternative is reading a body from anyone who asks — but it is a
+ * real limitation and the 403 and the README both say so. An `{ type: 'endpoint' }` route is the way to
+ * accept one: those call the app handler directly and never reach `renderPage`, so they never reach this.
  */
 function refusesCrossSiteForm(c: Context): boolean {
   const site = c.req.header('sec-fetch-site');
@@ -477,6 +476,23 @@ function malformedAction(c: Context): Response {
 
 async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageComponent>>): Promise<Response> {
   const request = c.req.raw;
+
+  // Ahead of the classification below, and keyed on the request's *shape* rather than on it: every `enctype`
+  // a browser form can post is refused, not only the two React writes. `text/plain` is the third, and keying
+  // this off `parseRenderRequest` left it classified `document` and let through — the one enctype the
+  // framework never decodes was also the one it never refused, while the README promised that a page route
+  // refuses every cross-site form post. See {@link isBrowserFormPost} and `refusesCrossSiteForm`.
+  if (isBrowserFormPost(request) && refusesCrossSiteForm(c)) {
+    // Named for what was actually refused. The check runs before the body is read — it has to, since knowing
+    // whether a post carries an action means buffering an untrusted body — so "to a server action" claimed
+    // something this code cannot know, and said it to a caller whose post very often has no action in it.
+    return plainRefusal(
+      c,
+      "Forbidden: cross-site form post to a page route — a page route cannot accept one, because a form post to a page is how a server action is called. Use an { type: 'endpoint' } route.",
+      403,
+    );
+  }
+
   const renderRequest = parseRenderRequest(request);
 
   let returnValue: ActionResult | undefined;
@@ -532,18 +548,8 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
     } else {
       // A `<form action={serverAction}>` post, which is the path that runs before hydration and with
       // JavaScript off. Unlike the client-initiated one it carries no custom header, so it is also the only
-      // action shape a browser can be made to send from another site: see `refusesCrossSiteForm`.
-      if (refusesCrossSiteForm(c)) {
-        // Named for what was actually refused. The check runs before the body is read — it has to, since
-        // knowing whether a post carries an action means buffering an untrusted body — so "to a server
-        // action" claimed something this code cannot know, and said it to a caller whose post very often
-        // has no action in it at all.
-        return plainRefusal(
-          c,
-          "Forbidden: cross-site form post to a page route — a page route cannot accept one, because a form post to a page is how a server action is called. Use an { type: 'endpoint' } route.",
-          403,
-        );
-      }
+      // action shape a browser can be made to send from another site — refused above, on the shape of the
+      // request rather than on this classification: see `refusesCrossSiteForm`.
       let formData: FormData;
       let decodedAction: (() => Promise<unknown>) | null;
       try {
