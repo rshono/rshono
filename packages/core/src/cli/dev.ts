@@ -259,6 +259,19 @@ export async function devCommand(options: DevOptions): Promise<void> {
 
   const front = new Hono();
 
+  // **Answered here, not proxied — so the app's own middleware does not see an asset request in dev.**
+  // That is a divergence from a build, where `/_static` is mounted *inside* the app so an asset carries
+  // HSTS, the app's CSP and anything else its middleware sets (`prod-config.test.mjs` asserts it). It is
+  // kept deliberately, and the reason is the gate below: every request the front-end proxies first awaits
+  // `workerGate.promise`. The client bundle is built by a compiler that finishes independently of the
+  // server one, so proxying assets would park the browser's JS and CSS behind the *server* rebuild — a save
+  // touching one server component would stall the whole page's assets, and a server bundle that failed to
+  // build would take them down with it. A worse dev experience than the divergence.
+  //
+  // What it costs is real and worth knowing: a CSP is developed against a policy that does not apply to the
+  // files it is most likely to break, so the first time it does is in a build. If this ever has to go, the
+  // shape that keeps both properties is narrower than a plain move — proxy `/_static` only while a worker
+  // is live, and answer locally while the gate is closed.
   front.route('/_static', createStaticAssetsApp({ root: join(outDir, 'static'), isDev: true }));
 
   front.get('/_rshono/hmr', () => {
