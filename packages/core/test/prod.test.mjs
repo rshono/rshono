@@ -791,6 +791,12 @@ test('an action request that fails before the action runs is refused outright, n
 // is pointed at a module id the bundle does not hold, which is what React's own "older or newer deployment"
 // message is about. It cannot be done with a fixture: Rspack concatenates every `'use server'` module in the
 // app into one server module, so an action module that throws as it evaluates takes *all* of them with it.
+//
+// Both action shapes, because the split that gets this right was made twice. The client-initiated branch has
+// had it since F3; the form branch answered the very same fault with the silent 400 below — `decodeAction`
+// reads the caller's body *and* `__webpack_require__`s the action's module, so one `catch` was covering two
+// different people's mistakes. With JavaScript off, or before hydration, a broken deployment therefore told
+// the caller they were malformed and told the operator nothing.
 test('an action whose module cannot be loaded is a reported 500, not a silent 400', async () => {
   // Inside the testbed, because the copy is imported and `src/server.ts` pulls in an ordinary `node_modules`
   // dependency the node preset leaves external — from `os.tmpdir()` there is nothing above it to resolve.
@@ -818,32 +824,57 @@ test('an action whose module cannot be loaded is a reported 500, not a silent 40
     }
 
     // In-process, so the app's own `onServerError` reports through this console rather than a child's stdout.
-    console.log = (...args) => reported.push(args.join(' '));
-    console.error = (...args) => reported.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' '));
-    let res;
-    let payload;
-    try {
-      res = await bundle.app.fetch(
-        new Request('https://rshono.example/dashboard', {
-          method: 'POST',
-          headers: { Origin: 'https://rshono.example', 'x-rsc-action': actionId, RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
-          body: '[]',
-        }),
-      );
-      payload = await res.text();
-    } finally {
-      Object.assign(console, console_);
-    }
+    const call = async (request) => {
+      reported.length = 0;
+      console.log = (...args) => reported.push(args.join(' '));
+      console.error = (...args) => reported.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' '));
+      try {
+        const res = await bundle.app.fetch(request);
+        return { res, body: await res.text(), logged: reported.join('\n') };
+      } finally {
+        Object.assign(console, console_);
+      }
+    };
 
-    assert.equal(res.status, 500, 'a bundle missing the action’s module is the server being broken, not the caller');
-    assert.match(res.headers.get('content-type'), /text\/x-component/, 'the client is holding a live tree, so it gets the error page as a payload');
+    const client = await call(
+      new Request('https://rshono.example/dashboard', {
+        method: 'POST',
+        headers: { Origin: 'https://rshono.example', 'x-rsc-action': actionId, RSC: '1', 'content-type': 'text/plain;charset=UTF-8' },
+        body: '[]',
+      }),
+    );
+
+    assert.equal(client.res.status, 500, 'a bundle missing the action’s module is the server being broken, not the caller');
+    assert.match(
+      client.res.headers.get('content-type'),
+      /text\/x-component/,
+      'the client is holding a live tree, so it gets the error page as a payload',
+    );
     // Carrying no result, because the action never ran — which is the one reachable cause of the client
     // runtime's "the server action produced no result" error. See the branch in entry.client.tsx.
-    assert.match(payload, /"returnValue":"\$undefined"/, 'nothing ran, so there is no result to carry across');
-    const logged = reported.join('\n');
-    assert.match(logged, /server action could not be loaded/, 'the operator gets the real error');
-    assert.match(logged, /\[error-reporter\] action \/dashboard/, 'attributed to the action, not to the request that was fine');
-    assert.doesNotMatch(logged, /\[error-reporter\] request \/dashboard/, 'and reported once, whatever stages it crosses');
+    assert.match(client.body, /"returnValue":"\$undefined"/, 'nothing ran, so there is no result to carry across');
+    assert.match(client.logged, /server action could not be loaded/, 'the operator gets the real error');
+    assert.match(client.logged, /\[error-reporter\] action \/dashboard/, 'attributed to the action, not to the request that was fine');
+    assert.doesNotMatch(client.logged, /\[error-reporter\] request \/dashboard/, 'and reported once, whatever stages it crosses');
+
+    // The same fault reached the other way: a `<form action={serverAction}>` post, which is what a browser
+    // sends before hydration and with JavaScript off. Same id, so `decodeAction` resolves the same broken
+    // manifest entry — and the answer has to be the same one, since the request was no less valid for
+    // having no JavaScript behind it.
+    const form = await call(
+      new Request('https://rshono.example/dashboard', {
+        method: 'POST',
+        headers: { Origin: 'https://rshono.example', Accept: 'text/html', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ [`$ACTION_ID_${actionId}`]: '' }).toString(),
+      }),
+    );
+
+    assert.equal(form.res.status, 500, 'a no-JS form post meets the same broken deployment, so it gets the same status');
+    assert.doesNotMatch(form.body, /Bad Request/, 'and must not be told its request was malformed — it was not');
+    assert.match(form.res.headers.get('content-type'), /text\/html/, 'no client runtime is holding a tree here, so the error page is a document');
+    assert.match(form.body, /Something went wrong/, 'which is the app’s own error page, not the framework’s plain refusal');
+    assert.match(form.logged, /server action could not be loaded/, 'the operator gets the real error here too');
+    assert.match(form.logged, /\[error-reporter\] action \/dashboard/, 'under the same source: the deployment is what failed, not the request');
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
@@ -1376,6 +1407,14 @@ test('an action body that will not decode is a 400, and never pages the error tr
       what: 'unknown $ACTION_ID in the form branch',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: '$ACTION_ID_deadbeef=1',
+    },
+    // The form branch's other shape, and the one that keeps its 400 honest now that a *deployment* failure
+    // in the same `decodeAction` call answers 500: `useActionState` posts its id inside an encoded
+    // `$ACTION_<n>:0` field, so a body that fills it with nonsense fails where no module was ever asked for.
+    {
+      what: 'undecodable $ACTION_REF_ metadata in the form branch',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ $ACTION_REF_1: '', '$ACTION_1:0': 'not-a-flight-row', $ACTION_KEY: 'k1' }).toString(),
     },
   ];
 

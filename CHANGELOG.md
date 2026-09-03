@@ -149,6 +149,20 @@ two refuse a build that succeeds today, on purpose.
 
 ### Fixed
 
+- **A broken deployment no longer answers a no-JS form post with a silent 400.** `decodeAction` does two
+  things in one call: it reads the caller's body, and it `__webpack_require__`s the module the action lives
+  in. Both sat behind the one `catch` that answers `400 Bad Request: malformed server action request` — the
+  refusal that is deliberately silent, because action ids are public and reporting from there would be an
+  unauthenticated way to page whoever owns the error tracker. So an action module that would not evaluate
+  told the caller their request was malformed, when it was not, and told the operator nothing at all. The
+  same fault reached through a client-initiated call has answered 500 with the app's `error` page, reported
+  as `source: 'action'`, since the guard around `loadServerAction` was split out; the form path — which is
+  what a browser sends before hydration and with JavaScript off — kept the old behaviour. Rspack compiles an
+  app's whole `'use server'` graph into a single server module, so this was every form post in the app, not
+  one. The body read now has its own guard, and a `decodeAction` failure asks whether the app's actions can
+  be loaded at all before it blames the caller. A malformed body, an unknown action id and undecodable
+  `useActionState` metadata are all still a silent 400.
+
 - **A thrown non-`Error` reaches the `error` page.** Hono's dispatcher hands `app.onError` only what is
   `instanceof Error` and re-throws everything else, so `throw 'a plain string'` — or a rejected string, or a
   thrown object — rejected `app.fetch` and was answered outside the app entirely: a bodiless 500 with no

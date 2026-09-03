@@ -474,6 +474,76 @@ function malformedAction(c: Context): Response {
   return plainRefusal(c, 'Bad Request: malformed server action request', 400);
 }
 
+/** The field name React gives the action id of a form with no `useActionState`. See {@link formActionId}. */
+const ACTION_ID_FIELD = '$ACTION_ID_';
+
+/**
+ * The action id a `<form action={serverAction}>` post names in a field *name*, or `null` for the shape that
+ * does not.
+ *
+ * Two shapes reach `decodeAction`, and only one puts the id somewhere readable. A form with no
+ * `useActionState` posts a bare `$ACTION_ID_<id>` field, whose name is what `decodeAction` itself matches on
+ * — so reading it here is not a second decoder of React's form format. `useActionState`'s shape puts the id
+ * *inside* an encoded `$ACTION_<n>:0` value instead, and reading that would be exactly the drift
+ * `decodeFormState`'s guard below is about: two decoders disagreeing about a wire format neither owns.
+ */
+function formActionId(formData: FormData): string | null {
+  for (const key of formData.keys()) {
+    if (key.startsWith(ACTION_ID_FIELD)) return key.slice(ACTION_ID_FIELD.length);
+  }
+  return null;
+}
+
+/**
+ * The first action the server bundle holds itself, as the id to ask `loadServerAction` about when a form
+ * post names none this can see.
+ *
+ * Entries declaring `chunks` are skipped for {@link checkServerActions}'s reason: `loadServerAction` is a
+ * bare `__webpack_require__`, so a module that has not been loaded yet throws for a reason that says nothing
+ * about the deployment — and a probe that answers "broken" for a healthy app is the one failure direction
+ * this must not have.
+ */
+const probeActionId = ((): string | undefined => {
+  for (const [id, entry] of Object.entries(__rspack_rsc_manifest__.serverManifest)) {
+    if ((entry.chunks?.length ?? 0) === 0) return id;
+  }
+  return undefined;
+})();
+
+/**
+ * Whether the app's `'use server'` module is what `decodeAction` could not load, rather than the caller's
+ * body being what it could not decode.
+ *
+ * Asked by loading an action for real, because nothing on the error says which of the two it was: React
+ * reports a missing module and an undecodable field through the same channel, and the message is its own
+ * internal shape either way. `loadServerAction` is `__webpack_require__` plus a `typeof === 'function'`
+ * check, so a second call after the first succeeded is a cache hit.
+ *
+ * The id it asks about is the one the body names where the body names one, and otherwise any of the app's —
+ * which is the same question, because Rspack concatenates the whole `'use server'` graph into a single
+ * server module (see {@link checkServerActions} and the G1 note): if one action cannot be loaded at run
+ * time, none of them can.
+ *
+ * **Both ways of being wrong land on the old behaviour, deliberately.** No manifest to probe, or a probe
+ * that succeeds while the id the caller actually named is broken — which needs `useActionState`'s shape
+ * *and* a per-entry manifest corruption rather than a module that will not evaluate — answers `false`, and
+ * the 400 stands exactly as it did. What must never happen is the other direction: a malformed body
+ * answering 500 and paging whoever owns the error tracker, which is what {@link malformedAction} exists to
+ * prevent. A probe that throws is the deployment being broken for every caller, so a 500 is then right for
+ * this one too.
+ */
+function cannotLoadServerActions(formData: FormData): boolean {
+  const named = formActionId(formData);
+  const id = named !== null && Object.hasOwn(__rspack_rsc_manifest__.serverManifest, named) ? named : probeActionId;
+  if (id === undefined) return false;
+  try {
+    loadServerAction(id);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageComponent>>): Promise<Response> {
   const request = c.req.raw;
 
@@ -551,11 +621,27 @@ async function renderPage(c: Context, loadPage: () => Promise<ServerEntry<PageCo
       // action shape a browser can be made to send from another site — refused above, on the shape of the
       // request rather than on this classification: see `refusesCrossSiteForm`.
       let formData: FormData;
-      let decodedAction: (() => Promise<unknown>) | null;
       try {
         formData = await request.formData();
-        decodedAction = await decodeAction(formData);
       } catch {
+        return malformedAction(c);
+      }
+      let decodedAction: (() => Promise<unknown>) | null;
+      try {
+        decodedAction = await decodeAction(formData);
+      } catch (error) {
+        // Split from the read above, for the reason F3 split the client-initiated path: `decodeAction` is
+        // two things at once. It reads the caller's body *and* — through `loadServerReference` —
+        // `__webpack_require__`s the module the action lives in, so the 400 that is right about a body is
+        // wrong whenever the deployment is what failed. Which of the two it was is nowhere on the error, so
+        // it is asked directly. See {@link cannotLoadServerActions}.
+        if (cannotLoadServerActions(formData)) {
+          // The original error, not the probe's: this one is the fault the request actually met. Attributed
+          // and re-thrown exactly as the `rsc-action` branch does, so the app's `error` page answers 500 and
+          // the operator is paged instead of the caller being blamed.
+          reportServerError(error, { source: 'action', hono: c, message: '[rshono] server action could not be loaded:' });
+          throw error;
+        }
         return malformedAction(c);
       }
       if (decodedAction) {
