@@ -4,7 +4,7 @@
 > fixed, and fixing them turned up two more — C10 and C11, which live in `bugs.jsonl` alone. This stays as the
 > write-up — the reproductions and the reasoning are the part worth keeping — but the status of any finding,
 > and the commit that fixed it, is in `bugs.jsonl`. One JSON object per line: `id`, `severity`, `status`,
-> `kind`, `source`, `title`, `files`, `fix`, `commit`, `notes`. `notes` is the regression risk, which is what
+> `kind`, `title`, `files`, `fix`, `commit`, `notes`. `notes` is the regression risk, which is what
 > stops a fix being reintroduced as a bug.
 
 A read of the whole package with one question in front of it: **is this ready to tag 1.0.0?** Not a follow-up
