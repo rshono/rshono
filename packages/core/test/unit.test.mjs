@@ -722,6 +722,24 @@ describe('varyWith', () => {
     assert.equal(varyWith('accept, rsc', 'RSC'), null, 'already listed, case aside');
     assert.equal(varyWith(' * ', 'RSC'), null, '* already means "never reuse"');
   });
+
+  test('answers a list, not a string: a `*` anywhere counts, and an empty header is nothing to append to', () => {
+    // Both questions this asks are about the entries. `*` used to have to be the *whole* header to be seen,
+    // so a list that already said "never reuse" got another field name added to it for no effect.
+    assert.equal(varyWith('Accept-Encoding, *', 'RSC'), null, '* covers every field, wherever it sits in the list');
+    assert.equal(varyWith('*, Accept-Encoding', 'RSC'), null);
+
+    // And the one that mattered: an app can set `vary: ''` — building the header from a list that came out
+    // empty is the obvious way — and Hono keeps it. Appending to it produced `, RSC`, an empty list element
+    // RFC 9110 tells a sender not to generate. A cache strict enough to reject that drops the `Vary`, and a
+    // dropped `Vary: RSC` is a flight payload served to a browser asking for the document.
+    assert.equal(varyWith('', 'RSC'), 'RSC', 'no entries to keep, so the value is the whole header');
+    assert.equal(varyWith('   ', 'RSC'), 'RSC');
+    assert.equal(varyWith(' , ', 'RSC'), 'RSC', 'separators without field names are not entries either');
+
+    // What must not change: a header with anything real in it comes back as its author wrote it.
+    assert.equal(varyWith('Accept , Accept-Encoding', 'RSC'), 'Accept , Accept-Encoding, RSC', 'spelling and spacing survive');
+  });
 });
 
 describe('etagMatches', () => {
