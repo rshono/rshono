@@ -160,8 +160,22 @@ two refuse a build that succeeds today, on purpose.
   with the value named in the message; an `Error` of any kind is untouched, which is what keeps the control
   signals, the payload stand-ins and the report de-duplication intact. An endpoint and a page route convert
   at their own handler, so the app's middleware unwinds over the `error` page exactly as it does for an
-  `Error`; a *middleware* that throws a non-`Error` reaches the page too, but everything registered outside
+  `Error`; a _middleware_ that throws a non-`Error` reaches the page too, but everything registered outside
   it is skipped, which no framework-side change could alter.
+
+- **A handler may return a `Response` it did not build.** `Response.redirect(…)` and every `fetch()` result
+  carry a header bag guarded `immutable`, and handing one back verbatim is ordinary Hono — proxying an
+  upstream is the commonest thing a Worker does. The framework's response floor wrote its baseline headers
+  with `c.res.headers.set(…)`, which throws `TypeError: immutable` on one of those: the throw reached
+  `onError`, the app's 500 page went out in place of the redirect, and the app's error tracker got
+  `immutable` plus a minified frame naming nothing that could be acted on. **On `cloudflare` and
+  `aws-lambda` only**, which is what made it worth finding: `@hono/node-server` replaces the global
+  `Response` with a lightweight class whose headers are always mutable, so `node` and `vercel` — dev,
+  `rshono start`, and nearly every suite — answered the redirect correctly all along. The floor now collects
+  what a response is missing and writes the first of them through `c.header()`, which rebuilds a finalized
+  response before writing exactly as `serveAsset` already did by hand for the framework's own asset
+  responses; a response that needs nothing is not rebuilt at all. The `SSG_CACHE_CONTROL` doc recipe for
+  overriding a prerendered page's caching from middleware now uses `c.header()` for the same reason.
 
 - **One fault is reported once.** `reportServerError` keeps a WeakSet so a fault crossing several stages is
   reported once, and it held everywhere except a thrown page component: an app wired to Sentry got the real

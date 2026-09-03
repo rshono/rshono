@@ -89,7 +89,12 @@ export function runCli(dir, args, { env = {}, timeoutMs = 60_000 } = {}) {
  * is keyed by specifier, so importing twice without one hands back the previous build.
  */
 export function importServerBundle(cacheKey) {
-  return import(`${pathToFileURL(join(TESTBED_DIST, 'server', 'main.mjs')).href}?${cacheKey}`);
+  return importAppBundle(TESTBED_DIR, cacheKey);
+}
+
+/** {@link importServerBundle} for any app directory — the fixtures included. */
+export function importAppBundle(dir, cacheKey) {
+  return import(`${pathToFileURL(join(dir, 'dist', 'server', 'main.mjs')).href}?${cacheKey}`);
 }
 
 /** Runs `rshono <command>` in `dir` and resolves once it reports the address it is listening on. */

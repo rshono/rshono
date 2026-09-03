@@ -149,7 +149,7 @@ if (process.env.TESTBED_SSG_CACHE === '1') {
   server.use('/docs/*', async (c, next) => {
     c.header('cache-control', 'public, max-age=1');
     await next();
-    c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+    c.header('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
   });
 }
 

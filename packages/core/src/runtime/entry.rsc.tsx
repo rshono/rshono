@@ -28,7 +28,7 @@ import { routes as userRoutes } from '@rshono/routes';
 // @ts-expect-error — resolved by the '@rshono/server-app' alias (src/server.ts or the empty fallback)
 import * as serverAppModule from '@rshono/server-app';
 import { isPageRoute, type ErrorPageInfo, type FallbackPage, type PageComponent, type PageProps, type Route } from '../router.js';
-import { appendVary, etagMatches } from '../server/headers.js';
+import { appendVary, etagMatches, varyWith } from '../server/headers.js';
 import { PRERENDER_NONCE_HEADER } from '../server/prerendered.js';
 import { beginPageRender, getRequestContext, publicUrl, readParams, reportServerError, runWithContext } from './context.js';
 import { cameFromPayload, isControlSignal, RedirectSignal, type ControlSignal } from './control.js';
@@ -55,13 +55,16 @@ const { isDev } = __RSHONO_CONFIG__;
  * ```ts
  * server.use('/docs/*', async (c, next) => {
  *   await next();
- *   c.res.headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+ *   c.header('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
  * });
  * ```
  *
- * After, because the response below is built with `cache-control` in the bag it hands `c.body(...)`, and
- * that replaces a header prepared with `c.header(...)` before the handler ran. The `ETag` is untouched
- * either way, so revalidation still costs a 304 rather than the page.
+ * After, because the response below is built with `cache-control` in the bag it hands `c.body(...)`, and that
+ * replaces anything prepared before the handler ran. The `ETag` is untouched either way, so revalidation
+ * still costs a 304 rather than the page.
+ *
+ * `c.header()` rather than `c.res.headers.set(...)`, which is the same choice the response floor makes and
+ * for the same reason: it is the one that also works on a response the app did not build. See the floor.
  */
 const SSG_CACHE_CONTROL = 'public, max-age=300';
 
@@ -640,23 +643,59 @@ function buildApp(): Hono {
   app.use(async (c, next) => {
     await next();
     const headers = c.res.headers;
-    if (!headers.has('x-content-type-options')) headers.set('x-content-type-options', 'nosniff');
-    if (!headers.has('referrer-policy')) headers.set('referrer-policy', 'strict-origin-when-cross-origin');
-    if (!headers.has('x-frame-options')) headers.set('x-frame-options', 'SAMEORIGIN');
+
+    /**
+     * The headers this response still needs, collected before any of them is written — because the writing
+     * is the part that cannot go through `headers.set(…)`.
+     *
+     * A handler is free to return a `Response` it did not build. `Response.redirect(…)` and every result of
+     * `fetch()` carry an **immutable** header bag, and handing one straight back is ordinary Hono — proxying
+     * an upstream is the commonest thing a Worker does. `.set()` on one throws `TypeError: immutable`, which
+     * is what this floor used to answer such a handler with: the throw reached `onError`, the app's 500 page
+     * went out in place of the redirect, and the app's error tracker got `immutable` and a minified frame
+     * naming nothing anyone could act on.
+     *
+     * Invisible on the targets anyone develops against, which is the whole hazard: `@hono/node-server`
+     * installs a mutable `Response` shim as a global, so `node` and `vercel` — dev, `rshono start` and every
+     * suite that drives them — cannot see the bug that `cloudflare` and `aws-lambda` will. The framework
+     * already knew the mechanism: it is written on `serveAsset` in `cloudflare/runtime.ts`, which repairs the
+     * framework's *own* asset responses by hand.
+     *
+     * `c.header()` is the repair, and Hono's own — it rebuilds a finalized response as
+     * `new Response(res.body, res)` before writing. It does that on *every* call, so collecting is what keeps
+     * it to one rebuild: the first write goes through `c.header()` and the rest to the bag it hands back
+     * (measured at 1.2 µs against 4.9 µs for five separate calls), and a response that already carries all of
+     * these is not rebuilt at all.
+     */
+    const writes: [name: string, value: string][] = [];
+    if (!headers.has('x-content-type-options')) writes.push(['x-content-type-options', 'nosniff']);
+    if (!headers.has('referrer-policy')) writes.push(['referrer-policy', 'strict-origin-when-cross-origin']);
+    if (!headers.has('x-frame-options')) writes.push(['x-frame-options', 'SAMEORIGIN']);
 
     // React Refresh compiles updates with `eval`, so a dev build cannot run under a production CSP.
     // Widened here so one policy in src/server.ts serves both.
     if (isDev) {
       const csp = headers.get('content-security-policy');
       if (csp?.includes('script-src ')) {
-        headers.set('content-security-policy', csp.replace('script-src ', "script-src 'unsafe-eval' "));
+        writes.push(['content-security-policy', csp.replace('script-src ', "script-src 'unsafe-eval' ")]);
       }
     }
 
-    // Page responses only from here down.
-    if (!PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) return;
-    appendVary(headers, RSC_VARY_HEADER);
-    if (!headers.has('cache-control')) headers.set('cache-control', PAGE_CACHE_CONTROL);
+    // Page responses only.
+    if (PAGE_CONTENT_TYPE.test(headers.get('content-type') ?? '')) {
+      const vary = varyWith(headers.get('vary'), RSC_VARY_HEADER);
+      if (vary !== null) writes.push(['vary', vary]);
+      if (!headers.has('cache-control')) writes.push(['cache-control', PAGE_CACHE_CONTROL]);
+    }
+
+    let writable: Headers | undefined;
+    for (const [name, value] of writes) {
+      if (writable) writable.set(name, value);
+      else {
+        c.header(name, value);
+        writable = c.res.headers;
+      }
+    }
   });
 
   // The backstop for {@link asError}, and *second* for a reason: the middleware that throws is the one whose
@@ -708,6 +747,9 @@ function buildApp(): Hono {
       // `301` and `308` are cacheable with no explicit `Cache-Control` at all, so a session-gated permanent
       // redirect could otherwise be stored by a shared cache and replayed to another visitor, and without
       // `Vary` this document redirect could answer an `RSC: 1` fetch that needs the payload above.
+      //
+      // Written straight to the bag, unlike the floor: `c.redirect` builds this response here and now, so it
+      // is Hono's own and mutable. `Response.redirect()` — the one an *app* would reach for — is not.
       const redirected = c.redirect(signal.location, signal.status as RedirectStatusCode);
       appendVary(redirected.headers, RSC_VARY_HEADER);
       if (!redirected.headers.has('cache-control')) redirected.headers.set('cache-control', PAGE_CACHE_CONTROL);

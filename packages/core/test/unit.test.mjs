@@ -15,7 +15,7 @@ import { checkReactVersions } from '../dist/builder/react-versions.js';
 import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
 import { publicRouteCollisions } from '../dist/deploy/public-paths.js';
-import { appendVary, etagMatches } from '../dist/server/headers.js';
+import { appendVary, etagMatches, varyWith } from '../dist/server/headers.js';
 import { loadConfig } from '../dist/server/load-config.js';
 import { parsePort, resolveServerConfig } from '../dist/server/server-config.js';
 import { createPageCache, PRERENDER_NONCE_HEADER, ssgAssetPath, ssgFilePath } from '../dist/server/prerendered.js';
@@ -709,6 +709,18 @@ describe('appendVary', () => {
     const wildcard = new Headers({ vary: '*' });
     appendVary(wildcard, 'Accept');
     assert.equal(wildcard.get('vary'), '*', '* already means "never reuse"');
+  });
+});
+
+describe('varyWith', () => {
+  // The pure half, and what the response floor uses: it cannot write through the bag it read the header
+  // from, so it needs the answer as a value — and `null` for "nothing to write" is what keeps it from
+  // rebuilding a response it had no reason to touch.
+  test('answers the header to write, or null when there is nothing to write', () => {
+    assert.equal(varyWith(null, 'RSC'), 'RSC', 'no Vary at all: the value is the whole header');
+    assert.equal(varyWith('Accept', 'RSC'), 'Accept, RSC', 'what is already there survives');
+    assert.equal(varyWith('accept, rsc', 'RSC'), null, 'already listed, case aside');
+    assert.equal(varyWith(' * ', 'RSC'), null, '* already means "never reuse"');
   });
 });
 

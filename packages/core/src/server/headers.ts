@@ -4,19 +4,27 @@
  */
 
 /**
- * Adds `value` to the `Vary` header without discarding what is already there — a route, a middleware or a proxy
- * may have added its own entry, and a plain `set` would drop it, leaving a cache free to serve one variant in
- * place of another. `*` is left alone: it already means "never reuse this".
+ * The `Vary` a response needs in order to carry `value`, or `null` when there is nothing to write — because it
+ * already lists it, or because it is `*`, which means "never reuse this" and covers everything.
+ *
+ * What is already there is kept: a route, a middleware or a proxy may have added an entry of its own, and a
+ * plain `set` would drop it, leaving a cache free to serve one variant in place of another.
+ *
+ * Pure, and separate from {@link appendVary}, because the two callers cannot write the same way. One holds a
+ * `Response` it built itself; the response floor holds one the *app* may have returned, whose header bag can be
+ * immutable — see the floor in `entry.rsc.tsx`, which writes this answer through `c.header()`.
  */
-export function appendVary(headers: Headers, value: string): void {
-  const existing = headers.get('vary');
-  if (existing === null) {
-    headers.set('vary', value);
-    return;
-  }
-  if (existing.trim() === '*') return;
+export function varyWith(existing: string | null, value: string): string | null {
+  if (existing === null) return value;
+  if (existing.trim() === '*') return null;
   const already = existing.split(',').some((entry) => entry.trim().toLowerCase() === value.toLowerCase());
-  if (!already) headers.set('vary', `${existing}, ${value}`);
+  return already ? null : `${existing}, ${value}`;
+}
+
+/** {@link varyWith}, written straight back — for a `Headers` the caller knows it can write to. */
+export function appendVary(headers: Headers, value: string): void {
+  const vary = varyWith(headers.get('vary'), value);
+  if (vary !== null) headers.set('vary', vary);
 }
 
 /**

@@ -48,6 +48,20 @@ test('a wildcard route matches and sees the full path', async () => {
   assert.match(html, /data-path="\/files\/deep\/nested\/path"/);
 });
 
+test('an endpoint returning a response it did not build keeps it, decorated', async () => {
+  // The response floor is the only middleware in front of this app, which is what makes it the app that can
+  // show whether the floor is safe on a `Response` with an immutable header bag — see src/redirect.ts.
+  //
+  // **This target cannot fail this test**, and the reason is the hazard: `@hono/node-server` replaces the
+  // global `Response` with a lightweight class whose headers are always mutable, `Response.redirect()`
+  // included. Asserted here anyway, so the two halves of the divergence sit in the suite together; the half
+  // that can fail is in cloudflare.test.mjs, where the platform's own `Response` is what the app gets.
+  const res = await fetch(`${base}/redirect`, { redirect: 'manual' });
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get('location'), `${base}/`);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff', 'the floor decorates it either way');
+});
+
 test('with no notFound page, an unmatched path is a plain 404', async () => {
   const res = await fetch(`${base}/nothing-here`, { headers: { Accept: 'text/html' } });
   assert.equal(res.status, 404);

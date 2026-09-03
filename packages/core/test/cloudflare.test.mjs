@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { APP_ENV, buildApp, TESTBED_DIR, TESTBED_DIST, importServerBundle } from './helpers.mjs';
+import { APP_ENV, buildApp, MINIMAL_APP_DIR, TESTBED_DIR, TESTBED_DIST, importAppBundle, importServerBundle } from './helpers.mjs';
 
 /**
  * Every specifier the bundle imports *statically*, whether or not it was minified.
@@ -239,5 +239,43 @@ describe('serving from a Worker', () => {
     assert.equal(res.status, 200);
     assert.ok(body.startsWith('<!DOCTYPE html>'));
     assert.equal(res.headers.get('cache-control'), 'private, no-cache', 'rendered, not served from the prerender');
+  });
+});
+
+/**
+ * The framework's response floor, against the one thing an app can return that it does not own.
+ *
+ * The minimal fixture rather than the testbed, and that is the whole point: the floor is registered first, so
+ * it unwinds *last*, and any middleware the app has of its own reaches the response before it does. An app
+ * with a `src/server.ts` therefore repairs the header bag — or throws in the floor's place — and can never
+ * show whether the floor is safe. This app has no middleware at all.
+ *
+ * On Workers, because `@hono/node-server` replaces the global `Response` with a lightweight class whose
+ * headers are always mutable — `Response.redirect()` included. So `node` and `vercel`, which is dev,
+ * `rshono start` and most of this suite, cannot see this bug; `cloudflare` and `aws-lambda` get the
+ * platform's own `Response`, whose bag is guarded `immutable`.
+ */
+describe('serving an app that has no middleware of its own', () => {
+  let minimalWorker;
+
+  before(async () => {
+    buildApp(MINIMAL_APP_DIR, { args: ['--deploy', 'cloudflare'] });
+    minimalWorker = (await importAppBundle(MINIMAL_APP_DIR, 'cloudflare')).default;
+  });
+
+  after(() => {
+    // Scaffolded by the build for a project that has none, and this fixture is not a Workers project.
+    rmSync(join(MINIMAL_APP_DIR, 'wrangler.jsonc'), { force: true });
+  });
+
+  test('decorates a response the handler returned but did not build', async () => {
+    // No binding: this app prerenders nothing, and the endpoint under test reads no asset.
+    const res = await minimalWorker.fetch(new Request(`${ORIGIN}/redirect`), {}, { waitUntil() {} });
+    await res.text();
+    assert.equal(res.status, 302, 'the handler’s own redirect must survive the floor, not become a 500');
+    assert.equal(res.headers.get('location'), `${ORIGIN}/`);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff', 'and the floor must still get its headers on');
+    assert.equal(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+    assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN');
   });
 });
