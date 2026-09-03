@@ -101,6 +101,16 @@ export const runtime: DeployRuntime = {
   },
 
   mountPublicFallback(app: Hono): void {
+    // Live here and a no-op on `vercel`, which is the whole difference between the two CDN targets and is
+    // written up on {@link DeployRuntime.mountPublicFallback}. Normally dead for the same reason the
+    // `/_static` mount above is — the CDN answers first — but `public/` is in the *same* binding this can
+    // read, so an assets configuration that routes to the worker first keeps its files instead of losing
+    // them. Vercel has nothing equivalent: `public/` went into the static output and is not uploaded with
+    // the function, so there is nothing there for a mount to answer from.
+    //
+    // Registered after every route, so inside the worker a route still beats a `public/` file — the
+    // ordering the contract describes, reached on the one target whose CDN can be told to stand aside. At
+    // the CDN the file wins, which is what `publicRouteCollisions` warns about at build time.
     app.get('/*', async (c, next) => {
       // The prerender tree lives in the same store, but the app only serves it through `readPrerendered`.
       if (c.req.path.startsWith(`${SSG_PREFIX}/`)) return next();

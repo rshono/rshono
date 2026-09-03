@@ -55,8 +55,18 @@ export interface DeployRuntime {
    * on the two targets with a CDN in front. There `public/` is part of the static output and the platform
    * answers from it *before* the app is invoked — `{ handle: 'filesystem' }` ahead of the function on
    * Vercel, Workers Assets ahead of the worker on Cloudflare — so it is a CDN-first store rather than a
-   * fallback, and those two implement this as a no-op. `rshono build` warns about a `public/` file that
-   * lands on a route's path for exactly that reason; see `publicRouteCollisions`.
+   * fallback. `rshono build` warns about a `public/` file that lands on a route's path for exactly that
+   * reason; see `publicRouteCollisions`.
+   *
+   * The two targets do not answer that the same way, and the difference is worth having written down here
+   * rather than discovered in one of them. **Vercel implements this as a no-op**: nothing is uploaded with
+   * the function for it to read, so a mount could never answer. **Cloudflare implements it for real**,
+   * against the `ASSETS` binding — normally dead, since the CDN is checked first, but the binding is the
+   * same store either way and an assets configuration that routes to the worker first would otherwise lose
+   * `public/` entirely. That is the reason its `mountStaticAssets` is live too. So on Cloudflare a `public/`
+   * file is CDN-first *and*, inside the worker, a genuine fallback that a route still beats — which is the
+   * ordering this method's first line describes, reached by the one target whose CDN can be told to stand
+   * aside.
    */
   mountPublicFallback(app: Hono): void;
   /**

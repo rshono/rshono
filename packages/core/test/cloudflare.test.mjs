@@ -215,10 +215,24 @@ describe('serving from a Worker', () => {
     assert.deepEqual(pageReads, [], 'the index already says there is no page under that path');
   });
 
-  test('serves a public/ file through the binding', async () => {
+  test('serves a public/ file through the binding, and a route still beats one', async () => {
+    // The half of `mountPublicFallback` that is only true here. Vercel implements it as a no-op — `public/`
+    // is in the static output and not uploaded with the function, so a mount could never answer — and the
+    // contract used to say both CDN targets did. This one is live, because `public/` sits in the same
+    // binding the worker can read, so an assets configuration that routes to the worker first keeps its
+    // files rather than losing them.
     const res = await fetchWorker('/robots.txt');
     assert.equal(res.status, 200);
     assert.match(await res.text(), /User-agent/i);
+
+    // And it is mounted after the routes, so inside the worker the ordering the contract's first line
+    // describes actually holds. At the CDN the file wins instead, which is the divergence
+    // `publicRouteCollisions` warns about at build time — see C9.
+    const page = await fetchWorker('/users', { headers: { Accept: 'text/html' } });
+    const body = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(body, /^<!DOCTYPE html>/, 'a route path is answered by the route, not by the asset store');
+    assert.equal(page.headers.get('cache-control'), 'private, no-cache', 'and rendered, not served as a static asset');
   });
 
   test('ends the /_static mount in a terminal 404, whatever the client asked for', async () => {
