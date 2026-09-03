@@ -4,6 +4,24 @@
  */
 
 /**
+ * What a 404 under the `/_static` mount must carry, on every deploy target.
+ *
+ * A 404 is heuristically cacheable under RFC 9111, and the miss this answers is the one a **rolling deploy**
+ * produces: an old instance 404s a content-hashed chunk the new one has. Without this a shared cache may
+ * store that answer against a URL that is about to become valid, and then serve it to everyone.
+ *
+ * Shared by the two mounts — `createStaticAssetsApp` for the filesystem targets and `mountStaticAssets` in
+ * `deploy/cloudflare/runtime.ts` — because it was written down in one of them and inherited by accident in
+ * the other, which is how the Workers mount came to have no terminal 404 at all. Here rather than in either,
+ * since `server/static.ts` reaches for `@hono/node-server` and a Worker bundle cannot import it.
+ *
+ * The same string as a page response's default (`PAGE_CACHE_CONTROL` in `entry.rsc.tsx`) and a separate
+ * constant on purpose: that one is about a logged-in user's page, this one about a hash that is about to
+ * resolve, and a change to either must not move the other.
+ */
+export const ASSET_MISS_CACHE_CONTROL = 'private, no-cache';
+
+/**
  * The `Vary` a response needs in order to carry `value`, or `null` when there is nothing to write — because it
  * already lists it, or because it is `*`, which means "never reuse this" and covers everything.
  *

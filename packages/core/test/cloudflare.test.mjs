@@ -221,6 +221,28 @@ describe('serving from a Worker', () => {
     assert.match(await res.text(), /User-agent/i);
   });
 
+  test('ends the /_static mount in a terminal 404, whatever the client asked for', async () => {
+    // The miss a rolling deploy produces: an old instance is asked for a content-hashed chunk the new one
+    // has. It used to answer `next()`, so the request walked the whole route table, then the public/
+    // fallback, and landed in `app.notFound` — a full server render of the app's 404 page for anything
+    // asking for HTML, under a prefix no app can own, on the one target where the mount was not terminal.
+    for (const [name, headers] of [
+      ['a browser subresource', { Accept: '*/*' }],
+      ['a crawler or a hand-typed URL', { Accept: 'text/html' }],
+      ['a soft navigation', { RSC: '1' }],
+    ]) {
+      // The testbed, because it *has* a `notFound` page: an app without one answers the plain 404 either
+      // way, so it could not tell the fix from the bug.
+      const res = await fetchWorker('/_static/chunks/main.deadbeefdeadbeef.js', { headers });
+      const body = await res.text();
+      assert.equal(res.status, 404, `${name}: a missing chunk is a 404`);
+      assert.match(res.headers.get('content-type') ?? '', /text\/plain/, `${name}: and a plain one — no route below the mount runs`);
+      assert.equal(body, 'Not Found', `${name}: the same body the filesystem targets answer with`);
+      // A 404 is heuristically cacheable, and this URL is about to become valid — see ASSET_MISS_CACHE_CONTROL.
+      assert.equal(res.headers.get('cache-control'), 'private, no-cache', `${name}: must not be stored`);
+    }
+  });
+
   test('never serves the prerender tree at its own prefix', async () => {
     const res = await fetchWorker('/__ssg/docs/getting-started/index.html');
     await res.text();

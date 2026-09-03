@@ -1,6 +1,7 @@
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { MiddlewareHandler } from 'hono';
 import { Hono } from 'hono';
+import { ASSET_MISS_CACHE_CONTROL } from './headers.js';
 
 const CONTENT_HASHED = /\.[0-9a-f]{8,}\./;
 
@@ -29,12 +30,11 @@ export function createStaticAssetsApp(options: StaticOptions): Hono {
 
   // `GET` alone: Hono dispatches a `HEAD` as a `GET` and strips the body, so a `HEAD` registration beside it
   // is never reached — see `HTTPMethod`.
-  // The 404 carries a `Cache-Control` of its own because `cacheControl` above returns early for it, and a
-  // 404 is heuristically cacheable under RFC 9111 — the same reasoning as `plainNotFound`'s, and it matters
-  // most here: during a rolling deploy an old instance 404s a chunk the new one has, and without this a
-  // shared cache may store that answer for a content-hashed URL that is about to become valid.
+  // The 404 carries a `Cache-Control` of its own because `cacheControl` above returns early for it; the
+  // policy and the reason are {@link ASSET_MISS_CACHE_CONTROL}'s, and the Workers mount answers a miss with
+  // the same pair.
   app.get('/*', cacheControl(isDev), serveStatic({ root, rewriteRequestPath: (path) => path.replace(/^\/_static/, '') }), (c) =>
-    c.text('Not Found', 404, { 'cache-control': 'private, no-cache' }),
+    c.text('Not Found', 404, { 'cache-control': ASSET_MISS_CACHE_CONTROL }),
   );
 
   return app;

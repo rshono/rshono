@@ -163,6 +163,17 @@ two refuse a build that succeeds today, on purpose.
   `Error`; a _middleware_ that throws a non-`Error` reaches the page too, but everything registered outside
   it is skipped, which no framework-side change could alter.
 
+- **The `/_static` mount ends in a terminal 404 on `cloudflare` too.** It answered `next()` for a miss, so a
+  request for a chunk that is not there walked the whole route table, then the `public/` fallback, and landed
+  in `app.notFound` — which for anything that asked for HTML is a full server render of the app's 404 page,
+  under a prefix no app can own. The filesystem targets have always ended that mount in a plain 404, and
+  both `RESERVED_PREFIX`'s doc and the reserved-route check above lean on the mount answering its whole
+  subtree on every target. A browser fetching a real subresource sends `Accept: */*` and got the plain 404
+  either way, so what this cost was a render for a crawler, a probe or a hand-typed URL — and the
+  `Cache-Control` that keeps a shared cache from storing a 404 for a content-hashed URL that is about to
+  become valid, which the filesystem mount states and this one inherited by accident. Both now take it from
+  one constant.
+
 - **A cross-site `enctype="text/plain"` form post is refused too.** The refusal was keyed on the request
   classification, which names the two content types React writes an action as — so `text/plain`, the third
   and last `enctype` a browser `<form>` can send with no preflight, was classified as an ordinary document

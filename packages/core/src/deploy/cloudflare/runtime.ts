@@ -1,4 +1,5 @@
 import type { Context, Hono } from 'hono';
+import { ASSET_MISS_CACHE_CONTROL } from '../../server/headers.js';
 import { createPageCache, ssgAssetPath, ssgFilePath, SSG_MANIFEST_FILE, toPrerenderedPage, type PrerenderedPage } from '../../server/prerendered.js';
 import type { DeployRuntime } from '../contract.js';
 
@@ -83,9 +84,19 @@ export const runtime: DeployRuntime = {
     // Normally dead — the CDN answers `/_static/*` before the worker is invoked — but keeps the deployment
     // correct, if slower, under an assets configuration that routes everything to the worker first.
     // `GET` covers `HEAD` — Hono dispatches one as the other. See `HTTPMethod`.
-    app.get('/_static/*', async (c, next) => {
+    //
+    // Terminal, like the filesystem mount's last handler, and this used to be `next()`: a miss walked the
+    // whole route table, then `mountPublicFallback`, and landed in `app.notFound` — which for anything asking
+    // for HTML is a full server render of the app's 404 page under a prefix no app can own. A browser asking
+    // for a real subresource sends `Accept: */*` and got the plain 404 either way, so what it cost was a
+    // render for a crawler, a probe, or a hand-typed URL. `RESERVED_PREFIX`'s doc in `validate-entries.ts`
+    // says the mount ends in a terminal 404 and the reserved-route check leans on it; on this target it did
+    // not. `null` — no assets binding at all — answers the same way: nothing else in the worker can serve
+    // this prefix, so falling through would only find a longer route to the same status.
+    app.get('/_static/*', async (c) => {
       const asset = await assetResponse(c, c.req.path, c.req.raw.headers);
-      return asset && asset.status !== 404 ? serveAsset(asset) : next();
+      if (asset && asset.status !== 404) return serveAsset(asset);
+      return c.text('Not Found', 404, { 'cache-control': ASSET_MISS_CACHE_CONTROL });
     });
   },
 
