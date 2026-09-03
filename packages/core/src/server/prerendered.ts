@@ -56,6 +56,26 @@ export const SSG_MANIFEST_FILE = 'manifest.json';
 const UNPORTABLE_SEGMENT = /[\\/:*?"<>|]/;
 
 /**
+ * The DOS device names Windows still reserves, with or without an extension and whatever the case — so
+ * `con`, `CON` and `Con.txt` are all the console. `mkdir` on one fails with `EINVAL`, naming a path the
+ * author never wrote, which is why they are refused here with the rest.
+ *
+ * The list is Microsoft's, superscripts included: `CON PRN AUX NUL`, `COM0`–`COM9`, `COM¹ COM² COM³`, and
+ * the same three suffixes for `LPT`. A documentation slug of `con` is a plausible thing to write and
+ * builds fine on Linux today; refusing it everywhere is the same trade `:` and `*` already make — portable
+ * or not at all, rather than a build that works on the author's machine and fails in CI on Windows.
+ */
+const RESERVED_DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/i;
+
+/**
+ * A trailing `.` or space, which Win32 **strips** rather than refusing: `docs/x.` is stored as `docs/x`, so
+ * the page is written where no reader will look for it — "a page the build reports as prerendered and
+ * nothing ever serves", which is the failure {@link ssgFilePath} exists to prevent. The silent half of this
+ * rule, and the more important one: the reserved names above at least fail loudly.
+ */
+const TRAILING_STRIPPED = /[. ]$/;
+
+/**
  * Decodes one path segment the way a URL does, treating a malformed escape as the literal text it is:
  * `decodeURIComponent('%')` throws, and a request path is whatever the client chose to send.
  */
@@ -68,12 +88,18 @@ function decodeSegment(segment: string): string {
 }
 
 /**
- * Whether one decoded segment can be a directory in the prerender tree: not empty, not a relative-path
- * marker, and made only of characters a file name can hold — {@link UNPORTABLE_SEGMENT}, plus the control
- * characters, which a percent-escape is free to carry into a path and no filesystem wants in a name.
+ * Whether one decoded segment can be a directory in the prerender tree, on every host rather than on this
+ * one: not empty, not a relative-path marker, made only of characters a file name can hold
+ * ({@link UNPORTABLE_SEGMENT}, plus the control characters, which a percent-escape is free to carry into a
+ * path and no filesystem wants in a name), not a {@link RESERVED_DEVICE_NAME}, and not ending in a
+ * character Win32 would {@link TRAILING_STRIPPED | strip}.
+ *
+ * The last two are Windows rules that no macOS or Linux build can discover for itself — which is exactly
+ * why they belong in a check rather than in a caveat.
  */
 function isStorableSegment(segment: string): boolean {
   if (segment === '' || segment === '.' || segment === '..') return false;
+  if (RESERVED_DEVICE_NAME.test(segment) || TRAILING_STRIPPED.test(segment)) return false;
   return !UNPORTABLE_SEGMENT.test(segment) && ![...segment].some((char) => char < ' ');
 }
 
@@ -94,7 +120,7 @@ function isStorableSegment(segment: string): boolean {
  *
  * `null` is everything that is not one file: a `.` or `..` segment — so traversal is a miss rather than a
  * lookup, which a store addressed by key, with no `resolve()` to fall back on, depends on — an empty segment,
- * and any segment holding a character a file name cannot.
+ * and any segment {@link isStorableSegment} refuses as unportable.
  */
 export function ssgFilePath(path: string, variant: PrerenderVariant = 'html'): string | null {
   const file = VARIANTS[variant].file;

@@ -184,6 +184,12 @@ export interface PageRoute {
    * A parameterised static route without this falls back to rendering per request, with a build
    * warning. Wildcard (`*`), optional and regex params cannot be prerendered.
    *
+   * **Every value has to be one portable file name**, since that is what a prerendered page is stored as,
+   * and the build fails naming the value rather than writing a page nothing will serve. So: no
+   * `\ / : * ? " < > |` or control characters, no trailing `.` or space, and not a reserved Windows device
+   * name (`CON`, `NUL`, `COM1`, …) — the last two enforced everywhere, so a build that works on macOS is
+   * not one that fails in CI on Windows.
+   *
    * @example
    * ```ts
    * {

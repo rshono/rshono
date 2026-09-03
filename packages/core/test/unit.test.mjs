@@ -766,6 +766,46 @@ describe('ssgFilePath', () => {
     }
   });
 
+  // Two Windows rules a macOS or Linux build cannot discover for itself, so they are checked rather than
+  // written down as a caveat. The reserved names fail `mkdir` with an `EINVAL` naming a path the author
+  // never wrote; the trailing dot and space are worse — Win32 *strips* them, so the page is written where
+  // no request will look for it, which is the exact failure this function exists to prevent.
+  test('refuses the segment names Windows cannot store', () => {
+    for (const path of [
+      '/docs/con',
+      '/docs/NUL',
+      '/docs/com1',
+      '/docs/LPT9',
+      '/docs/aux',
+      '/docs/prn',
+      '/docs/con.txt', // an extension does not make it a file name
+      '/docs/Con.HTML',
+      '/docs/com0',
+      '/docs/x.', // trailing dot: stored as `docs/x`
+      '/docs/x%20', // trailing space: the same
+      '/docs/...', // all dots, so all stripped
+    ]) {
+      assert.equal(ssgFilePath(path), null, `${path} must not resolve to a file`);
+    }
+  });
+
+  test('leaves the names that only look reserved alone', () => {
+    // The refusal has to be exact: a false one fails a build that was correct, and these are ordinary
+    // slugs. `console` starts with `con`, `comic` with `com`, and a dot or space *inside* a name is fine.
+    for (const [path, expected] of [
+      ['/docs/console', 'docs/console/index.html'],
+      ['/docs/contents', 'docs/contents/index.html'],
+      ['/docs/comic', 'docs/comic/index.html'],
+      ['/docs/nullable', 'docs/nullable/index.html'],
+      ['/docs/com', 'docs/com/index.html'],
+      ['/docs/v1.2', 'docs/v1.2/index.html'],
+      ['/docs/a%20b', 'docs/a b/index.html'],
+      ['/docs/.hidden', 'docs/.hidden/index.html'],
+    ]) {
+      assert.equal(ssgFilePath(path), expected, path);
+    }
+  });
+
   // The shared guard every deploy target relies on: an asset store addressed by key has no
   // `resolve()` to fall back on, so a traversal has to be refused here or not at all.
   test('refuses traversal in a request path, escaped or not', () => {
@@ -1272,7 +1312,9 @@ describe('prerenderStaticRoutes', () => {
   });
 
   test('fails the build for a value it cannot store as one file, rather than writing a page nothing serves', async () => {
-    for (const slug of ['a b/c', 'a:b', '..']) {
+    // `con` and `x.` are the two Windows rules: the first fails `mkdir` there with an error naming a path
+    // nobody wrote, the second is stored under the trimmed name, so the page lands where no request looks.
+    for (const slug of ['a b/c', 'a:b', '..', 'con', 'NUL', 'x.', 'x ']) {
       await assert.rejects(
         prerenderStaticRoutes({
           ssgDir: tempDir(),

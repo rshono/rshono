@@ -270,8 +270,10 @@ export async function prerenderStaticRoutes(options: PrerenderOptions): Promise<
       const relPath = ssgFilePath(path, 'html');
       if (relPath === null) {
         throw new Error(
-          `[rshono] Cannot prerender "${path}" for route "${route.path}": a path segment is "." or "..", or holds a ` +
-            `character a portable file name cannot — one of \\ / : * ? " < > | or a control character.`,
+          `[rshono] Cannot prerender "${path}" for route "${route.path}": a path segment is "." or "..", or cannot be ` +
+            'one portable file name. It must not hold \\ / : * ? " < > | or a control character, must not end in ' +
+            '"." or a space (Windows stores the name without it, so the page lands where nothing looks for it), ' +
+            'and must not be a reserved device name — CON, PRN, AUX, NUL, COM0-9 or LPT0-9, with or without an extension.',
         );
       }
       targets.push({ path, relPath });
