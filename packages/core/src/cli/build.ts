@@ -58,9 +58,17 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
   console.log(stats.toString({ preset: 'summary', colors: true }));
 
   const publicDir = join(rootDir, 'public');
-  let distPublicDir: string | null = null;
+  // From scratch, and unconditionally, like every other directory this build assembles. `cpSync` only
+  // adds, so a file deleted from `public/` used to survive in `dist/public` and go on being served by
+  // `rshono start` for good — and deleting `public/` outright left the whole of the old tree there, since
+  // the copy below is the only thing that touches it. The two CDN presets clear their own output but read
+  // *this* directory, so a stale file propagated into their assets as well, past a comment promising it
+  // could not.
+  const distPublicDir = join(distDir, 'public');
+  await rm(distPublicDir, { recursive: true, force: true });
+  let servedPublicDir: string | null = null;
   if (existsSync(publicDir)) {
-    distPublicDir = join(distDir, 'public');
+    servedPublicDir = distPublicDir;
     cpSync(publicDir, distPublicDir, { recursive: true });
     console.log('  • copied public/ into dist/public (served at /)');
   }
@@ -108,7 +116,7 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
     rootDir,
     distDir,
     staticDir: join(distDir, 'static'),
-    publicDir: distPublicDir,
+    publicDir: servedPublicDir,
     ssgDir,
     routes: bundle.routes,
   });

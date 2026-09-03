@@ -3,7 +3,7 @@
 // `defineRoutes` shorthand. The rest of the suite runs against one richly-configured testbed, which
 // is exactly the app that would never catch "the framework assumes X exists".
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { buildApp, MINIMAL_APP_DIR, runCli, startApp, stopServer } from './helpers.mjs';
@@ -199,6 +199,29 @@ function appWithRoutes(routesSource) {
 
 const HOME_AND = (second) =>
   `import { defineRoutes } from '@rshono/core';\nexport const routes = defineRoutes([\n  { path: '/', component: () => import('./pages/home') },\n${second}]);\n`;
+
+test('a rebuild drops a public/ file that is no longer there', () => {
+  // `dist/public` was the one directory the build assembled with `cpSync` and no `rm` first, so a file
+  // deleted from `public/` survived in the output and went on being served by `rshono start` — for good,
+  // since nothing else ever touched it. Every other output directory here is cleared: `dist/ssg` and both
+  // CDN presets' own trees, each with a comment saying why. Deleting `public/` outright was the worse
+  // half: the copy is conditional, so the whole of the old tree stayed.
+  const dir = appWithRoutes(HOME_AND(''));
+  const publicDir = join(dir, 'public');
+  mkdirSync(publicDir, { recursive: true });
+  writeFileSync(join(publicDir, 'keep.txt'), 'keep\n');
+  writeFileSync(join(publicDir, 'gone.txt'), 'gone\n');
+  buildApp(dir);
+  assert.deepEqual(readdirSync(join(dir, 'dist', 'public')).sort(), ['gone.txt', 'keep.txt']);
+
+  rmSync(join(publicDir, 'gone.txt'));
+  buildApp(dir);
+  assert.deepEqual(readdirSync(join(dir, 'dist', 'public')).sort(), ['keep.txt'], 'the deleted file must not survive the rebuild');
+
+  rmSync(publicDir, { recursive: true });
+  buildApp(dir);
+  assert.equal(existsSync(join(dir, 'dist', 'public')), false, 'and neither must the tree, once there is no public/ at all');
+});
 
 test('a second route claiming a path the table already answers fails the build, naming both entries', () => {
   const dir = appWithRoutes(HOME_AND("  { path: '/', component: () => import('./pages/manual') },\n"));
