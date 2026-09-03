@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { DeployBuildContext } from '../presets.js';
+import { publicRouteCollisions, warnAboutPublicCollisions } from '../public-paths.js';
 
 /** Wrangler serves one directory, so the three kinds of asset the build produces are assembled into it. */
 const ASSETS_DIR = join('cloudflare', 'assets');
@@ -66,6 +67,12 @@ export async function finalizeCloudflareBuild(ctx: DeployBuildContext): Promise<
   cpSync(ctx.staticDir, join(assetsDir, '_static'), { recursive: true });
   if (ctx.publicDir) cpSync(ctx.publicDir, assetsDir, { recursive: true });
   if (existsSync(ctx.ssgDir)) cpSync(ctx.ssgDir, join(assetsDir, '__ssg'), { recursive: true });
+
+  // Workers Assets is checked before the worker runs, so a `public/` file on a route's path answers instead
+  // of the route — the same collision Vercel has, and neither `node` nor `aws-lambda` does.
+  // `htmlExtensionless: true`: the binding's default HTML handling is `auto-trailing-slash`, so
+  // `about.html` answers `/about` here as well as `/about.html`.
+  warnAboutPublicCollisions(publicRouteCollisions(ctx.publicDir, ctx.routes, { htmlExtensionless: true }), 'cloudflare');
 
   const headersFile = join(assetsDir, '_headers');
   if (existsSync(headersFile)) {

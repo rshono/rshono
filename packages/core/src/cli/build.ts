@@ -110,6 +110,7 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
     staticDir: join(distDir, 'static'),
     publicDir: distPublicDir,
     ssgDir,
+    routes: bundle.routes,
   });
 
   console.log(`  ✓ build complete — ${preset.deployHint}`);

@@ -14,6 +14,7 @@ import { scanPageFiles } from '../dist/builder/page-files.js';
 import { checkReactVersions } from '../dist/builder/react-versions.js';
 import { createConfigs } from '../dist/builder/rspack-config.js';
 import { DEPLOY_TARGETS, deployHintFor, NODE_PRESET, resolveDeployPreset } from '../dist/deploy/presets.js';
+import { publicRouteCollisions } from '../dist/deploy/public-paths.js';
 import { appendVary, etagMatches } from '../dist/server/headers.js';
 import { loadConfig } from '../dist/server/load-config.js';
 import { parsePort, resolveServerConfig } from '../dist/server/server-config.js';
@@ -1512,6 +1513,62 @@ describe('deploy target resolution', () => {
       assert.throws(() => resolveDeployPreset({ env: key }), /unknown deploy target/, `${key} must not resolve to a preset`);
       assert.equal(deployHintFor(key), null, `${key} has no deploy hint`);
     }
+  });
+});
+
+describe('publicRouteCollisions', () => {
+  // `mountPublicFallback` puts `public/` after every route, so it answers only what no route claimed — the
+  // whole story on `node` and `aws-lambda`, and not on the two targets with a CDN in front, where `public/`
+  // is part of the static output and the platform answers from it *before* the app runs. The framework
+  // cannot reorder either one, so the build says so; this is the comparison it says it from.
+  const page = (path) => ({ path, component: async () => ({ default: () => null }) });
+
+  /** A `public/` tree on disk, since the check reads one. */
+  function publicTree(files) {
+    const dir = mkdtempSync(join(tmpdir(), 'rshono-public-'));
+    for (const file of files) {
+      mkdirSync(join(dir, dirname(file)), { recursive: true });
+      writeFileSync(join(dir, file), 'x');
+    }
+    return dir;
+  }
+
+  const collisionsFor = (files, routes, htmlExtensionless = false) => publicRouteCollisions(publicTree(files), routes, { htmlExtensionless });
+
+  test('finds a file on a route’s own path', () => {
+    const found = collisionsFor(['about.html'], [page('/'), page('/about.html')]);
+    assert.equal(found.length, 1);
+    assert.match(found[0], /public\/about\.html answers \/about\.html, which a page route claims/);
+  });
+
+  test('resolves an index.html to the directory it answers, not to its filename', () => {
+    // The collision on the one path every app has. Keyed on filenames alone this would be invisible:
+    // nothing has a route at `/index.html`.
+    assert.match(collisionsFor(['index.html'], [page('/')])[0], /answers \//);
+    assert.match(collisionsFor(['docs/index.html'], [page('/docs')])[0], /answers \/docs/);
+    assert.match(collisionsFor(['docs/index.html'], [page('/docs/')])[0], /answers \/docs\//, 'with and without the trailing slash');
+  });
+
+  test('drops the .html only where the platform’s own handling does', () => {
+    // Cloudflare's Workers Assets defaults to `auto-trailing-slash`, so `about.html` answers `/about`
+    // there. Vercel serves it at `/about.html` and adds `/about` only with `cleanUrls`, which is the
+    // project's setting — warning about it anyway would be a warning about a collision the platform
+    // does not have, and a check that cries wolf is one every app learns to ignore.
+    assert.equal(collisionsFor(['about.html'], [page('/about')], true).length, 1, 'cloudflare');
+    assert.deepEqual(collisionsFor(['about.html'], [page('/about')], false), [], 'vercel');
+  });
+
+  test('says nothing when nothing collides', () => {
+    assert.deepEqual(publicRouteCollisions(null, [page('/')], { htmlExtensionless: true }), [], 'an app with no public/');
+    assert.deepEqual(collisionsFor(['robots.txt', 'favicon.svg', 'img/logo.png'], [page('/'), page('/about')], true), []);
+    // A parameterised route is not compared: matching one needs the router rather than a set, and the
+    // failure mode of guessing is a warning about a build that was fine.
+    assert.deepEqual(collisionsFor(['docs/x.html'], [page('/docs/:slug'), page('/files/*')], true), []);
+  });
+
+  test('names the kind of route, since an endpoint and a page are fixed differently', () => {
+    const endpoint = { type: 'endpoint', path: '/api/health', server: async () => ({ handler: () => null }) };
+    assert.match(collisionsFor(['api/health'], [endpoint])[0], /which an endpoint route claims/);
   });
 });
 

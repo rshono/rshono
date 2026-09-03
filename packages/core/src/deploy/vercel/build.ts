@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { DeployBuildContext } from '../presets.js';
+import { publicRouteCollisions, warnAboutPublicCollisions } from '../public-paths.js';
 
 /**
  * The Build Output API v3 layout, which `vercel deploy --prebuilt` uploads verbatim — producing it directly
@@ -40,6 +41,12 @@ export async function finalizeVercelBuild(ctx: DeployBuildContext): Promise<void
   // Served by the CDN: the hashed bundle under its public path, and `public/` at the web root.
   cpSync(ctx.staticDir, join(staticOut, '_static'), { recursive: true });
   if (ctx.publicDir) cpSync(ctx.publicDir, staticOut, { recursive: true });
+
+  // `{ handle: 'filesystem' }` is ahead of the function by construction, so a `public/` file on a route's
+  // path answers instead of the route here — and only here, which is what makes it worth saying at build
+  // time. `htmlExtensionless: false`: Vercel serves `about.html` at `/about.html` and adds `/about` only
+  // with `cleanUrls`, which is the project's setting and not something this build can read.
+  warnAboutPublicCollisions(publicRouteCollisions(ctx.publicDir, ctx.routes, { htmlExtensionless: false }), 'vercel');
 
   // Shipped inside the function: the bundle, and the one thing it reads from disk at request time.
   //

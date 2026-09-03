@@ -284,6 +284,12 @@ Every target streams, which is the bar a new one has to clear.
 - **Prerendered pages are never CDN-served**: one URL answers with a document or a flight payload depending on
   the `RSC` request header, and a path-keyed CDN cannot choose. `/_static` and `public/` do go straight to the
   CDN.
+- **`public/` beats a route on `cloudflare` and `vercel`, and loses to it on `node` and `aws-lambda`.** Where
+  the app owns the whole surface, `public/` is mounted after every route and answers only what none of them
+  claimed. Where a CDN sits in front it is part of the static output, so the platform answers from it before
+  the app is invoked — the framework cannot reorder either one. So `public/index.html` beside a page route at
+  `/` serves the file on two targets and renders the page on the other two. `rshono build` warns when a
+  `public/` file lands on a route's path, on the targets where it matters.
 - **The serverless targets bundle your dependencies**; `node` bundles only the ones a `'use client'` component
   pulls in. A function is an uploaded directory with no `node_modules` to resolve against, so `vercel`,
   `aws-lambda` and `cloudflare` compile everything in. The cost is that a native addon — or a package that

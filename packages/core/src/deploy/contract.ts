@@ -48,7 +48,16 @@ export interface DeployRuntime {
    * serves it.
    */
   mountStaticAssets(app: Hono): void;
-  /** Mounts `public/` at the web root, after every route, so it only answers paths no route claimed. */
+  /**
+   * Mounts `public/` at the web root, after every route, so it only answers paths no route claimed.
+   *
+   * **That ordering is only within the app**, which is the whole surface on `node` and `aws-lambda` and not
+   * on the two targets with a CDN in front. There `public/` is part of the static output and the platform
+   * answers from it *before* the app is invoked — `{ handle: 'filesystem' }` ahead of the function on
+   * Vercel, Workers Assets ahead of the worker on Cloudflare — so it is a CDN-first store rather than a
+   * fallback, and those two implement this as a no-op. `rshono build` warns about a `public/` file that
+   * lands on a route's path for exactly that reason; see `publicRouteCollisions`.
+   */
   mountPublicFallback(app: Hono): void;
   /**
    * Reads the page prerendered for `c.req.path`, or `null` when there is none — in which case the route
