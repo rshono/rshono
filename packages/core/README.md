@@ -323,7 +323,9 @@ Every target streams, which is the bar a new one has to clear.
   — Chrome/Edge 135, Firefox 147, Safari 26.2, [Baseline](https://web.dev/blog/baseline-navigation-api) since
   January 2026. Where it is missing there is no interception at all and every link is a real browser load,
   which a server-rendered app answers correctly; only the soft part is gone. Scroll restoration, the fragment
-  jump and the post-navigation focus reset are all the browser's.
+  jump and the post-navigation focus reset are all the browser's, with one backstop: a push to a URL with no
+  fragment also scrolls itself to the top, because WebKit can skip the browser's own reset
+  ([bugs.webkit.org 304593](https://bugs.webkit.org/show_bug.cgi?id=304593)).
 - **`redirect()` and `notFound()` must be reached before the page shell is sent.** A page streams: the status
   line and the first bytes go out as soon as the shell is ready, and HTTP has no take-backs after that. Called
   from a `<Suspense>` boundary that resolves later, the signal can no longer be a 3xx or a 404 — the response

@@ -23,6 +23,17 @@ those.
   costs a document load — the same trade `data-native` makes by hand, and the direction that cannot strand a
   visitor.
 
+### Fixed
+
+- **A push navigation to a URL with no fragment reaches the top of the new page even where the browser skips
+  its own reset.** Scroll is still the browser's — the Navigation API's `scroll: 'after-transition'` is what
+  restores a traversal and jumps to a fragment — but WebKit does not perform that reset for an intercepted
+  push ([bugs.webkit.org 304593](https://bugs.webkit.org/show_bug.cgi?id=304593)), so on Safari and every
+  browser on iOS the next page kept the outgoing page's offset. The commit that puts a payload on screen now
+  scrolls to the top itself when the navigation was a push with no fragment. It happens before the new tree
+  is painted and before the browser's own processing would run, and is skipped when the navigation was
+  superseded; where the browser is correct it was scrolling to that same place anyway.
+
 ## 1.0.0-rc.21
 
 - **`@rspack/core` 2.2.2 → 2.2.6.** Four patch releases on the pin rc.19 moved to, taken in one commit across

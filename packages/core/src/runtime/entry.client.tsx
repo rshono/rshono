@@ -354,8 +354,12 @@ let startNav: (run: () => void | Promise<void>) => void = (run) => {
  * scrolls and moves focus when this promise settles, and a `#hash` target does not exist until the new tree
  * does. Rejects only on a genuine failure — being superseded is not one, and resolves quietly, because the
  * navigation that replaced this one owns the screen from then on.
+ *
+ * `resetScroll` asks for the top of the document once the new tree is on screen. It is a fallback, not the
+ * mechanism: `scroll: 'after-transition'` in `listenNavigation` is still what resets, restores a traversal
+ * and jumps to a fragment — this only covers the push WebKit is known to drop, and is skipped on an abort.
  */
-function loadPayload(url: string, signal?: AbortSignal): Promise<void> {
+function loadPayload(url: string, signal?: AbortSignal, resetScroll = false): Promise<void> {
   // Deliberately not awaited inside the transition: the scope ends once the payload is handed to React, and
   // React holds `pending` until the update it scheduled commits. Awaiting the commit *inside* the scope would
   // work too, but only because React happens not to gate a commit on its async scope settling — an internal
@@ -371,7 +375,13 @@ function loadPayload(url: string, signal?: AbortSignal): Promise<void> {
       push(payload.redirect);
       return;
     }
-    committed = setPayload(payload);
+    committed = setPayload(payload).then(() => {
+      // WebKit does not perform the after-transition reset for an intercepted push (bugs.webkit.org/304593),
+      // so the top is reached here instead — with the commit, before paint, and before the browser's own
+      // processing, which on the browsers that get it right scrolls to the same place. Skipped on an abort:
+      // a superseded push must not move the page that replaced it.
+      if (resetScroll && !signal?.aborted) window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    });
   };
 
   // `startTransition` runs the work but hands nothing back, so the promise carrying a failure is caught here
@@ -456,13 +466,17 @@ function listenNavigation(): () => void {
     // reader. A replace or a refresh stays where it is, so neither should move. Both wait on the handler,
     // which is the point of resolving it at commit rather than at fetch.
     const inPlace = event.navigationType === 'replace' || event.navigationType === 'reload';
+    // The one reset the browser cannot be trusted with alone: a push to a URL with no fragment, which WebKit
+    // leaves at the outgoing page's offset. `loadPayload` reaches the top itself for it; a traversal's
+    // restore and a fragment's jump stay the browser's to make.
+    const resetScroll = event.navigationType === 'push' && new URL(event.destination.url).hash === '';
 
     event.intercept({
       scroll: inPlace ? 'manual' : 'after-transition',
       focusReset: inPlace ? 'manual' : 'after-transition',
       // The URL commits before the handler runs, so a failure leaves the address bar describing a page the
       // document is not showing. A real load is the only way back to agreement.
-      handler: () => loadPayload(event.destination.url, event.signal).catch(() => loadOutsideRouter(() => window.location.reload())),
+      handler: () => loadPayload(event.destination.url, event.signal, resetScroll).catch(() => loadOutsideRouter(() => window.location.reload())),
     });
   };
 
