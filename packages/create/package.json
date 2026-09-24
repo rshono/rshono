@@ -52,7 +52,7 @@
   "devDependencies": {
     "@clack/prompts": "^1.8.1",
     "@rspack/core": "2.2.7",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.2",
     "@rshono/core": "workspace:*",
     "typescript": "^7.0.2"
   }

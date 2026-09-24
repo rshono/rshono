@@ -34,10 +34,10 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.10.0",
+    "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.12.0",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.8",
     "prettier-plugin-uncomment": "^1.0.2",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.0"
