@@ -1,5 +1,5 @@
-import { NavigationRepro } from './navigation-repro';
+import { ObservedNavigationRepro } from './navigation-repro';
 
 export default function NavigationSuspense() {
-  return <NavigationRepro />;
+  return <ObservedNavigationRepro />;
 }

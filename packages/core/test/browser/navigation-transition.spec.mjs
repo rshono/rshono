@@ -4,6 +4,7 @@ test('navigation retains revealed Suspense content and pending until the destina
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/navigation-suspense');
+  await expect(page.locator('html')).toHaveAttribute('data-navigation-repro-hydrated', 'true');
   await expect(page.getByText('Initial content', { exact: true })).toBeVisible();
   await page.evaluate(() => {
     window.__rshonoDocumentId = 'navigation-suspense';
@@ -16,9 +17,9 @@ test('navigation retains revealed Suspense content and pending until the destina
   await expect(page).toHaveURL('/navigation-suspense?tab=activity');
   expect(await (await received).finished()).toBeNull();
 
-  // The resource stays unresolved until Resolve is clicked. Give React time to render the received
-  // payload so an urgent update cannot pass these assertions by releasing the resource before it suspends.
-  await page.waitForTimeout(400);
+  // Wait for the destination to actually attempt rendering the unresolved resource. The response
+  // finishing alone does not prove React processed it, and a fixed delay could miss a slow render.
+  await expect(page.locator('html')).toHaveAttribute('data-activity-render-attempted', 'true');
   await expect(page.getByText('Initial content', { exact: true })).toBeVisible();
   await expect(page.getByText('Loading...', { exact: true })).toBeHidden();
   await expect(page.getByText('pending: true', { exact: true })).toBeVisible();

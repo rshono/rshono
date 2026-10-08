@@ -1,15 +1,16 @@
 'use client';
 
-import { Suspense, use } from 'react';
+import { Suspense, use, useEffect } from 'react';
 import { useNavigation } from '@rshono/core/client';
 
 let resource: Promise<void> | undefined;
 let resolveResource: (() => void) | undefined;
 
-function Content() {
+function Content({ onActivityRender }: { onActivityRender?: () => void }) {
   const { url } = useNavigation();
 
   if (url.searchParams.get('tab') === 'activity' && resource) {
+    onActivityRender?.();
     use(resource);
     return <p>Activity content</p>;
   }
@@ -17,7 +18,7 @@ function Content() {
   return <p>Initial content</p>;
 }
 
-export function NavigationRepro() {
+export function NavigationRepro({ onActivityRender }: { onActivityRender?: () => void }) {
   const { router } = useNavigation();
 
   function navigate() {
@@ -36,8 +37,20 @@ export function NavigationRepro() {
       <p>pending: {String(router.pending)}</p>
 
       <Suspense fallback={<p>Loading...</p>}>
-        <Content />
+        <Content onActivityRender={onActivityRender} />
       </Suspense>
     </div>
   );
+}
+
+// Observe a render attempt before it suspends; a commit observer cannot see suspended work.
+function observeActivityRender() {
+  document.documentElement.dataset.activityRenderAttempted = 'true';
+}
+
+export function ObservedNavigationRepro() {
+  useEffect(() => {
+    document.documentElement.dataset.navigationReproHydrated = 'true';
+  }, []);
+  return <NavigationRepro onActivityRender={observeActivityRender} />;
 }
