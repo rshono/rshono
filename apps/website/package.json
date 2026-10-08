@@ -30,12 +30,12 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/markdown-it": "^14.2.0",
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "@types/react": "^19.2.18",
-    "postcss": "^8.5.28",
+    "postcss": "^8.5.29",
     "postcss-loader": "^8.2.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "wrangler": "^4.143.0"
+    "wrangler": "^4.147.0"
   }
 }
