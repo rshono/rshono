@@ -42,6 +42,10 @@ export const routes = defineRoutes({
       component: () => import('./components/profile'),
     },
     {
+      path: '/navigation-suspense',
+      component: () => import('./components/navigation-suspense'),
+    },
+    {
       path: '/users',
       component: () => import('./components/user-list'),
     },
