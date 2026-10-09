@@ -764,7 +764,9 @@ async function main() {
     // the first layout effect below applies it with the first payload, before the new tree is painted.
     const pendingScroll = React.useRef<(() => void) | null>(restored ? () => scrollToPoint(restored) : null);
 
-    React.useEffect(() => {
+    // Descendant passive effects can start a navigation before the root's passive effects run.
+    // Install the live payload setter and transition runner before any such navigation starts.
+    React.useLayoutEffect(() => {
       setPayload = (next, afterCommit) =>
         new Promise<void>((resolve) => {
           // A payload replaced before it ever painted still has a navigation waiting on it. React commits
@@ -795,7 +797,8 @@ async function main() {
       commit?.();
     }, [payload]);
 
-    React.useEffect(() => listenNavigation(), []);
+    // A descendant may navigate from its first passive effect. Intercept it before that effect runs.
+    React.useLayoutEffect(() => listenNavigation(), []);
 
     const router = React.useMemo<NavigationRouter>(() => ({ push, replace, back, forward, refresh, pending }), [pending]);
 

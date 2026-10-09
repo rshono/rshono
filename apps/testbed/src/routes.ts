@@ -46,6 +46,10 @@ export const routes = defineRoutes({
       component: () => import('./components/user-list'),
     },
     {
+      path: '/mount-navigation',
+      component: () => import('./components/mount-navigation'),
+    },
+    {
       path: '/whoami',
       component: () => import('./components/whoami'),
     },
