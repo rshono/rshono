@@ -11,6 +11,24 @@ those.
 
 ## Unreleased
 
+## 1.0.0-rc.25
+
+### Fixed
+
+- **A navigation payload that lands after the fetch's `await` is applied as a transition.** React's
+  transition scope ends when the callback that opened it returns, so the update after `requestPayload`'s
+  await ran as an urgent one: a destination whose client component suspends — `use()` on an unresolved
+  promise — showed its Suspense fallback and let `pending` drop to `false` before the destination was ready.
+  The update is now wrapped in a fresh `React.startTransition`, which keeps the revealed page and the pending
+  state until the destination commits. ([#53](https://github.com/rshono/rshono/pull/53))
+
+- **The navigation runtime is registered before any descendant mount effect can navigate.** `setPayload` and
+  the `navigate` listener were installed in the root's `useEffect`, but React runs a child's passive effects
+  before its parent's, so a client component that navigates from its first mount effect — the
+  redirect-on-mount pattern — did so before the runtime was listening: the browser performed a full document
+  load instead of a soft navigation. Both installs moved to `useLayoutEffect`, which completes for the whole
+  tree before the first passive effect runs. ([#55](https://github.com/rshono/rshono/pull/55))
+
 ## 1.0.0-rc.24
 
 ### Fixed
