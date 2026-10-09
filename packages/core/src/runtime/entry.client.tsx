@@ -569,7 +569,11 @@ function loadPayload(url: string, signal?: AbortSignal, afterCommit?: () => void
       push(payload.redirect);
       return;
     }
-    committed = setPayload(payload, afterCommit);
+    // The fetch crossed an await, so its payload update needs a new synchronous transition scope.
+    // Keep the commit promise outside the async Action; React tracks the scheduled update until commit.
+    React.startTransition(() => {
+      committed = setPayload(payload, afterCommit);
+    });
   };
 
   // `startTransition` runs the work but hands nothing back, so the promise carrying a failure is caught here

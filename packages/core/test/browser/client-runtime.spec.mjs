@@ -389,6 +389,8 @@ test.describe('scroll and focus on navigation', () => {
 
     await page.getByRole('link', { name: 'Docs' }).click();
     await expect(page).toHaveURL('/docs/getting-started');
+    // The URL commits before the payload. This test leaves a completed page, not an in-flight navigation.
+    await page.evaluate(() => window.navigation.transition?.finished);
     await page.goBack();
 
     await expect(page).toHaveURL('/users');
@@ -404,6 +406,7 @@ test.describe('scroll and focus on navigation', () => {
     await page.evaluate(() => window.scrollTo(0, 250));
     await page.getByRole('link', { name: 'Users', exact: true }).click();
     await expect(page).toHaveURL('/users');
+    await page.evaluate(() => window.navigation.transition?.finished);
     await page.evaluate(() => window.scrollTo(0, 300));
 
     await page.goBack();
@@ -462,6 +465,7 @@ test.describe('scroll and focus on navigation', () => {
 
     await page.getByRole('link', { name: 'Users', exact: true }).click();
     await expect(page).toHaveURL('/users');
+    await page.evaluate(() => window.navigation.transition?.finished);
     await page.evaluate(() => window.scrollTo(0, 300));
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
 
