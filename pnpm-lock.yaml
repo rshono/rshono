@@ -79,8 +79,8 @@ importers:
         specifier: ^4.5.0
         version: 4.5.0
       '@shikijs/themes':
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.5.0
+        version: 4.5.0
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -943,16 +943,8 @@ packages:
     resolution: {integrity: sha512-UM7ShlA8oz0OWxLLO8BmO9Ip6fVqdkt8yF0EH7nOCqHfrx1eEAzF0ZUVK7L+I8NEgeu1PEWSRlxaiPPeCb4iDg==}
     engines: {node: '>=20'}
 
-  '@shikijs/themes@4.4.3':
-    resolution: {integrity: sha512-w8UHjeUnIR965KMWJHUPXOc2mNJUnK3vpVLYLvw5IYU2mnTTJ89E24OrJDBNiJDQ0qzb0tc4l7mrIXx5cFeIyw==}
-    engines: {node: '>=20'}
-
   '@shikijs/themes@4.5.0':
     resolution: {integrity: sha512-zGb87H3UBbpuI4yoh5UguB1XbU+2BDU3kflM7UfZ+Cy2hWo9lBtqjSVK20gmLY6ukYl040hAypGXMgud9vul8Q==}
-    engines: {node: '>=20'}
-
-  '@shikijs/types@4.4.3':
-    resolution: {integrity: sha512-UEJxmRR++MAGR6hugn0vgVS2W/6lWAts84FFSrnlH9sP0LNol7E5+NQ792pH8liWUhyMyjhTgSUH3k7iD7tc5g==}
     engines: {node: '>=20'}
 
   '@shikijs/types@4.5.0':
@@ -2720,18 +2712,9 @@ snapshots:
       '@shikijs/vscode-textmate': 10.0.2
       '@types/hast': 3.0.5
 
-  '@shikijs/themes@4.4.3':
-    dependencies:
-      '@shikijs/types': 4.4.3
-
   '@shikijs/themes@4.5.0':
     dependencies:
       '@shikijs/types': 4.5.0
-
-  '@shikijs/types@4.4.3':
-    dependencies:
-      '@shikijs/vscode-textmate': 10.0.2
-      '@types/hast': 3.0.5
 
   '@shikijs/types@4.5.0':
     dependencies:
