@@ -159,6 +159,39 @@ function showLateNotFound(): void {
 /** What every flight response is typed as. The charset and any other parameters follow it. */
 const FLIGHT_CONTENT_TYPE = 'text/x-component';
 
+/** How much of a body that is not a payload is quoted back in the error. */
+const REFUSAL_BODY_LIMIT = 200;
+
+/**
+ * The first {@link REFUSAL_BODY_LIMIT} characters of a response body, without buffering the rest.
+ *
+ * `response.text()` reads the whole body first, so a proxy's multi-megabyte error page would be buffered and
+ * decoded before the 200 characters that are kept — on a path that exists to say what answered instead of a
+ * payload. Reading one chunk at a time and cancelling stops paying for bytes nothing will look at.
+ */
+async function refusalBody(response: Response): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    while (text.length < REFUSAL_BODY_LIMIT) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // `stream: true` so a multi-byte character split across two reads is not replaced by U+FFFD.
+      text += decoder.decode(value, { stream: true });
+    }
+    // Flush a trailing partial multi-byte sequence, so a body cut mid-character reads as U+FFFD rather than
+    // dropping the bytes that were already read.
+    text += decoder.decode();
+  } catch {
+    // A body that failed mid-read says no more than the status already did.
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+  return text.slice(0, REFUSAL_BODY_LIMIT).trim();
+}
+
 /**
  * Fetches a payload, refusing a response that is not one.
  *
@@ -175,10 +208,7 @@ async function payloadResponse(request: Request): Promise<Response> {
   if (contentType?.startsWith(FLIGHT_CONTENT_TYPE)) return response;
   // Read for the message: a plain-text refusal says what it refused only in its body, and HTTP/2 has no
   // `statusText` at all. Bounded, because this is an error path and the body is not ours to trust.
-  const body = await response.text().then(
-    (text) => text.trim().slice(0, 200),
-    () => '',
-  );
+  const body = await refusalBody(response);
   const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
   throw new Error(`[rshono] the server answered ${status} (${contentType ?? 'no content type'}) instead of a payload${body ? `: ${body}` : ''}`);
 }
@@ -189,6 +219,13 @@ async function payloadResponse(request: Request): Promise<Response> {
  * The payload promise resolves as soon as the root model is ready, which for a streamed response is well
  * before the response body has delivered its last chunk. {@link loadPayload} needs the second promise to
  * recover a transition React can leave suspended when a later chunk resolves — see the retry there.
+ *
+ * `settled` means **the body arrived in full**, not "the body is done". It resolves from the pass-through's
+ * `flush`, which only runs when the source closes cleanly; a body that errors — an abort, a network drop, a
+ * truncated stream — errors the destination instead and leaves `settled` pending for the life of the entry.
+ * That is deliberate: the retry is exactly what must not run for a failed stream, and nothing needs a
+ * "finished, however it finished" signal today. A later caller that wants one must not read it into this
+ * promise.
  */
 type FetchedPayload = { payload: Promise<RscPayload>; settled: Promise<void> };
 
@@ -367,7 +404,21 @@ function loadDocument(href?: string): void {
     return;
   }
 
-  settle(href === undefined ? navigation.reload({ info: documentNavigation }) : navigation.navigate(href, { info: documentNavigation }));
+  try {
+    settle(href === undefined ? navigation.reload({ info: documentNavigation }) : navigation.navigate(href, { info: documentNavigation }));
+  } catch {
+    // The Navigation API refuses a document that is not fully active — it is unloading — and a URL it cannot
+    // parse. Both callers are recovery paths, where a throw here becomes an unhandled rejection rather than
+    // the document load they asked for. `location.*` is the same load without the interception, and its own
+    // refusal (the same unparseable URL) is swallowed because there is then no load left to make.
+    try {
+      if (href === undefined) window.location.reload();
+      else window.location.assign(href);
+    } catch {
+      // Nothing to navigate to. The caller is already recovering from a failure, and the address bar still
+      // describes the document on screen.
+    }
+  }
 }
 
 // The imperative actions behind `useNavigation().router`. Each one only *asks*: the browser turns it into a
@@ -490,6 +541,77 @@ function scrollToPoint(point: ScrollPoint): void {
 }
 
 /**
+ * How long a commit waits for a fragment target or `autofocus` element that a boundary has not streamed in
+ * yet. Past it the fallback stands — the top of the document, or body focus — and the watch is dropped, so a
+ * fragment that names nothing leaves no observer running behind it.
+ */
+const ELEMENT_WATCH_TIMEOUT_MS = 5_000;
+
+/**
+ * Elements a commit asked for that were not in the tree yet: a `#hash` target inside a still-suspended
+ * `<AsyncBoundary>`, or the `autofocus` element of a page being traversed into.
+ *
+ * One `MutationObserver` answers every pending watch. A streamed payload inserts its chunks as separate
+ * mutations, so the observer re-checks each watch's lookup until one hits or its timer retires it. A watch is
+ * only ever live across one payload: the next navigation drops them all, so a destination the user has left
+ * cannot scroll or focus the page that replaced it.
+ */
+type PendingElementWatch = {
+  find: () => Element | null;
+  run: (element: Element) => void;
+  /** Retires the watch if the element never arrives. */
+  timer: ReturnType<typeof setTimeout>;
+};
+
+const pendingElementWatches = new Set<PendingElementWatch>();
+let elementObserver: MutationObserver | null = null;
+
+function stopElementWatch(watch: PendingElementWatch): void {
+  clearTimeout(watch.timer);
+  if (!pendingElementWatches.delete(watch)) return;
+  if (pendingElementWatches.size === 0) {
+    elementObserver?.disconnect();
+    elementObserver = null;
+  }
+}
+
+/** Drops every watch; a new navigation owns the screen from here. */
+function cancelElementWatches(): void {
+  for (const watch of [...pendingElementWatches]) stopElementWatch(watch);
+}
+
+/**
+ * Runs `run` as soon as `find` finds an element, or gives up after {@link ELEMENT_WATCH_TIMEOUT_MS}. When
+ * the element is already there, `run` happens synchronously. `find` and `run` are always passed as a matching
+ * pair; the type-erasure here is what lets one observer serve watches of different element shapes.
+ */
+function watchForElement<T extends Element>(find: () => T | null, run: (element: T) => void): void {
+  const present = find();
+  if (present) {
+    run(present);
+    return;
+  }
+  if (elementObserver === null) {
+    elementObserver = new MutationObserver(() => {
+      for (const watch of [...pendingElementWatches]) {
+        const element = watch.find();
+        if (element) {
+          stopElementWatch(watch);
+          watch.run(element);
+        }
+      }
+    });
+    elementObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  const watch: PendingElementWatch = {
+    find,
+    run: run as (element: Element) => void,
+    timer: setTimeout(() => stopElementWatch(watch), ELEMENT_WATCH_TIMEOUT_MS),
+  };
+  pendingElementWatches.add(watch);
+}
+
+/**
  * Scrolls to a fragment's target the way the browser's own fragment jump does.
  *
  * `scrollIntoView` is the algorithm that honours `scroll-padding-top` on the scrolling box and
@@ -497,6 +619,9 @@ function scrollToPoint(point: ScrollPoint): void {
  * "find a potential indicated element": the id first, then the name. A malformed percent-escape falls back
  * to the literal fragment, and a fragment nothing matches gets the top of the document — what a browser
  * gives a missing anchor on a real load.
+ *
+ * A streamed payload commits its shell before a target inside a suspended boundary exists, so a miss is not
+ * final: the top is applied right away, and the watch follows the fragment in when its element arrives.
  */
 function jumpToAnchor(hash: string): void {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -512,9 +637,14 @@ function jumpToAnchor(hash: string): void {
   } catch {
     // Malformed escape — the literal fragment is the better guess at the id than nothing.
   }
-  const target = document.getElementById(id) ?? document.getElementsByName(id)[0];
-  if (target) target.scrollIntoView();
-  else scrollToTop();
+  const find = () => document.getElementById(id) ?? document.getElementsByName(id)[0] ?? null;
+  const target = find();
+  if (target) {
+    target.scrollIntoView();
+    return;
+  }
+  scrollToTop();
+  watchForElement(find, (element) => element.scrollIntoView());
 }
 
 /**
@@ -522,11 +652,25 @@ function jumpToAnchor(hash: string): void {
  * else the document body. A traversal is no longer intercepted, so the browser performs no focus reset for
  * it; without this, Back would leave focus on the link that was clicked on the page being left, and the next
  * Tab would resume there. `preventScroll` because the traversal's own offset has just been restored.
+ *
+ * The page may still be streaming — a traversal into a page whose `autofocus` element sits in a suspended
+ * boundary — and the browser's own reset follows the element in, so this watches for it with the same bound
+ * as a fragment.
  */
 function resetFocus(): void {
   const autofocus = document.querySelector<HTMLElement>('[autofocus]');
-  if (autofocus) autofocus.focus({ preventScroll: true });
-  else document.body.focus({ preventScroll: true });
+  if (autofocus) {
+    autofocus.focus({ preventScroll: true });
+    return;
+  }
+  document.body.focus({ preventScroll: true });
+  watchForElement(
+    () => document.querySelector<HTMLElement>('[autofocus]'),
+    (element) => {
+      // Only if focus is still where this reset left it: a user who has since focused something else keeps it.
+      if (document.activeElement === document.body) element.focus({ preventScroll: true });
+    },
+  );
 }
 
 /**
@@ -756,6 +900,10 @@ function listenNavigation(): () => void {
     // later navigation can never be mistaken for this one.
     if (event.info === documentNavigation) return;
 
+    // A commit for the destination being left is no longer the screen's; its pending fragment target (or
+    // `autofocus` element) must not scroll or focus the page that replaces it.
+    cancelElementWatches();
+
     // Whatever the browser is about to do with this navigation, the entry it is leaving is about to lose the
     // offset it was at, and nothing else in this document will put it back. Saved before the branches below
     // return, so a fragment the browser performs itself is covered too.
@@ -798,6 +946,8 @@ function listenNavigation(): () => void {
    * is `navigation.currentEntry` and its saved offset is in {@link scrollPositions}.
    */
   const onPopState = () => {
+    // Same ownership as `onNavigate`: this traversal's commit replaces whatever the last one was waiting for.
+    cancelElementWatches();
     const stored = scrollPointFor(currentEntryKey());
     const hash = location.hash;
     const apply = () => {

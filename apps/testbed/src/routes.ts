@@ -56,14 +56,27 @@ export const routes = defineRoutes({
       component: () => import('./components/streamed-boundary-b'),
     },
     {
-      // The shell itself is delayed, so a navigation to it can be cancelled before its payload reaches React.
-      // See slow-shell.tsx and the cancelled-navigation test in navigation-transition.spec.mjs.
+      // Its response head is delayed by testbed middleware, so a navigation to it can be cancelled before its
+      // payload reaches React. See src/server.ts and the cancelled-navigation tests in
+      // navigation-transition.spec.mjs.
       path: '/slow-shell',
       component: () => import('./components/slow-shell'),
     },
     {
       path: '/slow-shell-source',
       component: () => import('./components/slow-shell-source'),
+    },
+    {
+      // Shell first, content after a two-second suspension: a response that is still open when a server
+      // rebuild lands. See the worker-drain test in dev.test.mjs.
+      path: '/slow-stream',
+      component: () => import('./components/slow-stream'),
+    },
+    {
+      // Its fragment target is inside a slow boundary, so a soft `#hash` navigation has to wait for the
+      // stream. See the streamed-anchor test in client-runtime.spec.mjs.
+      path: '/anchor-stream',
+      component: () => import('./components/anchor-stream'),
     },
     {
       path: '/users',

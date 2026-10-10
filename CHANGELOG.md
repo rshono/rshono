@@ -13,6 +13,22 @@ those.
 
 ### Fixed
 
+- **`rshono dev` drains the old server worker instead of terminating it between rebuilds.** A worker stopped
+  with `terminate()` never runs its HTTP server's `close()`, so every response still being served — most
+  visibly a page whose HTML or flight payload is mid-stream — had its connection destroyed under it, and the
+  browser's recovery turned each save into a full document load. The dev server now asks the worker to close
+  its listener and exit once the requests it is serving have finished, waits with a bound, and only then
+  terminates a worker that missed it; the replacement spawns after the drain, so the old database pool and
+  the new one do not overlap.
+
+- **A cross-page `#hash` link into streamed content now lands on the target.** A soft push commits the shell
+  before a target inside a suspended `<AsyncBoundary>` exists, so the jump that runs at commit found nothing
+  and took the missing-anchor fallback to the top; the browser's own retry, which a hard document load gets
+  for free, never ran. The runtime now watches the document and follows the fragment in when its element
+  first appears, bounded so a fragment that never appears leaves no observer running. A traversal's focus
+  reset watches for a streamed `[autofocus]` the same way, and only while focus is still where the reset left
+  it.
+
 - **A soft navigation away from a page whose `<AsyncBoundary>` is still streaming no longer surfaces an
   `AbortError` in the tree.** A superseded navigation's payload fetch was aborted the moment a newer
   navigation started, while React was still reading that stream: every flight chunk still in flight rejected,
@@ -23,6 +39,16 @@ those.
   chunks have nowhere to surface. A fetch whose payload never reached React has no such reader and is stopped
   as soon as it loses the screen, including when the navigation is cancelled by something the runtime does not
   intercept (a fragment link or a download), so its server render no longer runs to completion unseen.
+
+- **A non-payload reply is no longer buffered whole to quote its first 200 characters.** When a proxy, a
+  `bodyLimit()` or a deploy trailing edge answers a soft navigation with something that is not a flight
+  payload, the client reads just enough of the body for the error message and cancels the rest, instead of
+  decoding a multi-megabyte error page first.
+
+- **A document load the runtime asks for while the tab is unloading no longer throws.** `navigation.reload()`
+  and `navigation.navigate()` refuse a document that is not fully active and a URL they cannot parse, and
+  every caller of `loadDocument()` is a recovery path where that refusal became an unhandled rejection. The
+  call now falls back to `location.*`, which is the same document load through the browser's own router.
 
 ## 1.0.0-rc.27
 
@@ -36,7 +62,10 @@ those.
   now keyed to the current pathname, so a navigation to a different route mounts a fresh boundary and its
   `loading` fallback shows while its children stream. A same-route update — `router.refresh()`, a server
   action, a query-string change — keeps the boundary and its revealed content, which is what makes those
-  updates seamless.
+  updates seamless. The key is what that trades: everything under an `AsyncBoundary` is unmounted and
+  remounted on a route change, so a section whose client state must outlive navigation — a socket, an
+  editor, a session hook — wants a bare `<CatchBoundary>` (with its own `<Suspense>`, or none) rather than
+  an `AsyncBoundary`.
 
 ## 1.0.0-rc.26
 
