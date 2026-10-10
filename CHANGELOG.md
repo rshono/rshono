@@ -62,7 +62,10 @@ those.
   now keyed to the current pathname, so a navigation to a different route mounts a fresh boundary and its
   `loading` fallback shows while its children stream. A same-route update — `router.refresh()`, a server
   action, a query-string change — keeps the boundary and its revealed content, which is what makes those
-  updates seamless.
+  updates seamless. The key is what that trades: everything under an `AsyncBoundary` is unmounted and
+  remounted on a route change, so a section whose client state must outlive navigation — a socket, an
+  editor, a session hook — wants a bare `<CatchBoundary>` (with its own `<Suspense>`, or none) rather than
+  an `AsyncBoundary`.
 
 ## 1.0.0-rc.26
 

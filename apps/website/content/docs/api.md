@@ -238,8 +238,10 @@ absorbed by either boundary — it's navigation, not failure.
 
 `AsyncBoundary` is scoped to the route: a soft navigation to a different pathname mounts the incoming
 route's boundary, so its `loading` state shows while the new data streams, and a same-page update
-(`refresh()`, a server action, a query-string change) keeps the content it has already revealed.
-`CatchBoundary` is not scoped — pass `resetKeys={[url.pathname]}` to clear its error state on navigation.
+(`refresh()`, a server action, a query-string change) keeps the content it has already revealed. That
+scope is a remount — client state and mount effects under the boundary do not survive a route change — so
+a section whose state must outlive navigation wants a bare `CatchBoundary` instead. `CatchBoundary` is not
+scoped — pass `resetKeys={[url.pathname]}` to clear its error state on navigation.
 
 ### Types
 

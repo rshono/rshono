@@ -200,6 +200,11 @@ route's boundary, so the `loading` state renders while the new route's data stre
 you left staying on screen. A same-page update — `router.refresh()`, a server action, or a change to the
 query string — keeps the boundary and the content it has already revealed.
 
+That scope is a **remount** on every pathname change: state and mount effects under the boundary do not
+survive a navigation to another route. It is what makes the incoming `loading` state and the error reset
+work, but it means a section whose state must outlive navigation — a socket, an editor, a session hook —
+wants a bare `<CatchBoundary>` (with a `<Suspense>` of your own above it, or none) instead.
+
 `<AsyncBoundary>` is a `'use client'` module, so you can render it straight from a server component like
 this — but note what crosses that line. `NoteList` is still a server component and ships no JavaScript;
 only the boundary itself does. And `loading` / `error` are being passed **from the server**, so they must
