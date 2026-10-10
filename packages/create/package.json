@@ -1,6 +1,6 @@
 {
   "name": "@rshono/create",
-  "version": "1.0.0-rc.25",
+  "version": "1.0.0-rc.26",
   "description": "Scaffold a new rshono app — Hono + Rspack + React Server Components",
   "author": "Lasse <lasse@lassetange.com> (https://www.lassetange.com)",
   "license": "MIT",
@@ -51,7 +51,7 @@
   },
   "devDependencies": {
     "@clack/prompts": "^1.8.1",
-    "@rspack/core": "2.2.7",
+    "@rspack/core": "2.2.8",
     "@types/node": "^26.6.4",
     "@rshono/core": "workspace:*",
     "typescript": "^7.0.2"
