@@ -216,6 +216,13 @@ async function payloadResponse(request: Request): Promise<Response> {
  * The payload promise resolves as soon as the root model is ready, which for a streamed response is well
  * before the response body has delivered its last chunk. {@link loadPayload} needs the second promise to
  * recover a transition React can leave suspended when a later chunk resolves — see the retry there.
+ *
+ * `settled` means **the body arrived in full**, not "the body is done". It resolves from the pass-through's
+ * `flush`, which only runs when the source closes cleanly; a body that errors — an abort, a network drop, a
+ * truncated stream — errors the destination instead and leaves `settled` pending for the life of the entry.
+ * That is deliberate: the retry is exactly what must not run for a failed stream, and nothing needs a
+ * "finished, however it finished" signal today. A later caller that wants one must not read it into this
+ * promise.
  */
 type FetchedPayload = { payload: Promise<RscPayload>; settled: Promise<void> };
 
