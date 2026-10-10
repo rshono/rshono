@@ -11,6 +11,8 @@ those.
 
 ## Unreleased
 
+## ## 1.0.0-rc.26
+
 ### Fixed
 
 - **A streamed `<AsyncBoundary>` child that resolves after the shell no longer strands a soft navigation.** A
