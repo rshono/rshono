@@ -2,7 +2,7 @@
 // indirection is what these test: everything has to arrive at the browser as if it were served
 // directly, and dev is also where React's debug channel is live and can leak what prod never would.
 import assert from 'node:assert/strict';
-import { readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { runCli, startTestbed, stopServer, TESTBED_DEV_DIR, TESTBED_DIR } from './helpers.mjs';
@@ -161,6 +161,65 @@ test('a second dev server refuses the port instead of wiping the first one’s o
   assert.equal((await fetch(`${base}/_static/chunks/main.js`)).status, 200, 'and the browser must still get its bundle');
   // Last, so a reworded refusal fails on its wording and not before the invariants above are checked.
   assert.match(second.output, /port \d+ is already in use/, 'the refusal should say so, not crash on EADDRINUSE');
+});
+
+/*
+ * The dev server replaces its worker thread on every server rebuild, and it used to do that with
+ * `terminate()`: a worker stopped that way never runs its HTTP server's `close()`, so a response still being
+ * served had its connection destroyed under it — a streamed page mid-body, a session fetch in flight. The
+ * worker is asked to drain instead (a `shutdown` message closes the listener and the worker exits once the
+ * requests it is serving finish), and only a worker that misses the deadline is terminated.
+ *
+ * `/slow-stream` is shell-first and then suspended for six seconds: long enough for an incremental rebuild
+ * to land while the response is open. The fetch is read to the shell before the rebuild is triggered, so the
+ * request is provably mid-stream and not merely queued.
+ */
+test('a rebuild drains the old worker instead of cutting its in-flight response', async () => {
+  const component = join(TESTBED_DIR, 'src', 'components', 'slow-stream.tsx');
+  const original = readFileSync(component, 'utf8');
+
+  const response = await fetch(`${base}/slow-stream`);
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let html = '';
+  while (!html.includes('data-slow-stream-shell')) {
+    const { value, done } = await reader.read();
+    assert.equal(done, false, `the shell must arrive before the rebuild:\n${html}`);
+    html += decoder.decode(value, { stream: true });
+  }
+
+  // Wait for a rebuild to finish, proved by the CLI's own line rather than by how long it usually takes.
+  const rebuildFinished = async (since) => {
+    const deadline = Date.now() + 30_000;
+    while (!/✓ rebuilt/.test(getOutput().slice(since))) {
+      if (Date.now() > deadline) assert.fail(`the rebuild never finished:\n${getOutput().slice(since)}`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
+  try {
+    // Same bytes plus a newline: the module's behaviour is unchanged while the watcher still sees an edit to
+    // a file in the server graph. The route itself is unaffected, so the response stays this worker's to finish.
+    const logsBefore = getOutput().length;
+    writeFileSync(component, `${original}\n`);
+    await rebuildFinished(logsBefore);
+
+    // The old worker has been asked to stop. The response it was streaming must still arrive whole — content
+    // included — rather than as a severed connection the front-end turns into a failed fetch.
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+    }
+    assert.match(html, /data-slow-stream-content/, 'the streamed content must survive the worker handover');
+  } finally {
+    // Restore the source and let the second rebuild settle, so the tests after this one start from a quiescent
+    // dev server rather than racing the handover this one left behind.
+    const logsBeforeRestore = getOutput().length;
+    writeFileSync(component, original);
+    await rebuildFinished(logsBeforeRestore);
+  }
 });
 
 test('HMR SSE channel greets with the current build hash', async () => {

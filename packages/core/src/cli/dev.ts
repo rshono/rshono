@@ -10,12 +10,18 @@ import { Worker } from 'node:worker_threads';
 import { DEV_OUT_DIR, createConfigs } from '../builder/rspack-config.js';
 import type { RshonoConfig } from '../config.js';
 import { NODE_PRESET } from '../deploy/presets.js';
-import type { DevMessage } from '../runtime/dev-protocol.js';
+import type { DevMessage, DevWorkerMessage } from '../runtime/dev-protocol.js';
 import { SERVER_DEFAULTS } from '../server/server-config.js';
 import { createStaticAssetsApp } from '../server/static.js';
 import { exit } from './exit.js';
 
 const WORKER_READY_TIMEOUT_MS = 15_000;
+/**
+ * How long the old worker gets to finish the requests it is serving before it is terminated anyway. The
+ * worker's own drain is unbounded — a request that never completes would otherwise hold the gate closed for
+ * as long as it likes — so this is the real limit on a dev rebuild's downtime.
+ */
+const WORKER_STOP_TIMEOUT_MS = 5000;
 
 /**
  * Files whose contents are *compiled into* a build rather than read per request, so no rebuild picks a change
@@ -148,6 +154,38 @@ export async function devCommand(options: DevOptions): Promise<void> {
     return { promise, open: resolve };
   }
 
+  /**
+   * Asks a running worker to drain and stop, resolving when it has exited. The message is the graceful half
+   * (`deploy/node/runtime.ts` closes the listener and lets in-flight requests finish); `terminate()` is only the
+   * fallback for a worker that did not exit by the deadline. Terminating first is what cut streaming responses
+   * — and every session fetch and render behind them — mid-body on each save.
+   *
+   * A worker that has already exited is not an error: `exit` (if it is still to come) or the timer resolves
+   * this either way, and `postMessage` on a stopped worker is caught rather than allowed to reject the
+   * rebuild.
+   */
+  function stopWorker(worker: Worker): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const timer = setTimeout(
+      () =>
+        void worker.terminate().then(
+          () => resolve(),
+          () => resolve(),
+        ),
+      WORKER_STOP_TIMEOUT_MS,
+    );
+    worker.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    try {
+      worker.postMessage({ type: 'shutdown' } satisfies DevWorkerMessage);
+    } catch {
+      // Already stopping: the listener above still resolves this.
+    }
+    return promise;
+  }
+
   function spawnWorker(): Promise<{ worker: Worker; port: number }> {
     return new Promise((resolve, reject) => {
       const worker = new Worker(join(outDir, 'server', 'main.mjs'), {
@@ -209,7 +247,7 @@ export async function devCommand(options: DevOptions): Promise<void> {
         if (currentWorker) {
           const old = currentWorker;
           currentWorker = null;
-          await old.terminate();
+          await stopWorker(old);
         }
         const { worker, port: newPort } = await spawnWorker();
         currentWorker = worker;

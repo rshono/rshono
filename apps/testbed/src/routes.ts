@@ -67,6 +67,12 @@ export const routes = defineRoutes({
       component: () => import('./components/slow-shell-source'),
     },
     {
+      // Shell first, content after a two-second suspension: a response that is still open when a server
+      // rebuild lands. See the worker-drain test in dev.test.mjs.
+      path: '/slow-stream',
+      component: () => import('./components/slow-stream'),
+    },
+    {
       path: '/users',
       component: () => import('./components/user-list'),
     },

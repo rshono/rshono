@@ -13,6 +13,14 @@ those.
 
 ### Fixed
 
+- **`rshono dev` drains the old server worker instead of terminating it between rebuilds.** A worker stopped
+  with `terminate()` never runs its HTTP server's `close()`, so every response still being served — most
+  visibly a page whose HTML or flight payload is mid-stream — had its connection destroyed under it, and the
+  browser's recovery turned each save into a full document load. The dev server now asks the worker to close
+  its listener and exit once the requests it is serving have finished, waits with a bound, and only then
+  terminates a worker that missed it; the replacement spawns after the drain, so the old database pool and
+  the new one do not overlap.
+
 - **A soft navigation away from a page whose `<AsyncBoundary>` is still streaming no longer surfaces an
   `AbortError` in the tree.** A superseded navigation's payload fetch was aborted the moment a newer
   navigation started, while React was still reading that stream: every flight chunk still in flight rejected,
