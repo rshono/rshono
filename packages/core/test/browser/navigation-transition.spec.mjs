@@ -56,3 +56,26 @@ test('a soft navigation to a streamed AsyncBoundary page commits when its child 
 
   expect(errors).toEqual([]);
 });
+
+// Two routes whose serialized client trees have the same shape reconcile into the same `Suspense`
+// boundary, so a transition that suspends on the incoming route's data keeps the outgoing route's
+// revealed children instead of showing the incoming `loading` fallback. `AsyncBoundary` is keyed by
+// pathname so a navigation mounts the incoming route's boundary, and a freshly mounted boundary shows
+// its fallback while its child streams.
+test('a soft navigation shows the incoming AsyncBoundary fallback rather than the outgoing content', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/streamed-boundary-a');
+  await expect(page.locator('html')).toHaveAttribute('data-streamed-boundary-hydrated', 'true');
+  await expect(page.locator('[data-streamed-content="a"]')).toBeVisible();
+
+  await page.getByRole('link', { name: 'next' }).click();
+  await expect(page).toHaveURL('/streamed-boundary-b');
+  await expect(page.locator('[data-streamed-loading="b"]')).toBeVisible();
+  await expect(page.locator('[data-streamed-content="a"]')).toBeHidden();
+  await expect(page.locator('[data-streamed-content="b"]')).toBeVisible();
+  await expect(page.locator('[data-streamed-loading="b"]')).toBeHidden();
+
+  expect(errors).toEqual([]);
+});

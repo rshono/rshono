@@ -195,6 +195,11 @@ The heading and the form are sent **immediately**; the `<ul>` streams in when th
 query delays its own section and nothing else, and if it rejects, the error stays inside the boundary
 instead of taking the page down.
 
+`<AsyncBoundary>` is scoped to the route. A soft navigation to a different pathname mounts the incoming
+route's boundary, so the `loading` state renders while the new route's data streams rather than the page
+you left staying on screen. A same-page update — `router.refresh()`, a server action, or a change to the
+query string — keeps the boundary and the content it has already revealed.
+
 `<AsyncBoundary>` is a `'use client'` module, so you can render it straight from a server component like
 this — but note what crosses that line. `NoteList` is still a server component and ships no JavaScript;
 only the boundary itself does. And `loading` / `error` are being passed **from the server**, so they must

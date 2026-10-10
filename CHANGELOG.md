@@ -11,6 +11,18 @@ those.
 
 ## Unreleased
 
+### Fixed
+
+- **A soft navigation now mounts the incoming route's `<AsyncBoundary>` instead of reusing the outgoing
+  route's.** Two routes whose client trees have the same shape reconciled into the same `Suspense`
+  boundary, and a transition onto a boundary that has already revealed content keeps that content rather
+  than showing the fallback — so navigating between such routes left the previous page's data on screen
+  until the new data arrived and never rendered the incoming page's `loading` state. `<AsyncBoundary>` is
+  now keyed to the current pathname, so a navigation to a different route mounts a fresh boundary and its
+  `loading` fallback shows while its children stream. A same-route update — `router.refresh()`, a server
+  action, a query-string change — keeps the boundary and its revealed content, which is what makes those
+  updates seamless.
+
 ## ## 1.0.0-rc.26
 
 ### Fixed

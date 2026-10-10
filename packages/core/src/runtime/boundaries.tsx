@@ -2,6 +2,7 @@
 
 import { Component, Suspense, type ReactNode } from 'react';
 import { isControlDigest } from './control.js';
+import { useNavigationPathname } from './navigation.js';
 
 // `redirect()` and `notFound()` reach the browser as a thrown error carrying a control digest. They are
 // navigation, not failure, so no boundary absorbs one — they are re-thrown to the root, where the
@@ -127,7 +128,11 @@ export interface AsyncBoundaryProps {
   error?: ErrorFallback;
   /** Called with the caught error. From a `'use client'` component only — see {@link CatchBoundaryProps.onError}. */
   onError?: (error: Error) => void;
-  /** Clears the error fallback when any value changes — see {@link CatchBoundaryProps.resetKeys}. */
+  /**
+   * Clears the error fallback when any value changes — see {@link CatchBoundaryProps.resetKeys}. A
+   * pathname change already clears the whole boundary — see {@link AsyncBoundary} — so this is for
+   * resetting on anything else, an id or a filter say.
+   */
   resetKeys?: readonly unknown[];
   /** The subtree this boundary suspends on and protects. */
   children: ReactNode;
@@ -146,6 +151,15 @@ export interface AsyncBoundaryProps {
  * so `loading` shows until the children resolve and `error` catches whatever they throw, suspended or
  * not. `error` is optional: omit it and errors propagate to the next boundary out.
  *
+ * The boundary is scoped to the route: it is keyed to the current pathname, so a soft navigation to a
+ * different route mounts the incoming route's boundary and its `loading` fallback shows while its
+ * children stream. Without that, React treats the incoming page as a transition onto an already-revealed
+ * boundary and keeps the outgoing route's content on screen instead of the fallback. A same-route update
+ * — `router.refresh()`, a server action, a query-string change — keeps the boundary and its revealed
+ * content, which is what makes those updates seamless. A section whose state is meant to outlive a route
+ * change wants a bare {@link CatchBoundary} (with an ancestor's `Suspense`, or none) rather than an
+ * `AsyncBoundary`.
+ *
  * @example
  * ```tsx
  * import { AsyncBoundary } from '@rshono/core/client';
@@ -159,8 +173,12 @@ export interface AsyncBoundaryProps {
  * @see {@link https://www.rshono.com/docs/api#rshonocoreclient | Docs — `@rshono/core/client`}
  */
 export function AsyncBoundary({ loading, error, onError, resetKeys, children }: AsyncBoundaryProps): ReactNode {
+  // The pathname as the key is what makes a navigation mount this boundary rather than reconcile into
+  // the one the outgoing route revealed — see the component's docs. `undefined` outside a page's tree
+  // keys nothing, which keeps a boundary rendered somewhere else behaving as it always has.
+  const pathname = useNavigationPathname();
   return (
-    <CatchBoundary fallback={error} onError={onError} resetKeys={resetKeys}>
+    <CatchBoundary key={pathname} fallback={error} onError={onError} resetKeys={resetKeys}>
       <Suspense fallback={loading}>{children}</Suspense>
     </CatchBoundary>
   );

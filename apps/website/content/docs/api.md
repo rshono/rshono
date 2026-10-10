@@ -236,6 +236,11 @@ to a full load.
 omit it and throws propagate to the next boundary out or the global error page. A `redirect()` is never
 absorbed by either boundary — it's navigation, not failure.
 
+`AsyncBoundary` is scoped to the route: a soft navigation to a different pathname mounts the incoming
+route's boundary, so its `loading` state shows while the new data streams, and a same-page update
+(`refresh()`, a server action, a query-string change) keeps the content it has already revealed.
+`CatchBoundary` is not scoped — pass `resetKeys={[url.pathname]}` to clear its error state on navigation.
+
 ### Types
 
 | Type                 | What it describes                                                                                         |

@@ -115,6 +115,17 @@ export function RouterProvider({ href, params, children }: { href: string; param
 }
 
 /**
+ * The pathname of the payload on screen, for framework components that key themselves to the route.
+ * Unlike {@link useNavigation} it tolerates being rendered outside a page: with no navigation context to
+ * read it answers `undefined`, so the caller can treat the absent route as "no key".
+ *
+ * @internal
+ */
+export function useNavigationPathname(): string | undefined {
+  return useContext(NavigationContext)?.url.pathname;
+}
+
+/**
  * Reactive access to the current URL and programmatic navigation, in one hook. Call it from a
  * `'use client'` component.
  *
