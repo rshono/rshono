@@ -11,6 +11,8 @@ those.
 
 ## Unreleased
 
+## 1.0.0-rc.27
+
 ### Fixed
 
 - **A soft navigation now mounts the incoming route's `<AsyncBoundary>` instead of reusing the outgoing
@@ -23,7 +25,7 @@ those.
   action, a query-string change — keeps the boundary and its revealed content, which is what makes those
   updates seamless.
 
-## ## 1.0.0-rc.26
+## 1.0.0-rc.26
 
 ### Fixed
 
