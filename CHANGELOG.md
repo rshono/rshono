@@ -11,6 +11,17 @@ those.
 
 ## Unreleased
 
+### Fixed
+
+- **A streamed `<AsyncBoundary>` child that resolves after the shell no longer strands a soft navigation.** A
+  navigation's payload update is a transition, and React can leave it suspended on a flight chunk that lands
+  after the shell without ever pinging the suspended lane back (`suspendedLanes` set, `pingedLanes` zero):
+  the URL commits, the previous tree stays on screen, and the content never arrives. The runtime now observes
+  the end of the flight stream and, if the update has still not committed once every chunk has landed,
+  re-applies the payload inside a fresh transition, which commits the render the lost ping stranded. A
+  destination waiting on a promise that is not part of the stream keeps the "stay on the revealed page until
+  it is ready" behaviour.
+
 ## 1.0.0-rc.25
 
 ### Fixed

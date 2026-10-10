@@ -184,11 +184,34 @@ async function payloadResponse(request: Request): Promise<Response> {
 }
 
 /**
+ * A payload fetch, split into what React parses and a signal for the end of the stream.
+ *
+ * The payload promise resolves as soon as the root model is ready, which for a streamed response is well
+ * before the response body has delivered its last chunk. {@link loadPayload} needs the second promise to
+ * recover a transition React can leave suspended when a later chunk resolves — see the retry there.
+ */
+type FetchedPayload = { payload: Promise<RscPayload>; settled: Promise<void> };
+
+/**
  * Asks a URL for its flight payload. Deliberately uncached — a payload can never be staler than the click
  * that wanted it, and the browser's own HTTP cache is what makes a repeat visit cheap.
+ *
+ * The body rides through a pass-through so its end is observable: a tee would keep a copy of every byte
+ * React has not parsed yet, and the flight stream is the one thing here that can be large.
  */
-function requestPayload(href: string, signal?: AbortSignal): Promise<RscPayload> {
-  return createFromFetch<RscPayload>(payloadResponse(createRscRequest(new URL(href, location.href).href, undefined, signal)));
+function requestPayload(href: string, signal?: AbortSignal): FetchedPayload {
+  const response = payloadResponse(createRscRequest(new URL(href, location.href).href, undefined, signal));
+  const { promise: settled, resolve: settle } = Promise.withResolvers<void>();
+  const forFlight = response.then((value) => {
+    const body = value.body;
+    if (!body) {
+      settle();
+      return value;
+    }
+    const stream = body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ flush: () => settle() }));
+    return new Response(stream, { status: value.status, statusText: value.statusText, headers: value.headers });
+  });
+  return { payload: createFromFetch<RscPayload>(forFlight), settled };
 }
 
 /**
@@ -520,6 +543,13 @@ let setPayload: (payload: RscPayload, afterCommit?: () => void) => Promise<void>
   return new Promise<void>(() => {});
 };
 
+/**
+ * Re-dispatches the payload already waiting to commit, for {@link loadPayload}'s lost-ping retry. Unlike
+ * {@link setPayload} it creates and releases no commit promise, so re-rendering the same payload cannot
+ * resolve the navigation's commit early. Assigned with {@link setPayload} by `BrowserRoot`.
+ */
+let reapplyPayload: () => void = () => {};
+
 /** Runs work inside the nav transition so `useNavigation().pending` stays true across the round-trip. */
 let startNav: (run: () => void | Promise<void>) => void = (run) => {
   void run();
@@ -559,20 +589,41 @@ function loadPayload(url: string, signal?: AbortSignal, afterCommit?: () => void
   // work too, but only because React happens not to gate a commit on its async scope settling — an internal
   // this has no reason to depend on across the whole `^19.1.0` peer range.
   let committed: Promise<void> | undefined;
+  // Whether the payload update has committed. A streamed transition can suspend on a flight chunk whose later
+  // resolution React never pings the lane back for; the retry below re-schedules the update once the stream
+  // has closed, but only while this is still false.
+  let committedSettled = false;
 
   const run = async () => {
-    const payload = await requestPayload(url, abort);
+    const { payload, settled } = requestPayload(url, abort);
+    const nextPayload = await payload;
     // Checked again after the await because the fetch may already have resolved by then, and applying it
     // would repaint a page the user has left.
     if (abort.aborted || navigation !== currentNavigation) return;
-    if (payload.redirect) {
-      push(payload.redirect);
+    if (nextPayload.redirect) {
+      push(nextPayload.redirect);
       return;
     }
     // The fetch crossed an await, so its payload update needs a new synchronous transition scope.
     // Keep the commit promise outside the async Action; React tracks the scheduled update until commit.
     React.startTransition(() => {
-      committed = setPayload(payload, afterCommit);
+      committed = setPayload(nextPayload, afterCommit);
+      void committed.then(() => (committedSettled = true));
+    });
+
+    // A streamed payload can suspend a transition on a flight chunk that resolves after the shell without
+    // React ever pinging the suspended lane back, which strands the navigation on the previous tree. The
+    // chunks have all landed by the time the stream closes, so one re-application — still a transition, so a
+    // payload that is waiting on something other than flight keeps the #52 behaviour — commits the render a
+    // lost ping stranded. It goes through `reapplyPayload` rather than `setPayload`: the payload is not
+    // replaced, so the commit the navigation waits on has to stay attached to it. The macrotask lets the
+    // decoder process the last chunk and React's own retry run first, so the normal path is not interrupted.
+    void settled.then(() => {
+      if (abort.aborted || navigation !== currentNavigation || committedSettled) return;
+      setTimeout(() => {
+        if (abort.aborted || navigation !== currentNavigation || committedSettled) return;
+        React.startTransition(reapplyPayload);
+      }, 0);
     });
   };
 
@@ -761,6 +812,9 @@ async function main() {
   function BrowserRoot() {
     const [payload, setPayloadState] = React.useState(initialPayload);
     const [pending, startTransition] = React.useTransition();
+    // The payload the last `setPayload` put on screen or on its way there, so `reapplyPayload` re-renders
+    // that one rather than a payload a later navigation or action has already replaced.
+    const currentPayload = React.useRef<RscPayload>(initialPayload);
     // The resolver the payload on screen still owes — see {@link loadPayload}.
     const pendingCommit = React.useRef<(() => void) | null>(null);
     // The scroll the payload about to commit owes, set with it so a payload that supersedes another takes
@@ -771,8 +825,9 @@ async function main() {
     // Descendant passive effects can start a navigation before the root's passive effects run.
     // Install the live payload setter and transition runner before any such navigation starts.
     React.useLayoutEffect(() => {
-      setPayload = (next, afterCommit) =>
-        new Promise<void>((resolve) => {
+      setPayload = (next, afterCommit) => {
+        currentPayload.current = next;
+        return new Promise<void>((resolve) => {
           // A payload replaced before it ever painted still has a navigation waiting on it. React commits
           // only the newest, so the effect below never runs for the one it skipped: release it here.
           pendingCommit.current?.();
@@ -782,6 +837,11 @@ async function main() {
           pendingScroll.current = afterCommit ?? null;
           setPayloadState(next);
         });
+      };
+      // A re-dispatch of the payload above, for the retry in `loadPayload`: keeping `pendingCommit` and
+      // `pendingScroll` in place means the navigation already waiting resolves when this render commits,
+      // not when the retry runs.
+      reapplyPayload = () => setPayloadState(currentPayload.current);
       startNav = (run) => startTransition(run);
     }, [startTransition]);
 

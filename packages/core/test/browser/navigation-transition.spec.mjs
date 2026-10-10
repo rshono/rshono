@@ -31,3 +31,28 @@ test('navigation retains revealed Suspense content and pending until the destina
   expect(await page.evaluate(() => window.__rshonoDocumentId)).toBe('navigation-suspense');
   expect(errors).toEqual([]);
 });
+
+// The #52 case above suspends on a promise a client component created, which is already resolved by the
+// time the destination renders. A streamed server component is the other half: its flight chunk lands
+// *after* the payload's shell, so a soft navigation suspends the transition on a `ReactPromise` that only
+// resolves mid-stream. If that ping is lost, the transition never retries and the destination URL commits
+// with the previous tree (or the skeleton) left on screen.
+test('a soft navigation to a streamed AsyncBoundary page commits when its child resolves', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/streamed-boundary-a');
+  // A click before hydration would be a full browser load, which exercises nothing here.
+  await expect(page.locator('html')).toHaveAttribute('data-streamed-boundary-hydrated', 'true');
+  await expect(page.locator('[data-streamed-content="a"]')).toBeVisible();
+
+  // The link alternates A→B→A→B→A, soft each way. Every destination resolves its `AsyncBoundary` child
+  // only after the shell has been streamed, so every navigation exercises the suspended-transition retry.
+  for (const label of ['b', 'a', 'b', 'a']) {
+    await page.getByRole('link', { name: 'next' }).click();
+    await expect(page).toHaveURL(`/streamed-boundary-${label}`);
+    await expect(page.locator(`[data-streamed-content="${label}"]`)).toBeVisible();
+  }
+
+  expect(errors).toEqual([]);
+});

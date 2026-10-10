@@ -46,6 +46,16 @@ export const routes = defineRoutes({
       component: () => import('./components/navigation-suspense'),
     },
     {
+      // Soft navigation between two pages whose `AsyncBoundary` child resolves only after the shell — the
+      // only shape that suspends a streamed navigation payload. See streamed-boundary.tsx.
+      path: '/streamed-boundary-a',
+      component: () => import('./components/streamed-boundary-a'),
+    },
+    {
+      path: '/streamed-boundary-b',
+      component: () => import('./components/streamed-boundary-b'),
+    },
+    {
       path: '/users',
       component: () => import('./components/user-list'),
     },
