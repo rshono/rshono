@@ -564,8 +564,24 @@ let startNav: (run: () => void | Promise<void>) => void = (run) => {
  */
 let currentNavigation = 0;
 
-/** The in-flight navigation's fetch, so a newer one can stop paying for it. */
-let navigationFetch: AbortController | null = null;
+/**
+ * A navigation fetch, and whether its payload has been handed to React. An **applied** fetch is deliberately
+ * not aborted when it loses the screen: React is still reading its stream, and aborting it rejects every
+ * flight chunk still in flight — the nearest boundary renders the `AbortError` as a failure, and the root can
+ * unwind into React's "Rendered more hooks than during the previous render" (minified error #310). The commit
+ * of a newer payload is the first moment the old tree is off the screen and out of React, so the abort is
+ * deferred to here, where the rejected chunks have nowhere to surface.
+ *
+ * An unapplied fetch has no such reader: nothing holds its stream, so it can be stopped the moment it loses
+ * the screen — when a newer navigation starts, or when the browser cancels this navigation and nothing takes
+ * its place (a fragment jump or a download, where no later commit would ever run an abort). Leaving those to
+ * a commit that never comes is how a render nobody is waiting for stays alive.
+ *
+ * Pruned when a payload commits and when a newer navigation starts. A fetch stopped by a browser cancellation
+ * waits for one of those to drop it; the entries that remain are the applied ones plus the current fetch.
+ */
+type NavigationFetch = { navigation: number; controller: AbortController; applied: boolean };
+let navigationFetches: NavigationFetch[] = [];
 
 /**
  * Fetches the payload for `url` and puts it on screen.
@@ -576,13 +592,37 @@ let navigationFetch: AbortController | null = null;
  * screen from then on.
  */
 function loadPayload(url: string, signal?: AbortSignal, afterCommit?: () => void): Promise<void> {
-  // This navigation's place in the queue, and its own abort switch: a fetch is abandoned by whichever comes
-  // first, the browser superseding it (an intercepted navigation carries `event.signal`) or a newer runtime
-  // fetch starting (a traversal, an action, a dev refresh).
+  // This navigation's place in the queue, and its own abort switch: the navigation stops being applied by
+  // whichever comes first, the browser superseding it (an intercepted navigation carries `event.signal`) or a
+  // newer runtime fetch starting (a traversal, an action, a dev refresh). The fetch itself runs on until its
+  // payload is on screen and a newer one commits — see {@link navigationFetches}.
   const navigation = ++currentNavigation;
-  navigationFetch?.abort();
-  const controller = (navigationFetch = new AbortController());
-  const abort = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const controller = new AbortController();
+  const entry: NavigationFetch = { navigation, controller, applied: false };
+  navigationFetches.push(entry);
+
+  // A newer navigation owns the screen now, and an older fetch whose payload never reached React is reading
+  // into a tree that does not exist — stopping it cannot reject a chunk anything holds. One that did reach
+  // React waits for this payload's commit; see {@link navigationFetches}.
+  navigationFetches = navigationFetches.filter((fetch) => {
+    if (fetch === entry || fetch.applied) return true;
+    fetch.controller.abort();
+    return false;
+  });
+
+  // The browser supersedes an intercepted navigation the moment a newer one starts, and `signal` is how it
+  // says so. A fetch React has been handed keeps running (see {@link navigationFetches}), but one that never
+  // reached React stops here: the navigation taking over may be one the runtime does not intercept (a
+  // fragment jump, a download), leaving no commit to stop it later.
+  let abandoned = signal?.aborted ?? false;
+  const abandon = () => {
+    abandoned = true;
+    if (!entry.applied) controller.abort();
+  };
+  if (abandoned) abandon();
+  else signal?.addEventListener('abort', abandon, { once: true });
+  /** Whether this navigation has lost the screen to the browser or to a newer runtime fetch. */
+  const stale = (): boolean => abandoned || navigation !== currentNavigation || controller.signal.aborted;
 
   // Deliberately not awaited inside the transition: the scope ends once the payload is handed to React, and
   // React holds `pending` until the update it scheduled commits. Awaiting the commit *inside* the scope would
@@ -595,11 +635,11 @@ function loadPayload(url: string, signal?: AbortSignal, afterCommit?: () => void
   let committedSettled = false;
 
   const run = async () => {
-    const { payload, settled } = requestPayload(url, abort);
+    const { payload, settled } = requestPayload(url, controller.signal);
     const nextPayload = await payload;
     // Checked again after the await because the fetch may already have resolved by then, and applying it
     // would repaint a page the user has left.
-    if (abort.aborted || navigation !== currentNavigation) return;
+    if (stale()) return;
     if (nextPayload.redirect) {
       push(nextPayload.redirect);
       return;
@@ -607,8 +647,23 @@ function loadPayload(url: string, signal?: AbortSignal, afterCommit?: () => void
     // The fetch crossed an await, so its payload update needs a new synchronous transition scope.
     // Keep the commit promise outside the async Action; React tracks the scheduled update until commit.
     React.startTransition(() => {
+      // From here React holds this payload's stream, so a superseded fetch may not be stopped until a newer
+      // payload commits — see {@link navigationFetches}.
+      entry.applied = true;
       committed = setPayload(nextPayload, afterCommit);
       void committed.then(() => (committedSettled = true));
+    });
+
+    // This payload is on screen, so every fetch it superseded is reading into a tree React has replaced.
+    // Stopping them now cannot reject a chunk the committed tree holds — see {@link navigationFetches}.
+    // Only the older ones: a newer navigation may have started while this payload was in flight, and its
+    // fetch is the one the screen is waiting for.
+    void committed?.then(() => {
+      navigationFetches = navigationFetches.filter((fetch) => {
+        if (fetch.navigation >= navigation) return true;
+        fetch.controller.abort();
+        return false;
+      });
     });
 
     // A streamed payload can suspend a transition on a flight chunk that resolves after the shell without
@@ -619,9 +674,9 @@ function loadPayload(url: string, signal?: AbortSignal, afterCommit?: () => void
     // replaced, so the commit the navigation waits on has to stay attached to it. The macrotask lets the
     // decoder process the last chunk and React's own retry run first, so the normal path is not interrupted.
     void settled.then(() => {
-      if (abort.aborted || navigation !== currentNavigation || committedSettled) return;
+      if (stale() || committedSettled) return;
       setTimeout(() => {
-        if (abort.aborted || navigation !== currentNavigation || committedSettled) return;
+        if (stale() || committedSettled) return;
         React.startTransition(reapplyPayload);
       }, 0);
     });
@@ -638,7 +693,7 @@ function loadPayload(url: string, signal?: AbortSignal, afterCommit?: () => void
     (error: unknown) => {
       // Checked before the error is read: an abort is this navigation being replaced, and the one that
       // replaced it owns the outcome.
-      if (abort.aborted || navigation !== currentNavigation || handleControlDigest(error)) return;
+      if (stale() || handleControlDigest(error)) return;
       throw error;
     },
   );

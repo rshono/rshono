@@ -6,9 +6,10 @@ import { Layout } from './layout';
 
 // Resolves only after the page shell has been flushed: that is the shape whose soft navigation suspends the
 // client on a streamed flight chunk. A buffered test fetch would never suspend, so the page is deliberately
-// slow rather than merely async. See navigation-transition.spec.mjs.
+// slow rather than merely async. The second is long enough that a test can navigate away mid-stream without
+// racing the resolution. See navigation-transition.spec.mjs.
 export async function SlowSection({ label }: { label: string }): Promise<ReactNode> {
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await new Promise((resolve) => setTimeout(resolve, 1000));
   return <p data-streamed-content={label}>{label} content loaded</p>;
 }
 

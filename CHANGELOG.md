@@ -11,6 +11,19 @@ those.
 
 ## Unreleased
 
+### Fixed
+
+- **A soft navigation away from a page whose `<AsyncBoundary>` is still streaming no longer surfaces an
+  `AbortError` in the tree.** A superseded navigation's payload fetch was aborted the moment a newer
+  navigation started, while React was still reading that stream: every flight chunk still in flight rejected,
+  the nearest boundary rendered the abort as a failure, and a caught abort could leave the root unwinding into
+  React's “Rendered more hooks than during the previous render” (minified error #310). A fetch whose payload
+  React has been handed now outlives supersession until the navigation that replaced it commits — the first
+  point where the old tree is off the screen and out of React — and only then is it aborted, so the rejected
+  chunks have nowhere to surface. A fetch whose payload never reached React has no such reader and is stopped
+  as soon as it loses the screen, including when the navigation is cancelled by something the runtime does not
+  intercept (a fragment link or a download), so its server render no longer runs to completion unseen.
+
 ## 1.0.0-rc.27
 
 ### Fixed

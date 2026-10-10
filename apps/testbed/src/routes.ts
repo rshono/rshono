@@ -56,6 +56,16 @@ export const routes = defineRoutes({
       component: () => import('./components/streamed-boundary-b'),
     },
     {
+      // The shell itself is delayed, so a navigation to it can be cancelled before its payload reaches React.
+      // See slow-shell.tsx and the cancelled-navigation test in navigation-transition.spec.mjs.
+      path: '/slow-shell',
+      component: () => import('./components/slow-shell'),
+    },
+    {
+      path: '/slow-shell-source',
+      component: () => import('./components/slow-shell-source'),
+    },
+    {
       path: '/users',
       component: () => import('./components/user-list'),
     },
