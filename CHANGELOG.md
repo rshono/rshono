@@ -21,6 +21,14 @@ those.
   terminates a worker that missed it; the replacement spawns after the drain, so the old database pool and
   the new one do not overlap.
 
+- **A cross-page `#hash` link into streamed content now lands on the target.** A soft push commits the shell
+  before a target inside a suspended `<AsyncBoundary>` exists, so the jump that runs at commit found nothing
+  and took the missing-anchor fallback to the top; the browser's own retry, which a hard document load gets
+  for free, never ran. The runtime now watches the document and follows the fragment in when its element
+  first appears, bounded so a fragment that never appears leaves no observer running. A traversal's focus
+  reset watches for a streamed `[autofocus]` the same way, and only while focus is still where the reset left
+  it.
+
 - **A soft navigation away from a page whose `<AsyncBoundary>` is still streaming no longer surfaces an
   `AbortError` in the tree.** A superseded navigation's payload fetch was aborted the moment a newer
   navigation started, while React was still reading that stream: every flight chunk still in flight rejected,

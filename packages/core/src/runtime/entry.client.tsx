@@ -531,6 +531,77 @@ function scrollToPoint(point: ScrollPoint): void {
 }
 
 /**
+ * How long a commit waits for a fragment target or `autofocus` element that a boundary has not streamed in
+ * yet. Past it the fallback stands — the top of the document, or body focus — and the watch is dropped, so a
+ * fragment that names nothing leaves no observer running behind it.
+ */
+const ELEMENT_WATCH_TIMEOUT_MS = 5_000;
+
+/**
+ * Elements a commit asked for that were not in the tree yet: a `#hash` target inside a still-suspended
+ * `<AsyncBoundary>`, or the `autofocus` element of a page being traversed into.
+ *
+ * One `MutationObserver` answers every pending watch. A streamed payload inserts its chunks as separate
+ * mutations, so the observer re-checks each watch's lookup until one hits or its timer retires it. A watch is
+ * only ever live across one payload: the next navigation drops them all, so a destination the user has left
+ * cannot scroll or focus the page that replaced it.
+ */
+type PendingElementWatch = {
+  find: () => Element | null;
+  run: (element: Element) => void;
+  /** Retires the watch if the element never arrives. */
+  timer: ReturnType<typeof setTimeout>;
+};
+
+const pendingElementWatches = new Set<PendingElementWatch>();
+let elementObserver: MutationObserver | null = null;
+
+function stopElementWatch(watch: PendingElementWatch): void {
+  clearTimeout(watch.timer);
+  if (!pendingElementWatches.delete(watch)) return;
+  if (pendingElementWatches.size === 0) {
+    elementObserver?.disconnect();
+    elementObserver = null;
+  }
+}
+
+/** Drops every watch; a new navigation owns the screen from here. */
+function cancelElementWatches(): void {
+  for (const watch of [...pendingElementWatches]) stopElementWatch(watch);
+}
+
+/**
+ * Runs `run` as soon as `find` finds an element, or gives up after {@link ELEMENT_WATCH_TIMEOUT_MS}. When
+ * the element is already there, `run` happens synchronously. `find` and `run` are always passed as a matching
+ * pair; the type-erasure here is what lets one observer serve watches of different element shapes.
+ */
+function watchForElement<T extends Element>(find: () => T | null, run: (element: T) => void): void {
+  const present = find();
+  if (present) {
+    run(present);
+    return;
+  }
+  if (elementObserver === null) {
+    elementObserver = new MutationObserver(() => {
+      for (const watch of [...pendingElementWatches]) {
+        const element = watch.find();
+        if (element) {
+          stopElementWatch(watch);
+          watch.run(element);
+        }
+      }
+    });
+    elementObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  const watch: PendingElementWatch = {
+    find,
+    run: run as (element: Element) => void,
+    timer: setTimeout(() => stopElementWatch(watch), ELEMENT_WATCH_TIMEOUT_MS),
+  };
+  pendingElementWatches.add(watch);
+}
+
+/**
  * Scrolls to a fragment's target the way the browser's own fragment jump does.
  *
  * `scrollIntoView` is the algorithm that honours `scroll-padding-top` on the scrolling box and
@@ -538,6 +609,9 @@ function scrollToPoint(point: ScrollPoint): void {
  * "find a potential indicated element": the id first, then the name. A malformed percent-escape falls back
  * to the literal fragment, and a fragment nothing matches gets the top of the document — what a browser
  * gives a missing anchor on a real load.
+ *
+ * A streamed payload commits its shell before a target inside a suspended boundary exists, so a miss is not
+ * final: the top is applied right away, and the watch follows the fragment in when its element arrives.
  */
 function jumpToAnchor(hash: string): void {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -553,9 +627,14 @@ function jumpToAnchor(hash: string): void {
   } catch {
     // Malformed escape — the literal fragment is the better guess at the id than nothing.
   }
-  const target = document.getElementById(id) ?? document.getElementsByName(id)[0];
-  if (target) target.scrollIntoView();
-  else scrollToTop();
+  const find = () => document.getElementById(id) ?? document.getElementsByName(id)[0] ?? null;
+  const target = find();
+  if (target) {
+    target.scrollIntoView();
+    return;
+  }
+  scrollToTop();
+  watchForElement(find, (element) => element.scrollIntoView());
 }
 
 /**
@@ -563,11 +642,25 @@ function jumpToAnchor(hash: string): void {
  * else the document body. A traversal is no longer intercepted, so the browser performs no focus reset for
  * it; without this, Back would leave focus on the link that was clicked on the page being left, and the next
  * Tab would resume there. `preventScroll` because the traversal's own offset has just been restored.
+ *
+ * The page may still be streaming — a traversal into a page whose `autofocus` element sits in a suspended
+ * boundary — and the browser's own reset follows the element in, so this watches for it with the same bound
+ * as a fragment.
  */
 function resetFocus(): void {
   const autofocus = document.querySelector<HTMLElement>('[autofocus]');
-  if (autofocus) autofocus.focus({ preventScroll: true });
-  else document.body.focus({ preventScroll: true });
+  if (autofocus) {
+    autofocus.focus({ preventScroll: true });
+    return;
+  }
+  document.body.focus({ preventScroll: true });
+  watchForElement(
+    () => document.querySelector<HTMLElement>('[autofocus]'),
+    (element) => {
+      // Only if focus is still where this reset left it: a user who has since focused something else keeps it.
+      if (document.activeElement === document.body) element.focus({ preventScroll: true });
+    },
+  );
 }
 
 /**
@@ -797,6 +890,10 @@ function listenNavigation(): () => void {
     // later navigation can never be mistaken for this one.
     if (event.info === documentNavigation) return;
 
+    // A commit for the destination being left is no longer the screen's; its pending fragment target (or
+    // `autofocus` element) must not scroll or focus the page that replaces it.
+    cancelElementWatches();
+
     // Whatever the browser is about to do with this navigation, the entry it is leaving is about to lose the
     // offset it was at, and nothing else in this document will put it back. Saved before the branches below
     // return, so a fragment the browser performs itself is covered too.
@@ -839,6 +936,8 @@ function listenNavigation(): () => void {
    * is `navigation.currentEntry` and its saved offset is in {@link scrollPositions}.
    */
   const onPopState = () => {
+    // Same ownership as `onNavigate`: this traversal's commit replaces whatever the last one was waiting for.
+    cancelElementWatches();
     const stored = scrollPointFor(currentEntryKey());
     const hash = location.hash;
     const apply = () => {

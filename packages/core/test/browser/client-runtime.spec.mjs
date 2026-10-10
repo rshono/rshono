@@ -530,6 +530,23 @@ test.describe('fragment links', () => {
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   });
 
+  // The streamed half of the cross-page case: the target lives inside a boundary that resolves after the
+  // shell, so the commit's lookup misses. The old runtime applied the top fallback and never looked again;
+  // the runtime now watches the document and follows the fragment in on its first appearance.
+  test('a cross-page anchor into a streamed boundary lands when the target arrives', async ({ page }) => {
+    await page.setViewportSize({ width: 500, height: 400 });
+    await page.goto('/slow-stream');
+    await expect(page.locator('html')).toHaveAttribute('data-slow-stream-hydrated', 'true');
+    const id = await markDocument(page);
+
+    await page.getByRole('link', { name: 'Deep target' }).click();
+
+    await expect(page).toHaveURL('/anchor-stream#depth-target');
+    await expect(page.locator('#depth-target')).toBeVisible();
+    await expect.poll(() => headingOffset(page, 'depth-target'), { message: 'the jump must land on the target once it streams in' }).toBeLessThan(2);
+    expect(await documentId(page), 'it should still be a soft navigation').toBe(id);
+  });
+
   test('back out of an anchor does not re-fetch the page', async ({ page }) => {
     await page.setViewportSize({ width: 500, height: 400 });
     await page.goto('/docs/getting-started');

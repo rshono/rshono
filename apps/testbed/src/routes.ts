@@ -73,6 +73,12 @@ export const routes = defineRoutes({
       component: () => import('./components/slow-stream'),
     },
     {
+      // Its fragment target is inside a slow boundary, so a soft `#hash` navigation has to wait for the
+      // stream. See the streamed-anchor test in client-runtime.spec.mjs.
+      path: '/anchor-stream',
+      component: () => import('./components/anchor-stream'),
+    },
+    {
       path: '/users',
       component: () => import('./components/user-list'),
     },

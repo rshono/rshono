@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import type { PageProps } from '@rshono/core';
+import { HydrationProbe } from './hydration-probe';
 import { Layout } from './layout';
 
 /**
@@ -16,8 +17,10 @@ async function SlowContent() {
 export default function SlowStream(_props: PageProps) {
   return (
     <Layout title="Slow stream — rshono">
+      <HydrationProbe name="slowStreamHydrated" />
       <div className="page">
         <p data-slow-stream-shell>shell</p>
+        <a href="/anchor-stream#depth-target">Deep target</a>
         <Suspense fallback={<p data-slow-stream-loading>waiting…</p>}>
           <SlowContent />
         </Suspense>
