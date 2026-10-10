@@ -170,7 +170,7 @@ test('a second dev server refuses the port instead of wiping the first one’s o
  * worker is asked to drain instead (a `shutdown` message closes the listener and the worker exits once the
  * requests it is serving finish), and only a worker that misses the deadline is terminated.
  *
- * `/slow-stream` is shell-first and then suspended for six seconds: long enough for an incremental rebuild
+ * `/slow-stream` is shell-first and then suspended for two seconds: long enough for an incremental rebuild
  * to land while the response is open. The fetch is read to the shell before the rebuild is triggered, so the
  * request is provably mid-stream and not merely queued.
  */

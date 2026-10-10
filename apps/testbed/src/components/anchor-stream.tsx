@@ -4,16 +4,17 @@ import { Layout } from './layout';
 
 /**
  * A fragment target that only exists after the shell streams: the case a soft `#hash` navigation has to wait
- * for. The tall spacer makes "landed at the top" and "landed on the target" different scroll positions, so a
- * test cannot pass because the page happened to be too short to scroll. See the streamed-anchor tests in
+ * for. The filler sits *below* the heading so `scrollIntoView()` has room to align it with the viewport top;
+ * the header and shell above it keep "landed at the top" and "landed on the target" different positions, so a
+ * test cannot pass because the page happened to be too short to scroll. See the streamed-anchor test in
  * client-runtime.spec.mjs.
  */
 async function SlowTarget() {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   return (
     <>
-      <div style={{ height: '1600px' }} aria-hidden="true" />
       <h2 id="depth-target">Deep target</h2>
+      <div style={{ height: '1600px' }} aria-hidden="true" />
     </>
   );
 }

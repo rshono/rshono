@@ -181,6 +181,9 @@ async function refusalBody(response: Response): Promise<string> {
       // `stream: true` so a multi-byte character split across two reads is not replaced by U+FFFD.
       text += decoder.decode(value, { stream: true });
     }
+    // Flush a trailing partial multi-byte sequence, so a body cut mid-character reads as U+FFFD rather than
+    // dropping the bytes that were already read.
+    text += decoder.decode();
   } catch {
     // A body that failed mid-read says no more than the status already did.
   } finally {
