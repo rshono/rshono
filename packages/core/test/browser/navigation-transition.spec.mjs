@@ -113,7 +113,10 @@ test('navigating away from a loading AsyncBoundary surfaces no abort', async ({ 
 
 // A newer navigation supersedes this one before its shell lands. Its payload has not reached React either, so
 // the fetch is stopped as the replacement starts rather than at the replacement's commit — otherwise two
-// five-second server renders would run for one screen.
+// five-second server renders would run for one screen. The delay is testbed middleware holding the response
+// head back (see src/server.ts), not a delay in the page component: React resolves a page's streamed root row
+// before the component finishes, which would make the payload applied and correctly exempt from the early
+// abort.
 test('a newer navigation stops a superseded payload fetch before its replacement commits', async ({ page }) => {
   await page.goto('/slow-shell-source');
   await expect(page.locator('html')).toHaveAttribute('data-slow-shell-source-hydrated', 'true');
@@ -137,7 +140,8 @@ test('a newer navigation stops a superseded payload fetch before its replacement
 // React has no reader, so it has to stop the moment the navigation is cancelled — even when nothing replaces
 // it. A same-page anchor does that without the runtime intercepting anything: the browser cancels the
 // in-flight navigation, and no later commit will ever run to abort the fetch. Without the early stop, the
-// slow server render runs to completion unseen.
+// slow server render runs to completion unseen. The response head is held back in testbed middleware (see
+// src/server.ts) so the payload really is unapplied when the anchor is clicked.
 test('a fragment navigation cancels a payload fetch whose payload never reached React', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));

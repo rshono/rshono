@@ -159,6 +159,36 @@ function showLateNotFound(): void {
 /** What every flight response is typed as. The charset and any other parameters follow it. */
 const FLIGHT_CONTENT_TYPE = 'text/x-component';
 
+/** How much of a body that is not a payload is quoted back in the error. */
+const REFUSAL_BODY_LIMIT = 200;
+
+/**
+ * The first {@link REFUSAL_BODY_LIMIT} characters of a response body, without buffering the rest.
+ *
+ * `response.text()` reads the whole body first, so a proxy's multi-megabyte error page would be buffered and
+ * decoded before the 200 characters that are kept — on a path that exists to say what answered instead of a
+ * payload. Reading one chunk at a time and cancelling stops paying for bytes nothing will look at.
+ */
+async function refusalBody(response: Response): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    while (text.length < REFUSAL_BODY_LIMIT) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // `stream: true` so a multi-byte character split across two reads is not replaced by U+FFFD.
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    // A body that failed mid-read says no more than the status already did.
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+  return text.slice(0, REFUSAL_BODY_LIMIT).trim();
+}
+
 /**
  * Fetches a payload, refusing a response that is not one.
  *
@@ -175,10 +205,7 @@ async function payloadResponse(request: Request): Promise<Response> {
   if (contentType?.startsWith(FLIGHT_CONTENT_TYPE)) return response;
   // Read for the message: a plain-text refusal says what it refused only in its body, and HTTP/2 has no
   // `statusText` at all. Bounded, because this is an error path and the body is not ours to trust.
-  const body = await response.text().then(
-    (text) => text.trim().slice(0, 200),
-    () => '',
-  );
+  const body = await refusalBody(response);
   const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
   throw new Error(`[rshono] the server answered ${status} (${contentType ?? 'no content type'}) instead of a payload${body ? `: ${body}` : ''}`);
 }
@@ -367,7 +394,21 @@ function loadDocument(href?: string): void {
     return;
   }
 
-  settle(href === undefined ? navigation.reload({ info: documentNavigation }) : navigation.navigate(href, { info: documentNavigation }));
+  try {
+    settle(href === undefined ? navigation.reload({ info: documentNavigation }) : navigation.navigate(href, { info: documentNavigation }));
+  } catch {
+    // The Navigation API refuses a document that is not fully active — it is unloading — and a URL it cannot
+    // parse. Both callers are recovery paths, where a throw here becomes an unhandled rejection rather than
+    // the document load they asked for. `location.*` is the same load without the interception, and its own
+    // refusal (the same unparseable URL) is swallowed because there is then no load left to make.
+    try {
+      if (href === undefined) window.location.reload();
+      else window.location.assign(href);
+    } catch {
+      // Nothing to navigate to. The caller is already recovering from a failure, and the address bar still
+      // describes the document on screen.
+    }
+  }
 }
 
 // The imperative actions behind `useNavigation().router`. Each one only *asks*: the browser turns it into a

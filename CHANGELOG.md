@@ -24,6 +24,16 @@ those.
   as soon as it loses the screen, including when the navigation is cancelled by something the runtime does not
   intercept (a fragment link or a download), so its server render no longer runs to completion unseen.
 
+- **A non-payload reply is no longer buffered whole to quote its first 200 characters.** When a proxy, a
+  `bodyLimit()` or a deploy trailing edge answers a soft navigation with something that is not a flight
+  payload, the client reads just enough of the body for the error message and cancels the rest, instead of
+  decoding a multi-megabyte error page first.
+
+- **A document load the runtime asks for while the tab is unloading no longer throws.** `navigation.reload()`
+  and `navigation.navigate()` refuse a document that is not fully active and a URL they cannot parse, and
+  every caller of `loadDocument()` is a recovery path where that refusal became an unhandled rejection. The
+  call now falls back to `location.*`, which is the same document load through the browser's own router.
+
 ## 1.0.0-rc.27
 
 ### Fixed

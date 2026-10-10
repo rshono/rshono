@@ -136,6 +136,22 @@ server.use('*', async (c, next) => {
 });
 
 /**
+ * Holds the response head back for the cancelled-navigation tests, so a soft navigation to this route is still
+ * on the wire with nothing handed to React when the test supersedes or cancels it.
+ *
+ * The delay has to wrap the framework's handler rather than sit inside the page component. A page renders
+ * behind `RouterProvider`, a client component that carries it as a lazy child, so React flushes the payload's
+ * root row as soon as the render starts and the streaming client resolves it — long before the component's
+ * own `await` finishes. A component-level delay therefore still hands React a stream, which the runtime is
+ * right to leave alone; holding the head back is what produces a genuinely unapplied payload. See
+ * slow-shell.tsx and navigation-transition.spec.mjs.
+ */
+server.use('/slow-shell', async (_c, next) => {
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+  await next();
+});
+
+/**
  * The documented way to change what a prerendered page promises about caching: the framework's
  * `public, max-age=300` is a per-response header, not a config field, so middleware is the interface.
  *
