@@ -157,6 +157,28 @@ test('native navigation finishes only after a prepared payload commits', async (
   await expect.poll(() => page.evaluate(() => window.__nativeSuccess)).toBe('fired');
 });
 
+/*
+ * The failure half of the same contract. A prepared payload whose render throws tears the root down
+ * before it commits, and a commit promise that never settles leaves `finished` pending for the life of
+ * the tab. The recovery document load is an *effect* of that failure, not the thing under test — and it
+ * aborts the navigation itself, which would hide whether the promise settled — so it is stubbed to a
+ * settled no-op here. What is left is what the commit contract owes: the navigation learns the render
+ * failed and finishes, and the fatal panel covers a page with nowhere left to load.
+ */
+test('a prepared payload whose render fails settles the native navigation', async ({ page }) => {
+  await page.addInitScript(() => {
+    // `loadDocument` asks for a reload and gets an already-settled result, so it neither falls through to
+    // `location.reload()` nor supersedes the navigation whose completion is being measured.
+    navigation.reload = () => ({ committed: Promise.resolve(), finished: Promise.resolve() });
+  });
+  await page.goto('/');
+  await expect(page.getByText('(hydrated ✓)')).toBeVisible();
+  await startNativeNavigation(page, 'push', '/crash?render=1');
+
+  await expect(page.locator('[data-rshono-fatal]')).toBeVisible();
+  await expect.poll(() => navigationResult(page).then((result) => result?.state)).toBe('resolved');
+});
+
 test('automatic preparation marks the router pending while an additional browser gate is held', async ({ page }) => {
   await page.goto('/profile/1');
   await expect(page.locator('[data-nav="pending"]')).toHaveText('no');

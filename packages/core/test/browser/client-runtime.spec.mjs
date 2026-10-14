@@ -605,6 +605,61 @@ test.describe('no blank screens', () => {
     await expect(overlay).not.toContainText('Component stack:');
     expect(consoleErrors.join('\n')).toContain('the client runtime failed to start');
   });
+
+  /*
+   * The other way a render can tear the tree down: not a broken document, but a flight payload whose root
+   * row is an error. `/crash?render=1` commits its payload as a 200 before the render fails, so the failure
+   * rides the payload as an error row and React throws while applying it. There is no root boundary on
+   * purpose — the app's own boundaries own their errors — so React unmounts the root, and the address bar
+   * already names the destination. The runtime answers that by asking the server for the destination as a
+   * real document, which the `error` page answers from a fresh render: a live root, and a history entry the
+   * next traversal can leave. Without it the URL moves under Back and nothing repaints, for the life of the
+   * tab.
+   */
+  test('a navigation payload that fails to render reloads instead of killing the root', async ({ page }) => {
+    await page.goto('/');
+    const before = await markDocument(page);
+
+    // Record whether the fallback panel is ever painted in this document. The recovery is a document load
+    // that replaces it, taking any timer with it, so the old document is the only place the flash would
+    // happen; `sessionStorage` is how the next document hears about it.
+    await page.evaluate(() => {
+      sessionStorage.removeItem('fatal-shown');
+      new MutationObserver(() => {
+        if (document.querySelector('[data-rshono-fatal]')) sessionStorage.setItem('fatal-shown', '1');
+      }).observe(document, { childList: true, subtree: true });
+    });
+
+    // The route index's variant link, which soft-navigates — the repro from the report.
+    await page.getByRole('link', { name: 'throw during render' }).click();
+
+    // The recovery is the app's error page as a document, not the fatal overlay over a dead tree. The
+    // overlay title is a div, so a heading can only be the new document; the id is what proves it is one.
+    await expect(page.getByRole('heading', { name: 'Something went wrong' })).toBeVisible();
+    await expect(page.locator('[data-rshono-fatal]')).toHaveCount(0);
+    expect(await page.evaluate(() => sessionStorage.getItem('fatal-shown')), 'the panel must not flash over the error page on its way').toBeNull();
+    expect(await documentId(page), 'the recovery must rebuild the root with a real document load').not.toBe(before);
+
+    // And the tab is alive again: Back leaves this document for the entry that preceded it.
+    await page.goBack();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('heading', { name: 'Test pages' })).toBeVisible();
+  });
+
+  /*
+   * The other half of the recovery split. An action that throws tears the tree down too, but a document load
+   * cannot recover it — a GET of `/crash` does not re-run the action, so the page renders as if nothing had
+   * happened and the error would be silently discarded. The panel is the answer, and it stays.
+   */
+  test('an action that tears the tree down keeps the fatal panel instead of reloading', async ({ page }) => {
+    await page.goto('/crash');
+    const before = await markDocument(page);
+
+    await page.getByRole('button', { name: 'Trigger a server error' }).click();
+
+    await expect(page.locator('[data-rshono-fatal]')).toBeVisible();
+    expect(await documentId(page), 'the error is the answer; a reload would discard it').toBe(before);
+  });
 });
 
 /*
@@ -625,12 +680,21 @@ test.describe('no blank screens', () => {
  */
 test.describe('late control signals', () => {
   test('a late redirect() lands on the target page, not just its URL', async ({ page }) => {
-    await page.goto('/late-signal');
+    // From the route index, so the push into `/late-signal` leaves an entry behind it: the redirect recovery
+    // has to replace that entry rather than add another after it.
+    await page.goto('/');
+    await page.getByRole('link', { name: '/late-signal', exact: true }).click();
 
     await expect(page).toHaveURL('/login');
     // The recovery is a real document load, so the URL moves whether or not the old tree rendered anything.
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
     await expect(page.locator('[data-section="loading"]')).toHaveCount(0, 'the page it left must be gone');
+
+    // A 30x replaces the URL that raised it, so the redirecting entry is gone with it: Back reaches the page
+    // that linked to `/late-signal` rather than bouncing through it into another `/login`.
+    await page.goBack();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('heading', { name: 'Test pages' })).toBeVisible();
   });
 
   /*

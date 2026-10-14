@@ -30,6 +30,18 @@ those.
 
 ### Fixed
 
+- **A soft navigation onto a page whose render fails no longer leaves the tab dead.** A flight payload
+  commits its `200 text/x-component` status before anything can fail, so a render that throws rides the
+  payload as an error row; React throws while applying it, and with no boundary at the root it tears the
+  root down. The address bar had already committed to the destination, so every later Back, Forward and
+  link click wrote into a root that no longer existed and the document stayed on the fatal panel or blank.
+  When an uncaught error lands while a payload is still on its way to the screen, the runtime now asks the
+  server for the destination as a real document — the app's `error` page, rendered fresh — which rebuilds
+  a live root. The fatal panel waits for that load rather than flashing ahead of it, and is what remains
+  when one is refused or swallowed. A failure a load cannot recover — an action reply, which a GET of the
+  page does not re-run, the initial payload, or an error under a tree that already committed — keeps the
+  panel immediately, so a deterministic client fault cannot reload the tab forever.
+
 - **A `Vary` an app sets in middleware survives a prerendered page.** The prerendered branch built its
   response with `vary: RSC` in the header bag handed to `c.body(…)`, and that bag is applied over the
   headers the app prepared — so an app varying on `Accept-Language`, a cookie or a feature flag silently lost
@@ -63,6 +75,14 @@ those.
   one push is one entry: Back from the target returns to the page that started the navigation rather than to
   a URL that redirects again. A redirect that leaves the origin, or one that names a file, cannot be a
   same-document commit and becomes a real document load instead.
+
+- **A late `redirect()` no longer leaves the URL it was raised from in history.** A `redirect()` raised after
+  the shell was sent degrades to a digest, and the client's recovery navigated to the target as a push, so the
+  redirecting URL stayed as an entry: Back returned to it, raised the redirect again, and pushed another
+  target entry, and the visitor could never reach the page that linked there. The recovery now replaces the
+  entry the way a 30x does — as a soft replace where the tree still stands, and as a replacing document load
+  where it does not — and the same goes for a payload redirect that surfaces after its URL committed. An
+  action reply, which re-renders the page it was called from, keeps its push.
 
 - **Back now cancels a suspended navigation and restores the last committed payload.** A destination whose
   render was waiting on a client resource could outlive the traversal that abandoned it: the address bar

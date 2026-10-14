@@ -402,21 +402,30 @@ const documentNavigation = Symbol('rshono:document-navigation');
  * its Suspense fallback with no second document ever arriving, and how a late `redirect()` moved the address
  * bar to a page it then failed to render.
  *
+ * `replace` puts the loaded document in place of the current entry rather than after it, which is what a
+ * redirect recovery owes: the entry being left is the URL that raised the redirect, and a 30x would have
+ * replaced it, so Back must reach whatever preceded it rather than the URL that redirects again.
+ *
  * The mark rides the navigation itself, through `info`, so the listener recognizes the event that owns it
  * instead of consuming a flag set in advance. There is no state to clear and none to leak: a navigation the
  * browser refuses cannot make the next one a full load. Below the Navigation API there is no interception to
  * opt out of, and `location.*` is already a document load.
  */
-function loadDocument(href?: string): void {
+function loadDocument(href?: string, { replace = false }: { replace?: boolean } = {}): void {
   finishAttempt(activeAttempt, { kind: 'document-navigation' });
   if (!canSoftNavigate) {
     if (href === undefined) window.location.reload();
+    else if (replace) window.location.replace(href);
     else window.location.assign(href);
     return;
   }
 
   try {
-    settle(href === undefined ? navigation.reload({ info: documentNavigation }) : navigation.navigate(href, { info: documentNavigation }));
+    settle(
+      href === undefined
+        ? navigation.reload({ info: documentNavigation })
+        : navigation.navigate(href, { history: replace ? 'replace' : 'auto', info: documentNavigation }),
+    );
   } catch {
     // The Navigation API refuses a document that is not fully active — it is unloading — and a URL it cannot
     // parse. Both callers are recovery paths, where a throw here becomes an unhandled rejection rather than
@@ -424,6 +433,7 @@ function loadDocument(href?: string): void {
     // refusal (the same unparseable URL) is swallowed because there is then no load left to make.
     try {
       if (href === undefined) window.location.reload();
+      else if (replace) window.location.replace(href);
       else window.location.assign(href);
     } catch {
       // Nothing to navigate to. The caller is already recovering from a failure, and the address bar still
@@ -538,8 +548,12 @@ function refresh(): Promise<NavigationOutcome> {
   return requestNavigation(attempt, () => navigation.reload({ info: attempt }));
 }
 
-/** How long the recovery reload is given to replace this document before the panel is painted instead. */
-const RELOAD_GRACE_MS = 2000;
+/**
+ * How long a recovery document load is given to replace this one before the framework paints the panel the
+ * load stands in for. Both recoveries — a late `notFound()` and a payload whose render tore the root down —
+ * ask the browser for a real document, and this timer is all that is left when one is refused or swallowed.
+ */
+const RECOVERY_GRACE_MS = 2000;
 
 /** The `sessionStorage` key bounding the recovery reload for one URL. Spent here, released in {@link main}. */
 const lateNotFoundKey = (): string => `rshono:late-not-found:${documentUrl()}`;
@@ -584,7 +598,7 @@ function reloadOnceForLateNotFound(): void {
   // coming and nothing said. The panel is the honest answer in that case too.
   setTimeout(() => {
     if (!document.querySelector('[data-rshono-fatal]')) showLateNotFound();
-  }, RELOAD_GRACE_MS);
+  }, RECOVERY_GRACE_MS);
 }
 
 /**
@@ -593,8 +607,13 @@ function reloadOnceForLateNotFound(): void {
  *
  * `hard` forces a full document load, for signals that surfaced *through React*: it unmounts the root on
  * an uncaught error, leaving no live tree to soft-navigate with.
+ *
+ * A redirect is followed *replacing* the entry that raised it, the way a 30x replaces the URL that answered
+ * with one. `history` lets the action-reply paths that must not — the fetch catch, and a digest surfacing
+ * through React during the reply's render — keep the push they have always had. `notFound()` has nowhere to
+ * go but a reload, and a reload is its own entry already.
  */
-function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean } = {}): boolean {
+function handleControlDigest(error: unknown, { hard = false, history = 'replace' }: { hard?: boolean; history?: 'push' | 'replace' } = {}): boolean {
   const digest = (error as { digest?: unknown } | null)?.digest;
   if (!isControlDigest(digest)) return false;
   const redirect = parseRedirectDigest(digest);
@@ -602,7 +621,10 @@ function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean 
     reloadOnceForLateNotFound();
   } else if (hard) {
     // The URL is resolved first: a malformed location then throws here, before any navigation is asked for.
-    loadDocument(new URL(redirect.location, window.location.href).href);
+    // Replacing is what keeps the URL that raised the redirect from becoming an entry Back bounces through.
+    loadDocument(new URL(redirect.location, window.location.href).href, { replace: history === 'replace' });
+  } else if (history === 'replace') {
+    void replace(redirect.location);
   } else {
     void push(redirect.location);
   }
@@ -759,6 +781,27 @@ function resetFocus(): void {
 }
 
 /**
+ * Owns one payload render's completion and post-commit work, even when React retries or supersedes another
+ * render. `commit` runs the post-commit callback and resolves; `supersede` releases the waiter without
+ * running that callback; `fail` rejects it because React has torn the tree down and it never will.
+ */
+type RenderRecord = {
+  payload: RscPayload;
+  href: string;
+  committed: Promise<void>;
+  commit: () => void;
+  supersede: () => void;
+  fail: (error: unknown) => void;
+  /**
+   * Whether a document load can recover this render when React tears it down before it commits. A navigation
+   * payload names a URL that renders the failure again — the server answers its document with the app's error
+   * page — so the load is the way back. An action reply does not: a GET of the same URL does not re-run the
+   * action, so a load would silently discard the error, and the fatal panel is the answer instead.
+   */
+  recoversByLoad: boolean;
+};
+
+/**
  * Puts a payload on screen, resolving once React has committed it. Replaced by `BrowserRoot`'s own on mount;
  * the default covers the window before hydration, where `setServerCallback` is already registered but there
  * is no root to update — a reload is the honest answer, and nothing after it needs to run.
@@ -767,10 +810,41 @@ function resetFocus(): void {
  * in the DOM and before the browser paints, which is the only moment a `#hash` target exists and the
  * pre-scroll position has not been shown.
  */
-let setPayload: (payload: RscPayload, afterCommit?: () => void) => Promise<void> = () => {
+let setPayload: (payload: RscPayload, afterCommit?: () => void, options?: { recoversByLoad?: boolean }) => Promise<void> = () => {
   window.location.reload();
   return new Promise<void>(() => {});
 };
+
+/**
+ * The payload {@link setPayload} handed React that is still waiting to commit, or `undefined` once it has.
+ *
+ * Read by `onUncaughtError`, where React has decided to unmount the root. A navigation payload that never
+ * committed is the one case a document load can still repair: the URL already names its destination, and
+ * every recovery the runtime has — `popstate`, a link click, `setPayload` — writes into a root that no longer
+ * exists. The server answers that document request with the app's error page, which is a root of its own. An
+ * action reply is not: a GET of the URL it was called from does not re-run the action, so the page renders as
+ * if nothing had happened and the panel is the answer. Deliberately `undefined` for the initial payload and
+ * cleared as soon as a render commits: a deterministic client fault must reach the fatal panel rather than
+ * reload the tab forever.
+ *
+ * Failing the render rejects the commit promise rather than settling it as a success, so every waiter —
+ * `loadPayload`'s caller, the prepared handler — learns the render it asked for has failed and can take its
+ * recovery branch. A render React is only suspending is not failed: it has not given up on it, and neither
+ * may the navigation.
+ */
+let pendingRender: RenderRecord | undefined;
+
+/**
+ * The history mode for a `redirect()` that surfaced through React, where {@link pendingRender} is the render
+ * that raised it. A navigation payload names the URL that raised the redirect, so the redirect replaces that
+ * entry. An action reply re-renders the page the visitor is already on — a GET of it does not re-run the
+ * action — so its redirect keeps the push the action's other redirect paths have, and Back returns to the
+ * page that submitted the form. `undefined` — the initial payload, or a render past its commit — is not an
+ * action reply and replaces.
+ */
+function controlDigestHistory(): 'push' | 'replace' {
+  return pendingRender?.recoversByLoad === false ? 'push' : 'replace';
+}
 
 /**
  * Re-dispatches the payload already waiting to commit, for {@link loadPayload}'s lost-ping retry. Unlike
@@ -800,7 +874,9 @@ let currentNavigation = 0;
 /** An urgent traversal releases a suspended destination in favor of the last committed payload. */
 function restoreCommittedPayload(payload: RscPayload): void {
   currentNavigation++;
-  void setPayload(payload);
+  // The payload has rendered before, but an uncaught error would still tear the root down. Nothing awaits
+  // this commit, so the rejection needs a consumer of its own to reach the document-load recovery.
+  void setPayload(payload).catch(() => loadDocument());
 }
 
 /**
@@ -908,10 +984,12 @@ function loadPayload(url: string, { signal, afterCommit, attempt, prepared }: Lo
     // would repaint a page the user has left.
     if (stale()) return;
     if (nextPayload.redirect) {
+      // Replacing for the same reason as {@link handleControlDigest}: the URL whose payload carried the
+      // redirect is the entry being left, and a push would make Back bounce through it into the same redirect.
       if (attempt) {
         attempt.hop++;
-        void navigateAttempt(nextPayload.redirect, 'push', attempt);
-      } else void push(nextPayload.redirect);
+        void navigateAttempt(nextPayload.redirect, 'replace', attempt);
+      } else void replace(nextPayload.redirect);
       return;
     }
     // The fetch crossed an await, so its payload update needs a new synchronous transition scope.
@@ -922,21 +1000,30 @@ function loadPayload(url: string, { signal, afterCommit, attempt, prepared }: Lo
       navigationModels.set(controller, nextPayload);
       entry.applied = true;
       committed = setPayload(nextPayload, afterCommit);
-      void committed.then(() => (committedSettled = true));
+      // Either way this render is settled, so the lost-ping retry below must not wait for it or re-apply it:
+      // a failed render would re-enter a root React has already torn down.
+      void committed.then(
+        () => (committedSettled = true),
+        () => (committedSettled = true),
+      );
     });
 
     // This payload is on screen, so every fetch it superseded is reading into a tree React has replaced.
     // Stopping them now cannot reject a chunk the committed tree holds — see {@link navigationFetches}.
     // Only the older ones: a newer navigation may have started while this payload was in flight, and its
     // fetch is the one the screen is waiting for.
-    void committed?.then(() => {
-      if (renderedModel !== nextPayload) return;
-      navigationFetches = navigationFetches.filter((fetch) => {
-        if (fetch.navigation >= navigation) return true;
-        fetch.controller.abort();
-        return false;
-      });
-    });
+    void committed?.then(
+      () => {
+        if (renderedModel !== nextPayload) return;
+        navigationFetches = navigationFetches.filter((fetch) => {
+          if (fetch.navigation >= navigation) return true;
+          fetch.controller.abort();
+          return false;
+        });
+      },
+      // A rejected commit is the caller's to report; this chain only exists to reap older fetches.
+      () => {},
+    );
     // A streamed payload can suspend a transition on a flight chunk that resolves after the shell without
     // React ever pinging the suspended lane back, which strands the navigation on the previous tree. The
     // chunks have all landed by the time the stream closes, so one re-application — still a transition, so a
@@ -1219,18 +1306,18 @@ async function main() {
   if (canSoftNavigate) readStoredScrollPositions();
   const restored = scrollPointFor(currentEntryKey());
 
-  /** Owns completion and post-commit work even when React retries or supersedes another render. */
-  type RenderRecord = { payload: RscPayload; href: string; committed: Promise<void>; commit: () => void; supersede: () => void };
   /**
    * Creates a one-shot completion for this render. Superseding it releases its waiter without
-   * running scroll/focus work; committing runs that work before the browser paints.
+   * running scroll/focus work; committing runs that work before the browser paints; failing
+   * releases the waiter with the reason the render never will do either.
    */
-  function createRender(payload: RscPayload, href: string, afterCommit?: () => void): RenderRecord {
-    const { promise, resolve } = Promise.withResolvers<void>();
+  function createRender(payload: RscPayload, href: string, afterCommit?: () => void, recoversByLoad = true): RenderRecord {
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
     let finished = false;
     return {
       payload,
       href,
+      recoversByLoad,
       committed: promise,
       commit: () => {
         if (finished) return;
@@ -1242,6 +1329,13 @@ async function main() {
       supersede: () => {
         finished = true;
         resolve();
+      },
+      // React tore the tree down, so this render never commits. Rejecting is what settles the navigation's
+      // `finished` and the prepared handler; see {@link pendingRender}.
+      fail: (error: unknown) => {
+        if (finished) return;
+        finished = true;
+        reject(error);
       },
     };
   }
@@ -1259,12 +1353,13 @@ async function main() {
     const [revision, reviseCommit] = React.useState(0);
 
     React.useLayoutEffect(() => {
-      setPayload = (next, afterCommit) => {
-        const scheduled = createRender(next, documentUrl(), afterCommit);
+      setPayload = (next, afterCommit, { recoversByLoad = true } = {}) => {
+        const scheduled = createRender(next, documentUrl(), afterCommit, recoversByLoad);
         scheduledRender.current.supersede();
         scheduledRender.current = scheduled;
         currentPayload.current = next;
         renders.set(next, scheduled);
+        pendingRender = scheduled;
         setPayloadState(next);
         // A restoration to the same payload still owns a new commit and post-commit callback.
         reviseCommit((value) => value + 1);
@@ -1282,6 +1377,9 @@ async function main() {
       if (!render) return;
       renderedUrl = render.href;
       renderedModel = payload;
+      // Only this render's own completion clears it: an older record can commit late (a re-apply or a bailed
+      // transition), and it must not drop the newer render `onUncaughtError` would have to fail.
+      if (pendingRender === render) pendingRender = undefined;
       render.commit();
       navigationFetches = navigationFetches.filter((fetch) => {
         if (fetch.navigation >= currentNavigation || navigationModels.get(fetch.controller) === payload) return true;
@@ -1318,7 +1416,9 @@ async function main() {
       payload = await createFromFetch<RscPayload>(payloadResponse(request), { temporaryReferences });
       if (documentUrl() === calledFrom) cancelNavigationPreparation();
     } catch (error) {
-      if (handleControlDigest(error)) return undefined;
+      // The current entry is the page the action was called from, not a redirecting one, so its redirect
+      // pushes the target after it — the entry a Back is owed is the page that submitted the form.
+      if (handleControlDigest(error, { history: 'push' })) return undefined;
       throw error;
     }
     if (payload.redirect) {
@@ -1332,10 +1432,16 @@ async function main() {
       rejectAttempt(activeAttempt, new DOMException('Navigation superseded by server action', 'AbortError'));
       abortNavigationFetches((fetch) => !fetch.applied);
       React.startTransition(() => {
-        const committed = setPayload(payload);
-        void committed.then(() => {
-          abortNavigationFetches((fetch) => fetch.navigation < actionGeneration);
-        });
+        const committed = setPayload(payload, undefined, { recoversByLoad: false });
+        void committed.then(
+          () => {
+            abortNavigationFetches((fetch) => fetch.navigation < actionGeneration);
+          },
+          // An action reply that tears the tree down has no caller awaiting the commit, so the rejection is
+          // consumed here rather than left unhandled. The panel `onUncaughtError` painted is the recovery:
+          // the page a document load would render does not re-run the action that failed.
+          () => {},
+        );
       });
     }
     if (payload.notFound) return undefined;
@@ -1370,15 +1476,31 @@ async function main() {
   hydrateRoot(document, <BrowserRoot />, {
     formState: initialPayload.formState,
     onCaughtError: (error, errorInfo) => {
-      if (handleControlDigest(error, { hard: true })) return;
+      if (handleControlDigest(error, { hard: true, history: controlDigestHistory() })) return;
       // A boundary handled it and the tree is intact, so no overlay over the app's own fallback.
       console.error(error, errorInfo.componentStack ?? '');
     },
     onUncaughtError: (error, errorInfo) => {
-      if (handleControlDigest(error, { hard: true })) return;
+      if (handleControlDigest(error, { hard: true, history: controlDigestHistory() })) return;
       // Nothing caught it, so React tears the root down — and the root is `document`.
       globalThis.reportError(error);
-      showFatal(error, errorInfo.componentStack);
+      const recover = pendingRender;
+      // A navigation payload is the case a document load can still repair: the URL already names its
+      // destination, and the server answers that document request with the app's error page. An action reply
+      // is not — a GET of the URL it was called from does not re-run the action, so the page would render as
+      // if nothing had happened and the load would silently discard the error. The panel is the answer, and it
+      // is painted now because no load is coming to replace it. See {@link pendingRender}.
+      if (!recover?.recoversByLoad) {
+        showFatal(error, errorInfo.componentStack);
+        recover?.fail(error);
+        return;
+      }
+      // The panel waits for that load to arrive. Painted now, it flashes over the error page on its way and
+      // vanishes when the page commits; the timer dies with the document a successful load replaces, so the
+      // panel only appears when the recovery was never made. A render React is only suspending is not failed;
+      // see {@link pendingRender}.
+      setTimeout(() => showFatal(error, errorInfo.componentStack), RECOVERY_GRACE_MS);
+      recover.fail(error);
     },
   });
 
