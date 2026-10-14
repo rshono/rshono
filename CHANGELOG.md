@@ -30,6 +30,10 @@ those.
 
 ### Fixed
 
+- **Native navigation completion waits for a prepared payload to render.** On browsers with precommit support,
+  `navigation.navigate().finished` and `navigatesuccess` no longer fire while a client-side render is still
+  suspended and the previous page remains on screen.
+
 - **A failed precommit fetch no longer aborts a soft navigation into silence.** The precommit handler meant
   the post-commit `loadDocument()` fallback could never run for a `push`/`replace`, so a link click whose
   payload the server refused did nothing at all. The failure now asks the browser for the destination as a
