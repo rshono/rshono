@@ -773,6 +773,18 @@ let setPayload: (payload: RscPayload, afterCommit?: () => void) => Promise<void>
 };
 
 /**
+ * Whether a payload {@link setPayload} handed React is still waiting to commit.
+ *
+ * Read by `onUncaughtError`, where React has decided to unmount the root. A payload that never committed is
+ * the one case a document load can still repair: the URL already names its destination, and every recovery
+ * the runtime has — `popstate`, a link click, `setPayload` — writes into a root that no longer exists. The
+ * server answers that document request with the app's error page, which is a root of its own. Deliberately
+ * false for the initial payload and for an error under a tree that had committed: a deterministic client
+ * fault must reach the fatal panel rather than reload the tab forever.
+ */
+let payloadPending = false;
+
+/**
  * Re-dispatches the payload already waiting to commit, for {@link loadPayload}'s lost-ping retry. Unlike
  * {@link setPayload} it creates and releases no commit promise, so re-rendering the same payload cannot
  * resolve the navigation's commit early. Assigned with {@link setPayload} by `BrowserRoot`.
@@ -1265,6 +1277,7 @@ async function main() {
         scheduledRender.current = scheduled;
         currentPayload.current = next;
         renders.set(next, scheduled);
+        payloadPending = true;
         setPayloadState(next);
         // A restoration to the same payload still owns a new commit and post-commit callback.
         reviseCommit((value) => value + 1);
@@ -1282,6 +1295,7 @@ async function main() {
       if (!render) return;
       renderedUrl = render.href;
       renderedModel = payload;
+      payloadPending = false;
       render.commit();
       navigationFetches = navigationFetches.filter((fetch) => {
         if (fetch.navigation >= currentNavigation || navigationModels.get(fetch.controller) === payload) return true;
@@ -1379,6 +1393,13 @@ async function main() {
       // Nothing caught it, so React tears the root down — and the root is `document`.
       globalThis.reportError(error);
       showFatal(error, errorInfo.componentStack);
+      // A payload that never committed is the one case the fatal panel cannot cover for long: the address
+      // bar names a page this document cannot paint, so Back, Forward and every later link click are no-ops
+      // for the life of the tab. Asking the server for the destination as a real document is what rebuilds a
+      // root — it answers with the app's error page — and `loadDocument` marks the navigation as its own so
+      // the router steps aside. The flag keeps the reload to a payload that was on its way in; see
+      // {@link payloadPending}.
+      if (payloadPending) loadDocument();
     },
   });
 

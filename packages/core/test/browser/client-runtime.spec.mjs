@@ -605,6 +605,35 @@ test.describe('no blank screens', () => {
     await expect(overlay).not.toContainText('Component stack:');
     expect(consoleErrors.join('\n')).toContain('the client runtime failed to start');
   });
+
+  /*
+   * The other way a render can tear the tree down: not a broken document, but a flight payload whose root
+   * row is an error. `/crash?render=1` commits its payload as a 200 before the render fails, so the failure
+   * rides the payload as an error row and React throws while applying it. There is no root boundary on
+   * purpose — the app's own boundaries own their errors — so React unmounts the root, and the address bar
+   * already names the destination. The runtime answers that by asking the server for the destination as a
+   * real document, which the `error` page answers from a fresh render: a live root, and a history entry the
+   * next traversal can leave. Without it the URL moves under Back and nothing repaints, for the life of the
+   * tab.
+   */
+  test('a navigation payload that fails to render reloads instead of killing the root', async ({ page }) => {
+    await page.goto('/');
+    const before = await markDocument(page);
+
+    // The route index's variant link, which soft-navigates — the repro from the report.
+    await page.getByRole('link', { name: 'throw during render' }).click();
+
+    // The recovery is the app's error page as a document, not the fatal overlay over a dead tree. The
+    // overlay title is a div, so a heading can only be the new document; the id is what proves it is one.
+    await expect(page.getByRole('heading', { name: 'Something went wrong' })).toBeVisible();
+    await expect(page.locator('[data-rshono-fatal]')).toHaveCount(0);
+    expect(await documentId(page), 'the recovery must rebuild the root with a real document load').not.toBe(before);
+
+    // And the tab is alive again: Back leaves this document for the entry that preceded it.
+    await page.goBack();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('heading', { name: 'Test pages' })).toBeVisible();
+  });
 });
 
 /*

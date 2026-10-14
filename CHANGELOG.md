@@ -30,6 +30,16 @@ those.
 
 ### Fixed
 
+- **A soft navigation onto a page whose render fails no longer leaves the tab dead.** A flight payload
+  commits its `200 text/x-component` status before anything can fail, so a render that throws rides the
+  payload as an error row; React throws while applying it, and with no boundary at the root it tears the
+  root down. The address bar had already committed to the destination, so every later Back, Forward and
+  link click wrote into a root that no longer existed and the document stayed on the fatal panel or blank.
+  When an uncaught error lands while a payload is still on its way to the screen, the runtime now asks the
+  server for the destination as a real document — the app's `error` page, rendered fresh — which rebuilds
+  a live root. The initial payload and an error under a tree that already committed keep the fatal panel,
+  so a deterministic client fault cannot reload the tab forever.
+
 - **A `Vary` an app sets in middleware survives a prerendered page.** The prerendered branch built its
   response with `vary: RSC` in the header bag handed to `c.body(…)`, and that bag is applied over the
   headers the app prepared — so an app varying on `Accept-Language`, a cookie or a feature flag silently lost
