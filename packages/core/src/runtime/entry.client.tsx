@@ -759,6 +759,20 @@ function resetFocus(): void {
 }
 
 /**
+ * Owns one payload render's completion and post-commit work, even when React retries or supersedes another
+ * render. `commit` runs the post-commit callback and resolves; `supersede` releases the waiter without
+ * running that callback; `fail` rejects it because React has torn the tree down and it never will.
+ */
+type RenderRecord = {
+  payload: RscPayload;
+  href: string;
+  committed: Promise<void>;
+  commit: () => void;
+  supersede: () => void;
+  fail: (error: unknown) => void;
+};
+
+/**
  * Puts a payload on screen, resolving once React has committed it. Replaced by `BrowserRoot`'s own on mount;
  * the default covers the window before hydration, where `setServerCallback` is already registered but there
  * is no root to update — a reload is the honest answer, and nothing after it needs to run.
@@ -773,16 +787,21 @@ let setPayload: (payload: RscPayload, afterCommit?: () => void) => Promise<void>
 };
 
 /**
- * Whether a payload {@link setPayload} handed React is still waiting to commit.
+ * The payload {@link setPayload} handed React that is still waiting to commit, or `undefined` once it has.
  *
  * Read by `onUncaughtError`, where React has decided to unmount the root. A payload that never committed is
  * the one case a document load can still repair: the URL already names its destination, and every recovery
  * the runtime has — `popstate`, a link click, `setPayload` — writes into a root that no longer exists. The
  * server answers that document request with the app's error page, which is a root of its own. Deliberately
- * false for the initial payload and for an error under a tree that had committed: a deterministic client
- * fault must reach the fatal panel rather than reload the tab forever.
+ * `undefined` for the initial payload and cleared as soon as a render commits: a deterministic client fault
+ * must reach the fatal panel rather than reload the tab forever.
+ *
+ * Failing the render rejects the commit promise rather than settling it as a success, so every waiter —
+ * `loadPayload`'s caller, the prepared handler — learns the render it asked for has failed and can take its
+ * document-load branch. A render React is only suspending is not failed: it has not given up on it, and
+ * neither may the navigation.
  */
-let payloadPending = false;
+let pendingRender: RenderRecord | undefined;
 
 /**
  * Re-dispatches the payload already waiting to commit, for {@link loadPayload}'s lost-ping retry. Unlike
@@ -812,7 +831,9 @@ let currentNavigation = 0;
 /** An urgent traversal releases a suspended destination in favor of the last committed payload. */
 function restoreCommittedPayload(payload: RscPayload): void {
   currentNavigation++;
-  void setPayload(payload);
+  // The payload has rendered before, but an uncaught error would still tear the root down. Nothing awaits
+  // this commit, so the rejection needs a consumer of its own to reach the document-load recovery.
+  void setPayload(payload).catch(() => loadDocument());
 }
 
 /**
@@ -934,21 +955,30 @@ function loadPayload(url: string, { signal, afterCommit, attempt, prepared }: Lo
       navigationModels.set(controller, nextPayload);
       entry.applied = true;
       committed = setPayload(nextPayload, afterCommit);
-      void committed.then(() => (committedSettled = true));
+      // Either way this render is settled, so the lost-ping retry below must not wait for it or re-apply it:
+      // a failed render would re-enter a root React has already torn down.
+      void committed.then(
+        () => (committedSettled = true),
+        () => (committedSettled = true),
+      );
     });
 
     // This payload is on screen, so every fetch it superseded is reading into a tree React has replaced.
     // Stopping them now cannot reject a chunk the committed tree holds — see {@link navigationFetches}.
     // Only the older ones: a newer navigation may have started while this payload was in flight, and its
     // fetch is the one the screen is waiting for.
-    void committed?.then(() => {
-      if (renderedModel !== nextPayload) return;
-      navigationFetches = navigationFetches.filter((fetch) => {
-        if (fetch.navigation >= navigation) return true;
-        fetch.controller.abort();
-        return false;
-      });
-    });
+    void committed?.then(
+      () => {
+        if (renderedModel !== nextPayload) return;
+        navigationFetches = navigationFetches.filter((fetch) => {
+          if (fetch.navigation >= navigation) return true;
+          fetch.controller.abort();
+          return false;
+        });
+      },
+      // A rejected commit is the caller's to report; this chain only exists to reap older fetches.
+      () => {},
+    );
     // A streamed payload can suspend a transition on a flight chunk that resolves after the shell without
     // React ever pinging the suspended lane back, which strands the navigation on the previous tree. The
     // chunks have all landed by the time the stream closes, so one re-application — still a transition, so a
@@ -1231,14 +1261,13 @@ async function main() {
   if (canSoftNavigate) readStoredScrollPositions();
   const restored = scrollPointFor(currentEntryKey());
 
-  /** Owns completion and post-commit work even when React retries or supersedes another render. */
-  type RenderRecord = { payload: RscPayload; href: string; committed: Promise<void>; commit: () => void; supersede: () => void };
   /**
    * Creates a one-shot completion for this render. Superseding it releases its waiter without
-   * running scroll/focus work; committing runs that work before the browser paints.
+   * running scroll/focus work; committing runs that work before the browser paints; failing
+   * releases the waiter with the reason the render never will do either.
    */
   function createRender(payload: RscPayload, href: string, afterCommit?: () => void): RenderRecord {
-    const { promise, resolve } = Promise.withResolvers<void>();
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
     let finished = false;
     return {
       payload,
@@ -1254,6 +1283,13 @@ async function main() {
       supersede: () => {
         finished = true;
         resolve();
+      },
+      // React tore the tree down, so this render never commits. Rejecting is what settles the navigation's
+      // `finished` and the prepared handler; see {@link pendingRender}.
+      fail: (error: unknown) => {
+        if (finished) return;
+        finished = true;
+        reject(error);
       },
     };
   }
@@ -1277,7 +1313,7 @@ async function main() {
         scheduledRender.current = scheduled;
         currentPayload.current = next;
         renders.set(next, scheduled);
-        payloadPending = true;
+        pendingRender = scheduled;
         setPayloadState(next);
         // A restoration to the same payload still owns a new commit and post-commit callback.
         reviseCommit((value) => value + 1);
@@ -1295,7 +1331,9 @@ async function main() {
       if (!render) return;
       renderedUrl = render.href;
       renderedModel = payload;
-      payloadPending = false;
+      // Only this render's own completion clears it: an older record can commit late (a re-apply or a bailed
+      // transition), and it must not drop the newer render `onUncaughtError` would have to fail.
+      if (pendingRender === render) pendingRender = undefined;
       render.commit();
       navigationFetches = navigationFetches.filter((fetch) => {
         if (fetch.navigation >= currentNavigation || navigationModels.get(fetch.controller) === payload) return true;
@@ -1347,9 +1385,14 @@ async function main() {
       abortNavigationFetches((fetch) => !fetch.applied);
       React.startTransition(() => {
         const committed = setPayload(payload);
-        void committed.then(() => {
-          abortNavigationFetches((fetch) => fetch.navigation < actionGeneration);
-        });
+        void committed.then(
+          () => {
+            abortNavigationFetches((fetch) => fetch.navigation < actionGeneration);
+          },
+          // An action reply that tears the tree down has no caller awaiting the commit, so the rejection is
+          // the document-load recovery's only route; see {@link pendingRender}.
+          () => loadDocument(),
+        );
       });
     }
     if (payload.notFound) return undefined;
@@ -1395,11 +1438,10 @@ async function main() {
       showFatal(error, errorInfo.componentStack);
       // A payload that never committed is the one case the fatal panel cannot cover for long: the address
       // bar names a page this document cannot paint, so Back, Forward and every later link click are no-ops
-      // for the life of the tab. Asking the server for the destination as a real document is what rebuilds a
-      // root — it answers with the app's error page — and `loadDocument` marks the navigation as its own so
-      // the router steps aside. The flag keeps the reload to a payload that was on its way in; see
-      // {@link payloadPending}.
-      if (payloadPending) loadDocument();
+      // for the life of the tab. Failing the render rejects the commit its navigation is waiting on, and the
+      // caller's rejection branch asks the server for the destination as a real document — the app's error
+      // page, a fresh root. A render React is only suspending is not failed; see {@link pendingRender}.
+      pendingRender?.fail(error);
     },
   });
 

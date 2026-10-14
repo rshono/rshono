@@ -164,6 +164,9 @@ export function listenNavigationPreparation({
               notify();
             }
             // The browser's `finished`, `navigatesuccess`, and focus reset must wait for the render too.
+            // `apply` settles even when that render fails — the payload's commit is rejected, and its
+            // caller's rejection branch asks for a document load — so a payload that can never commit does
+            // not leave the navigation open. Only a render React is still suspending stays pending.
             return apply(event, prepared);
           });
         } catch (error) {
