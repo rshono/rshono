@@ -402,21 +402,30 @@ const documentNavigation = Symbol('rshono:document-navigation');
  * its Suspense fallback with no second document ever arriving, and how a late `redirect()` moved the address
  * bar to a page it then failed to render.
  *
+ * `replace` puts the loaded document in place of the current entry rather than after it, which is what a
+ * redirect recovery owes: the entry being left is the URL that raised the redirect, and a 30x would have
+ * replaced it, so Back must reach whatever preceded it rather than the URL that redirects again.
+ *
  * The mark rides the navigation itself, through `info`, so the listener recognizes the event that owns it
  * instead of consuming a flag set in advance. There is no state to clear and none to leak: a navigation the
  * browser refuses cannot make the next one a full load. Below the Navigation API there is no interception to
  * opt out of, and `location.*` is already a document load.
  */
-function loadDocument(href?: string): void {
+function loadDocument(href?: string, { replace = false }: { replace?: boolean } = {}): void {
   finishAttempt(activeAttempt, { kind: 'document-navigation' });
   if (!canSoftNavigate) {
     if (href === undefined) window.location.reload();
+    else if (replace) window.location.replace(href);
     else window.location.assign(href);
     return;
   }
 
   try {
-    settle(href === undefined ? navigation.reload({ info: documentNavigation }) : navigation.navigate(href, { info: documentNavigation }));
+    settle(
+      href === undefined
+        ? navigation.reload({ info: documentNavigation })
+        : navigation.navigate(href, { history: replace ? 'replace' : 'auto', info: documentNavigation }),
+    );
   } catch {
     // The Navigation API refuses a document that is not fully active — it is unloading — and a URL it cannot
     // parse. Both callers are recovery paths, where a throw here becomes an unhandled rejection rather than
@@ -424,6 +433,7 @@ function loadDocument(href?: string): void {
     // refusal (the same unparseable URL) is swallowed because there is then no load left to make.
     try {
       if (href === undefined) window.location.reload();
+      else if (replace) window.location.replace(href);
       else window.location.assign(href);
     } catch {
       // Nothing to navigate to. The caller is already recovering from a failure, and the address bar still
@@ -593,8 +603,13 @@ function reloadOnceForLateNotFound(): void {
  *
  * `hard` forces a full document load, for signals that surfaced *through React*: it unmounts the root on
  * an uncaught error, leaving no live tree to soft-navigate with.
+ *
+ * A redirect is followed *replacing* the entry that raised it, the way a 30x replaces the URL that answered
+ * with one. `history` lets the one caller that must not — an action reply, which re-renders the page the
+ * visitor is already on — keep the push it has always had. `notFound()` has nowhere to go but a reload, and a
+ * reload is its own entry already.
  */
-function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean } = {}): boolean {
+function handleControlDigest(error: unknown, { hard = false, history = 'replace' }: { hard?: boolean; history?: 'push' | 'replace' } = {}): boolean {
   const digest = (error as { digest?: unknown } | null)?.digest;
   if (!isControlDigest(digest)) return false;
   const redirect = parseRedirectDigest(digest);
@@ -602,7 +617,10 @@ function handleControlDigest(error: unknown, { hard = false }: { hard?: boolean 
     reloadOnceForLateNotFound();
   } else if (hard) {
     // The URL is resolved first: a malformed location then throws here, before any navigation is asked for.
-    loadDocument(new URL(redirect.location, window.location.href).href);
+    // Replacing is what keeps the URL that raised the redirect from becoming an entry Back bounces through.
+    loadDocument(new URL(redirect.location, window.location.href).href, { replace: history === 'replace' });
+  } else if (history === 'replace') {
+    void replace(redirect.location);
   } else {
     void push(redirect.location);
   }
@@ -941,10 +959,12 @@ function loadPayload(url: string, { signal, afterCommit, attempt, prepared }: Lo
     // would repaint a page the user has left.
     if (stale()) return;
     if (nextPayload.redirect) {
+      // Replacing for the same reason as {@link handleControlDigest}: the URL whose payload carried the
+      // redirect is the entry being left, and a push would make Back bounce through it into the same redirect.
       if (attempt) {
         attempt.hop++;
-        void navigateAttempt(nextPayload.redirect, 'push', attempt);
-      } else void push(nextPayload.redirect);
+        void navigateAttempt(nextPayload.redirect, 'replace', attempt);
+      } else void replace(nextPayload.redirect);
       return;
     }
     // The fetch crossed an await, so its payload update needs a new synchronous transition scope.
@@ -1370,7 +1390,9 @@ async function main() {
       payload = await createFromFetch<RscPayload>(payloadResponse(request), { temporaryReferences });
       if (documentUrl() === calledFrom) cancelNavigationPreparation();
     } catch (error) {
-      if (handleControlDigest(error)) return undefined;
+      // The current entry is the page the action was called from, not a redirecting one, so its redirect
+      // pushes the target after it — the entry a Back is owed is the page that submitted the form.
+      if (handleControlDigest(error, { history: 'push' })) return undefined;
       throw error;
     }
     if (payload.redirect) {

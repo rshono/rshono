@@ -654,12 +654,21 @@ test.describe('no blank screens', () => {
  */
 test.describe('late control signals', () => {
   test('a late redirect() lands on the target page, not just its URL', async ({ page }) => {
-    await page.goto('/late-signal');
+    // From the route index, so the push into `/late-signal` leaves an entry behind it: the redirect recovery
+    // has to replace that entry rather than add another after it.
+    await page.goto('/');
+    await page.getByRole('link', { name: '/late-signal', exact: true }).click();
 
     await expect(page).toHaveURL('/login');
     // The recovery is a real document load, so the URL moves whether or not the old tree rendered anything.
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
     await expect(page.locator('[data-section="loading"]')).toHaveCount(0, 'the page it left must be gone');
+
+    // A 30x replaces the URL that raised it, so the redirecting entry is gone with it: Back reaches the page
+    // that linked to `/late-signal` rather than bouncing through it into another `/login`.
+    await page.goBack();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('heading', { name: 'Test pages' })).toBeVisible();
   });
 
   /*

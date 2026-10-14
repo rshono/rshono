@@ -74,6 +74,14 @@ those.
   a URL that redirects again. A redirect that leaves the origin, or one that names a file, cannot be a
   same-document commit and becomes a real document load instead.
 
+- **A late `redirect()` no longer leaves the URL it was raised from in history.** A `redirect()` raised after
+  the shell was sent degrades to a digest, and the client's recovery navigated to the target as a push, so the
+  redirecting URL stayed as an entry: Back returned to it, raised the redirect again, and pushed another
+  target entry, and the visitor could never reach the page that linked there. The recovery now replaces the
+  entry the way a 30x does — as a soft replace where the tree still stands, and as a replacing document load
+  where it does not — and the same goes for a payload redirect that surfaces after its URL committed. An
+  action reply, which re-renders the page it was called from, keeps its push.
+
 - **Back now cancels a suspended navigation and restores the last committed payload.** A destination whose
   render was waiting on a client resource could outlive the traversal that abandoned it: the address bar
   returned to the previous entry while the screen stayed suspended, or the abandoned payload surfaced an
