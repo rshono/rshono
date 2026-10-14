@@ -620,6 +620,16 @@ test.describe('no blank screens', () => {
     await page.goto('/');
     const before = await markDocument(page);
 
+    // Record whether the fallback panel is ever painted in this document. The recovery is a document load
+    // that replaces it, taking any timer with it, so the old document is the only place the flash would
+    // happen; `sessionStorage` is how the next document hears about it.
+    await page.evaluate(() => {
+      sessionStorage.removeItem('fatal-shown');
+      new MutationObserver(() => {
+        if (document.querySelector('[data-rshono-fatal]')) sessionStorage.setItem('fatal-shown', '1');
+      }).observe(document, { childList: true, subtree: true });
+    });
+
     // The route index's variant link, which soft-navigates — the repro from the report.
     await page.getByRole('link', { name: 'throw during render' }).click();
 
@@ -627,6 +637,7 @@ test.describe('no blank screens', () => {
     // overlay title is a div, so a heading can only be the new document; the id is what proves it is one.
     await expect(page.getByRole('heading', { name: 'Something went wrong' })).toBeVisible();
     await expect(page.locator('[data-rshono-fatal]')).toHaveCount(0);
+    expect(await page.evaluate(() => sessionStorage.getItem('fatal-shown')), 'the panel must not flash over the error page on its way').toBeNull();
     expect(await documentId(page), 'the recovery must rebuild the root with a real document load').not.toBe(before);
 
     // And the tab is alive again: Back leaves this document for the entry that preceded it.

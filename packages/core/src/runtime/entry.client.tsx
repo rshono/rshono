@@ -548,8 +548,12 @@ function refresh(): Promise<NavigationOutcome> {
   return requestNavigation(attempt, () => navigation.reload({ info: attempt }));
 }
 
-/** How long the recovery reload is given to replace this document before the panel is painted instead. */
-const RELOAD_GRACE_MS = 2000;
+/**
+ * How long a recovery document load is given to replace this one before the framework paints the panel the
+ * load stands in for. Both recoveries — a late `notFound()` and a payload whose render tore the root down —
+ * ask the browser for a real document, and this timer is all that is left when one is refused or swallowed.
+ */
+const RECOVERY_GRACE_MS = 2000;
 
 /** The `sessionStorage` key bounding the recovery reload for one URL. Spent here, released in {@link main}. */
 const lateNotFoundKey = (): string => `rshono:late-not-found:${documentUrl()}`;
@@ -594,7 +598,7 @@ function reloadOnceForLateNotFound(): void {
   // coming and nothing said. The panel is the honest answer in that case too.
   setTimeout(() => {
     if (!document.querySelector('[data-rshono-fatal]')) showLateNotFound();
-  }, RELOAD_GRACE_MS);
+  }, RECOVERY_GRACE_MS);
 }
 
 /**
@@ -1457,13 +1461,22 @@ async function main() {
       if (handleControlDigest(error, { hard: true })) return;
       // Nothing caught it, so React tears the root down — and the root is `document`.
       globalThis.reportError(error);
-      showFatal(error, errorInfo.componentStack);
+      const recover = pendingRender;
+      if (!recover) {
+        showFatal(error, errorInfo.componentStack);
+        return;
+      }
       // A payload that never committed is the one case the fatal panel cannot cover for long: the address
       // bar names a page this document cannot paint, so Back, Forward and every later link click are no-ops
       // for the life of the tab. Failing the render rejects the commit its navigation is waiting on, and the
       // caller's rejection branch asks the server for the destination as a real document — the app's error
       // page, a fresh root. A render React is only suspending is not failed; see {@link pendingRender}.
-      pendingRender?.fail(error);
+      //
+      // The panel waits for that load to arrive. Painted now, it flashes over the error page on its way and
+      // vanishes when the page commits; the timer dies with the document a successful load replaces, so the
+      // panel only appears when the recovery was never made.
+      setTimeout(() => showFatal(error, errorInfo.componentStack), RECOVERY_GRACE_MS);
+      recover.fail(error);
     },
   });
 
