@@ -11,6 +11,8 @@ those.
 
 ## Unreleased
 
+## 1.0.0-rc.29
+
 ### Changed
 
 - **A soft `push` or `replace` fetches its flight payload before the URL commits, where the browser supports
@@ -90,6 +92,8 @@ those.
   abort as a render failure. An urgent traversal now releases the pending payload in favor of the committed
   one, and `useNavigation().pending` now tracks the navigation's own work rather than only a React
   transition, so a cancelled round-trip ends it.
+
+## 1.0.0-rc.28
 
 - **`rshono dev` drains the old server worker instead of terminating it between rebuilds.** A worker stopped
   with `terminate()` never runs its HTTP server's `close()`, so every response still being served — most
