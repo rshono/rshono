@@ -48,6 +48,9 @@ those.
   fetch, where the `URIError` became an unhandled rejection or escaped out of the callback. The literal text
   is now the fallback, the same one a malformed `#fragment` already takes, and the digest stays a redirect
   rather than reading as a `notFound()`.
+- **Native navigation completion waits for a prepared payload to render.** On browsers with precommit support,
+  `navigation.navigate().finished` and `navigatesuccess` no longer fire while a client-side render is still
+  suspended and the previous page remains on screen.
 
 - **A failed precommit fetch no longer aborts a soft navigation into silence.** The precommit handler meant
   the post-commit `loadDocument()` fallback could never run for a `push`/`replace`, so a link click whose

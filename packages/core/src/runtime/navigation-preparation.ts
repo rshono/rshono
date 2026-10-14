@@ -73,8 +73,8 @@ export type NavigationPreparationOptions = {
   shouldIntercept: (event: NavigateEvent) => boolean;
   /** Whether a URL can be committed in this document; one that names a file cannot. */
   canCommitInPlace: (href: string) => boolean;
-  /** Puts a prepared payload on screen once the URL has committed — the navigation's ordinary handler. */
-  apply: (event: NavigateEvent, prepared: PreparedNavigation) => void;
+  /** Puts a prepared payload on screen; resolves after its render commits. */
+  apply: (event: NavigateEvent, prepared: PreparedNavigation) => Promise<void>;
   /** Performs the real load a failed preparation would otherwise leave silent. */
   fallbackToDocument: (href: string) => void;
 };
@@ -163,7 +163,8 @@ export function listenNavigationPreparation({
               active = undefined;
               notify();
             }
-            apply(event, prepared);
+            // The browser's `finished`, `navigatesuccess`, and focus reset must wait for the render too.
+            return apply(event, prepared);
           });
         } catch (error) {
           const cancelled = event.signal.aborted || preparation?.controller.signal.aborted === true;
