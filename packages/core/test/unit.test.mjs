@@ -1454,6 +1454,17 @@ describe('control signals', () => {
       assert.equal(isControlDigest(digest), false, `${String(digest)} must not read as a control signal`);
     }
   });
+
+  test('a malformed escape is read as literal text rather than thrown', () => {
+    // The digest crosses a payload boundary and `parseRedirectDigest` runs on the client from React's error
+    // callbacks and from a rejected fetch, where a throw escapes as an unhandled rejection or out of the
+    // callback. `RedirectSignal` percent-encodes every target, so a malformed escape is corruption rather
+    // than a target — and the literal text is the better guess, the same fallback `jumpToAnchor` makes. It
+    // stays a redirect either way: answering `null` would make it read as a `notFound()`.
+    const corrupt = 'RSHONO_REDIRECT;307;%E0%A4%A';
+    assert.equal(isControlDigest(corrupt), true);
+    assert.deepEqual(parseRedirectDigest(corrupt), { location: '%E0%A4%A', status: 307 });
+  });
 });
 
 describe('RequestContext enumerability', () => {

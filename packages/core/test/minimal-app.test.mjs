@@ -462,3 +462,121 @@ test("a 'use client' page is refused whether or not something else comes first i
     assert.doesNotMatch(output, /build complete/, `${JSON.stringify(head)}: nothing that reads as the build having worked`);
   }
 });
+
+/*
+ * The prerendered branch builds its response before the response floor unwinds, so a header the app prepared
+ * with `c.header(...)` is applied *under* the bag `c.body(...)` is handed: a `vary` key in that bag replaces
+ * the prepared list rather than extending it. For `cache-control` that replacement is deliberate and the
+ * recipe says to set it after `await next()` — but `vary` is a list, and a dropped entry lets a shared cache
+ * serve one variant in place of another, which is the failure `varyWith` exists to prevent. The floor merges
+ * for the two page content types; this pins that the prerendered branch does the same, on a document and on
+ * the flight payload beside it, while a dynamic page (the floor's own path) keeps the app's entry too.
+ */
+test('a prerendered document merges the app’s Vary rather than replacing it', async () => {
+  const dir = appWithRoutes(HOME_AND("  { path: '/snapshot', render: 'static', component: () => import('./pages/snapshot') },\n"));
+  writeFileSync(
+    join(dir, 'src', 'pages', 'snapshot.tsx'),
+    'export default function Snapshot() {\n  return (\n    <html lang="en">\n      <body>\n        <h1 data-page="snapshot">snapshot</h1>\n      </body>\n    </html>\n  );\n}\n',
+  );
+  writeFileSync(
+    join(dir, 'src', 'server.ts'),
+    "import { Hono } from 'hono';\n\nconst server = new Hono();\nserver.use(async (c, next) => {\n  c.header('vary', 'accept-language');\n  await next();\n});\nexport default server;\n",
+  );
+
+  buildApp(dir);
+  const { base: appBase, child: appChild } = await startApp(dir, 'start');
+  try {
+    for (const { path, headers } of [
+      { path: '/snapshot', headers: {} },
+      { path: '/snapshot', headers: { RSC: '1' } },
+      { path: '/', headers: {} },
+    ]) {
+      const res = await fetch(`${appBase}${path}`, { headers });
+      assert.equal(
+        res.headers.get('vary'),
+        'accept-language, RSC',
+        `${path}${headers.RSC ? ' (flight)' : ''} must keep the app's entry and add the framework's`,
+      );
+      await res.text();
+    }
+  } finally {
+    await stopServer(appChild);
+  }
+});
+
+/*
+ * A disconnect aborts `c.req.raw.signal`, and both renders are handed that signal, so what they reject with
+ * is the abort. The two render callbacks treat that as "the client leaving, not a fault"; the top-level
+ * handler did not, so every closed tab was reported — `[rshono] request error: ... aborted` on stderr and to
+ * whatever `onServerError` forwards. The page awaits ahead of the shell so the abort lands inside the render
+ * rather than after it.
+ */
+test('a client that disconnects mid-render is not reported as a request error', async () => {
+  const dir = appWithRoutes(HOME_AND("  { path: '/slow', component: () => import('./pages/slow') },\n"));
+  writeFileSync(
+    join(dir, 'src', 'pages', 'slow.tsx'),
+    'export default async function Slow() {\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n  return (\n    <html lang="en">\n      <body>\n        <h1>slow</h1>\n      </body>\n    </html>\n  );\n}\n',
+  );
+
+  buildApp(dir);
+  const { base: appBase, child: appChild, getOutput } = await startApp(dir, 'start');
+  try {
+    const before = getOutput().length;
+    const controller = new AbortController();
+    const pending = fetch(`${appBase}/slow`, { signal: controller.signal }).catch(() => {});
+    setTimeout(() => controller.abort(), 200);
+    await pending;
+    // Past the page's own await, so a report that was going to be written has been.
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    const logged = getOutput().slice(before);
+    assert.doesNotMatch(logged, /\[rshono\] request error/, `a disconnect must not be reported as a request error:\n${logged}`);
+  } finally {
+    await stopServer(appChild);
+  }
+});
+
+/*
+ * The disconnect above is answered by the sample the top-level handler takes before it renders the error
+ * page. That sample cannot cover the error page's *own* render, which starts later and takes its own time —
+ * a client can leave while it is still on the wire, and the render it abandons rejects with the same abort.
+ * The page throws at once and the error page is slow, so the abort lands inside the second render: what
+ * reaches its catch is the abort, and reusing the earlier sample reports it as `the error page failed to
+ * render` — exactly the noise the first test set out to remove, one render later.
+ *
+ * `accept: text/html` because that is what gates the error-page branch in the first place; `fetch`'s default
+ * `Accept` names no `text/html`, so it falls through to the plain refusal and never starts the render this is
+ * about.
+ */
+test("a disconnect during the error page's own render is not reported as a request error", async () => {
+  const dir = appWithRoutes(
+    `import { defineRoutes } from '@rshono/core';
+export const routes = defineRoutes({
+  routes: [{ path: '/boom', component: () => import('./pages/boom') }],
+  error: { component: () => import('./pages/slow-error') },
+});
+`,
+  );
+  writeFileSync(
+    join(dir, 'src', 'pages', 'slow-error.tsx'),
+    'export default async function SlowError() {\n  await new Promise((resolve) => setTimeout(resolve, 1500));\n  return (\n    <html lang="en">\n      <body>\n        <h1>slow error</h1>\n      </body>\n    </html>\n  );\n}\n',
+  );
+
+  buildApp(dir);
+  const { base: appBase, child: appChild, getOutput } = await startApp(dir, 'start');
+  try {
+    const before = getOutput().length;
+    const controller = new AbortController();
+    const pending = fetch(`${appBase}/boom`, { signal: controller.signal, headers: { accept: 'text/html' } }).catch(() => {});
+    // Late enough that the page's own throw has been reported and the slow error page is rendering.
+    setTimeout(() => controller.abort(), 500);
+    await pending;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    const logged = getOutput().slice(before);
+    assert.doesNotMatch(logged, /the error page failed to render/, `the error page's aborted render must not be reported:\n${logged}`);
+    assert.doesNotMatch(logged, /\[rshono\] request error/, `nor may the abort be re-tagged as a request error:\n${logged}`);
+  } finally {
+    await stopServer(appChild);
+  }
+});

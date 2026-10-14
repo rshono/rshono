@@ -62,6 +62,16 @@ export function parseRedirectDigest(digest: string): { location: string; status:
   const sep = rest.indexOf(';');
   if (sep === -1) return null;
   const status = Number(rest.slice(0, sep));
-  const location = decodeURIComponent(rest.slice(sep + 1));
+  // A malformed escape is corruption between `RedirectSignal` and here — every target it encodes round
+  // trips — and letting `decodeURIComponent` throw would take the redirect off the wire entirely: this runs
+  // from React's error callbacks and from a rejected fetch, where a throw escapes as an unhandled rejection
+  // or out of the callback. The literal text is the better guess at the target, the same fallback
+  // `jumpToAnchor` uses for a malformed fragment; refusing the digest instead would read as a `notFound()`.
+  let location: string;
+  try {
+    location = decodeURIComponent(rest.slice(sep + 1));
+  } catch {
+    location = rest.slice(sep + 1);
+  }
   return { location, status: Number.isFinite(status) ? status : 307 };
 }

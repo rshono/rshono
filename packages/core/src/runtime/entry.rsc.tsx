@@ -212,6 +212,23 @@ function acceptsHtml(c: Context): boolean {
 }
 
 /**
+ * The `Vary` a page-URL answer owes: one URL serves a document and a flight payload, so a cache — the
+ * shared one above all — has to key on `RSC` to tell them apart.
+ *
+ * Merged with whatever the app's own middleware prepared rather than written as a bare `RSC`, because a
+ * header bag passed to `c.body(...)` is applied *over* the prepared headers: a `vary` key in it replaces
+ * instead of extending, and an app varying on `Accept-Language`, a cookie or a feature flag would silently
+ * lose it — the plain-set mistake {@link varyWith} exists to prevent, reached through the bag rather than
+ * through `Headers.set`. The response floor merges the same way, but only for the two page content types it
+ * decorates; this is for the answers it deliberately leaves alone. `null` from {@link varyWith} means the
+ * prepared value already covers `RSC` (or is `*`), so it is kept as written rather than replaced by `RSC`.
+ */
+function rscVary(c: Context): string {
+  const existing = c.res.headers.get('vary');
+  return existing === null ? RSC_VARY_HEADER : (varyWith(existing, RSC_VARY_HEADER) ?? existing);
+}
+
+/**
  * Every plain-text answer the framework gives on a page route: the 404s, the refusals on the action path and
  * the last-resort 500. One function, because the header bag is what gets forgotten — and the four call sites
  * used to make three different choices about it, which left the next one to guess.
@@ -224,11 +241,11 @@ function acceptsHtml(c: Context): boolean {
  *   404 beside it, the same answer to the same request from a client that asked for HTML, is correctly
  *   private. The action refusals answer a POST, which no cache stores, and 400/403/500 are not in that list
  *   either; saying it anyway costs a header and settles the question for good.
- * - **`vary: RSC`** because a page URL has two representations, and every one of these is an answer to a
- *   request that could have asked for either.
+ * - **`vary`** because a page URL has two representations, and every one of these is an answer to a request
+ *   that could have asked for either. Merged, never replaced — see {@link rscVary}.
  */
 function plainRefusal(c: Context, message: string, status: ContentfulStatusCode): Response {
-  return c.text(message, status, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+  return c.text(message, status, { vary: rscVary(c), 'cache-control': PAGE_CACHE_CONTROL });
 }
 
 /**
@@ -871,7 +888,11 @@ function buildApp(): Hono {
         // fail, and this is what the same page does when `app.notFound` renders it — so it is honoured, and
         // recurses exactly once.
         if (error instanceof RedirectSignal) return respondToControlSignal(c, error);
-        reportServerError(error, { source: 'render', hono: c, message: '[rshono] the notFound page failed to render:' });
+        // The client leaving is not the `notFound` page failing: the render it abandons rejects with the
+        // abort as its reason, and this page's own catch would otherwise report it — and render the page
+        // again — for a request that has nowhere left to send it. Same call as the top-level handler's.
+        if (!c.req.raw.signal.aborted)
+          reportServerError(error, { source: 'render', hono: c, message: '[rshono] the notFound page failed to render:' });
       }
     }
     return plainNotFound(c);
@@ -903,7 +924,7 @@ function buildApp(): Hono {
                 const headers = {
                   'cache-control': SSG_CACHE_CONTROL,
                   etag: page.etag,
-                  vary: RSC_VARY_HEADER,
+                  vary: rscVary(c),
                   'content-type': isRsc ? 'text/x-component;charset=utf-8' : 'text/html;charset=utf-8',
                 };
                 if (etagMatches(c.req.header('if-none-match'), page.etag)) return c.body(null, 304, headers);
@@ -992,8 +1013,16 @@ function buildApp(): Hono {
       const res = error.getResponse();
       return c.newResponse(res.body, res);
     }
-    // Not a shell failure re-thrown from `renderComponent`: {@link cameFromPayload} says why.
-    if (!cameFromPayload(error)) reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
+    // `cameFromPayload` first: a shell failure re-thrown from `renderComponent` was reported by the stage
+    // that recognised it, and is not this handler's to report again.
+    //
+    // Then the abort. A client that has already gone is not the app being wrong, and every render it touches
+    // rejects with the abort — the same call `entry.ssr.tsx`'s `onError` and the RSC handler above make.
+    // Without this a disconnect was the one thing reported, as `[rshono] request error: ... aborted`, and the
+    // error page was rendered for nobody. This sample answers only for the report *here*: the error page's
+    // own catch reads the signal again, because that render starts later and the client can leave in between.
+    const clientGone = c.req.raw.signal.aborted;
+    if (!cameFromPayload(error) && !clientGone) reportServerError(error, { source: 'request', hono: c, message: '[rshono] request error:' });
     const isRsc = requestWantsRsc(c.req.raw);
     if (loadErrorPage && (isRsc || acceptsHtml(c))) {
       const errorInfo: ErrorPageInfo = isDev
@@ -1026,8 +1055,12 @@ function buildApp(): Hono {
         // already reported as `render` by the render that produced it. So the line still goes to stderr —
         // with two `render` reports on one request it is what says which of them was the error page — but
         // it is not a second report of one fault. {@link cameFromPayload}.
+        //
+        // The signal is read here rather than reusing the sample above: this render started after that one
+        // was taken, and a client that left while it was running rejects it with the same abort. Reporting
+        // that would be the very disconnect noise the check above exists to keep out.
         if (cameFromPayload(renderError)) console.error(message, renderError);
-        else reportServerError(renderError, { source: 'request', hono: c, message });
+        else if (!c.req.raw.signal.aborted) reportServerError(renderError, { source: 'request', hono: c, message });
       }
     }
     // A client that asked for HTML gets a document, even here: this is the last resort for an app with no
@@ -1035,7 +1068,7 @@ function buildApp(): Hono {
     // either case shows a bare line of text where the app used to show a page. Everything else — a flight
     // fetch, curl, a probe — gets the plain line, which is what it asked for.
     if (!isRsc && acceptsHtml(c)) {
-      return c.html(failureDocument(error), 500, { vary: RSC_VARY_HEADER, 'cache-control': PAGE_CACHE_CONTROL });
+      return c.html(failureDocument(error), 500, { vary: rscVary(c), 'cache-control': PAGE_CACHE_CONTROL });
     }
     const detail = isDev ? `\n\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}` : '';
     return plainRefusal(c, `Internal Server Error${detail}`, 500);

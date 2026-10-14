@@ -30,6 +30,25 @@ those.
 
 ### Fixed
 
+- **A `Vary` an app sets in middleware survives a prerendered page.** The prerendered branch built its
+  response with `vary: RSC` in the header bag handed to `c.body(…)`, and that bag is applied over the
+  headers the app prepared — so an app varying on `Accept-Language`, a cookie or a feature flag silently lost
+  that entry on every `render: 'static'` route, on the plain-text 404s and on the framework's own 500, while
+  a dynamic page kept it. The value is now merged rather than replaced, the way the response floor already
+  merges for the content types it decorates.
+
+- **A client that disconnects mid-render is no longer reported as a request error.** Aborting the request
+  rejects both renders with the abort itself, which the two render callbacks already treat as “the client
+  left, not a fault” — but the top-level handler reported it as `source: 'request'` and rendered the error
+  page for a request with nowhere to send it. The report is now skipped, for the error page's own fallback
+  and for a `notFound` page the abort reaches as well.
+
+- **A redirect digest with a malformed percent-escape no longer throws while being read.**
+  `parseRedirectDigest` ran `decodeURIComponent` unguarded from React's error callbacks and from a rejected
+  fetch, where the `URIError` became an unhandled rejection or escaped out of the callback. The literal text
+  is now the fallback, the same one a malformed `#fragment` already takes, and the digest stays a redirect
+  rather than reading as a `notFound()`.
+
 - **A failed precommit fetch no longer aborts a soft navigation into silence.** The precommit handler meant
   the post-commit `loadDocument()` fallback could never run for a `push`/`replace`, so a link click whose
   payload the server refused did nothing at all. The failure now asks the browser for the destination as a
