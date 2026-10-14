@@ -645,6 +645,21 @@ test.describe('no blank screens', () => {
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('heading', { name: 'Test pages' })).toBeVisible();
   });
+
+  /*
+   * The other half of the recovery split. An action that throws tears the tree down too, but a document load
+   * cannot recover it — a GET of `/crash` does not re-run the action, so the page renders as if nothing had
+   * happened and the error would be silently discarded. The panel is the answer, and it stays.
+   */
+  test('an action that tears the tree down keeps the fatal panel instead of reloading', async ({ page }) => {
+    await page.goto('/crash');
+    const before = await markDocument(page);
+
+    await page.getByRole('button', { name: 'Trigger a server error' }).click();
+
+    await expect(page.locator('[data-rshono-fatal]')).toBeVisible();
+    expect(await documentId(page), 'the error is the answer; a reload would discard it').toBe(before);
+  });
 });
 
 /*

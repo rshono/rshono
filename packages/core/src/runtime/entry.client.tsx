@@ -792,6 +792,13 @@ type RenderRecord = {
   commit: () => void;
   supersede: () => void;
   fail: (error: unknown) => void;
+  /**
+   * Whether a document load can recover this render when React tears it down before it commits. A navigation
+   * payload names a URL that renders the failure again — the server answers its document with the app's error
+   * page — so the load is the way back. An action reply does not: a GET of the same URL does not re-run the
+   * action, so a load would silently discard the error, and the fatal panel is the answer instead.
+   */
+  recoversByLoad: boolean;
 };
 
 /**
@@ -803,7 +810,7 @@ type RenderRecord = {
  * in the DOM and before the browser paints, which is the only moment a `#hash` target exists and the
  * pre-scroll position has not been shown.
  */
-let setPayload: (payload: RscPayload, afterCommit?: () => void) => Promise<void> = () => {
+let setPayload: (payload: RscPayload, afterCommit?: () => void, options?: { recoversByLoad?: boolean }) => Promise<void> = () => {
   window.location.reload();
   return new Promise<void>(() => {});
 };
@@ -811,17 +818,19 @@ let setPayload: (payload: RscPayload, afterCommit?: () => void) => Promise<void>
 /**
  * The payload {@link setPayload} handed React that is still waiting to commit, or `undefined` once it has.
  *
- * Read by `onUncaughtError`, where React has decided to unmount the root. A payload that never committed is
- * the one case a document load can still repair: the URL already names its destination, and every recovery
- * the runtime has — `popstate`, a link click, `setPayload` — writes into a root that no longer exists. The
- * server answers that document request with the app's error page, which is a root of its own. Deliberately
- * `undefined` for the initial payload and cleared as soon as a render commits: a deterministic client fault
- * must reach the fatal panel rather than reload the tab forever.
+ * Read by `onUncaughtError`, where React has decided to unmount the root. A navigation payload that never
+ * committed is the one case a document load can still repair: the URL already names its destination, and
+ * every recovery the runtime has — `popstate`, a link click, `setPayload` — writes into a root that no longer
+ * exists. The server answers that document request with the app's error page, which is a root of its own. An
+ * action reply is not: a GET of the URL it was called from does not re-run the action, so the page renders as
+ * if nothing had happened and the panel is the answer. Deliberately `undefined` for the initial payload and
+ * cleared as soon as a render commits: a deterministic client fault must reach the fatal panel rather than
+ * reload the tab forever.
  *
  * Failing the render rejects the commit promise rather than settling it as a success, so every waiter —
  * `loadPayload`'s caller, the prepared handler — learns the render it asked for has failed and can take its
- * document-load branch. A render React is only suspending is not failed: it has not given up on it, and
- * neither may the navigation.
+ * recovery branch. A render React is only suspending is not failed: it has not given up on it, and neither
+ * may the navigation.
  */
 let pendingRender: RenderRecord | undefined;
 
@@ -1290,12 +1299,13 @@ async function main() {
    * running scroll/focus work; committing runs that work before the browser paints; failing
    * releases the waiter with the reason the render never will do either.
    */
-  function createRender(payload: RscPayload, href: string, afterCommit?: () => void): RenderRecord {
+  function createRender(payload: RscPayload, href: string, afterCommit?: () => void, recoversByLoad = true): RenderRecord {
     const { promise, resolve, reject } = Promise.withResolvers<void>();
     let finished = false;
     return {
       payload,
       href,
+      recoversByLoad,
       committed: promise,
       commit: () => {
         if (finished) return;
@@ -1331,8 +1341,8 @@ async function main() {
     const [revision, reviseCommit] = React.useState(0);
 
     React.useLayoutEffect(() => {
-      setPayload = (next, afterCommit) => {
-        const scheduled = createRender(next, documentUrl(), afterCommit);
+      setPayload = (next, afterCommit, { recoversByLoad = true } = {}) => {
+        const scheduled = createRender(next, documentUrl(), afterCommit, recoversByLoad);
         scheduledRender.current.supersede();
         scheduledRender.current = scheduled;
         currentPayload.current = next;
@@ -1410,14 +1420,15 @@ async function main() {
       rejectAttempt(activeAttempt, new DOMException('Navigation superseded by server action', 'AbortError'));
       abortNavigationFetches((fetch) => !fetch.applied);
       React.startTransition(() => {
-        const committed = setPayload(payload);
+        const committed = setPayload(payload, undefined, { recoversByLoad: false });
         void committed.then(
           () => {
             abortNavigationFetches((fetch) => fetch.navigation < actionGeneration);
           },
           // An action reply that tears the tree down has no caller awaiting the commit, so the rejection is
-          // the document-load recovery's only route; see {@link pendingRender}.
-          () => loadDocument(),
+          // consumed here rather than left unhandled. The panel `onUncaughtError` painted is the recovery:
+          // the page a document load would render does not re-run the action that failed.
+          () => {},
         );
       });
     }
@@ -1462,19 +1473,20 @@ async function main() {
       // Nothing caught it, so React tears the root down — and the root is `document`.
       globalThis.reportError(error);
       const recover = pendingRender;
-      if (!recover) {
+      // A navigation payload is the case a document load can still repair: the URL already names its
+      // destination, and the server answers that document request with the app's error page. An action reply
+      // is not — a GET of the URL it was called from does not re-run the action, so the page would render as
+      // if nothing had happened and the load would silently discard the error. The panel is the answer, and it
+      // is painted now because no load is coming to replace it. See {@link pendingRender}.
+      if (!recover?.recoversByLoad) {
         showFatal(error, errorInfo.componentStack);
+        recover?.fail(error);
         return;
       }
-      // A payload that never committed is the one case the fatal panel cannot cover for long: the address
-      // bar names a page this document cannot paint, so Back, Forward and every later link click are no-ops
-      // for the life of the tab. Failing the render rejects the commit its navigation is waiting on, and the
-      // caller's rejection branch asks the server for the destination as a real document — the app's error
-      // page, a fresh root. A render React is only suspending is not failed; see {@link pendingRender}.
-      //
       // The panel waits for that load to arrive. Painted now, it flashes over the error page on its way and
       // vanishes when the page commits; the timer dies with the document a successful load replaces, so the
-      // panel only appears when the recovery was never made.
+      // panel only appears when the recovery was never made. A render React is only suspending is not failed;
+      // see {@link pendingRender}.
       setTimeout(() => showFatal(error, errorInfo.componentStack), RECOVERY_GRACE_MS);
       recover.fail(error);
     },

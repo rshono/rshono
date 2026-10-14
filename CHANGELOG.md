@@ -38,8 +38,9 @@ those.
   When an uncaught error lands while a payload is still on its way to the screen, the runtime now asks the
   server for the destination as a real document — the app's `error` page, rendered fresh — which rebuilds
   a live root. The fatal panel waits for that load rather than flashing ahead of it, and is what remains
-  when one is refused or swallowed; the initial payload and an error under a tree that already committed
-  keep the panel immediately, so a deterministic client fault cannot reload the tab forever.
+  when one is refused or swallowed. A failure a load cannot recover — an action reply, which a GET of the
+  page does not re-run, the initial payload, or an error under a tree that already committed — keeps the
+  panel immediately, so a deterministic client fault cannot reload the tab forever.
 
 - **A `Vary` an app sets in middleware survives a prerendered page.** The prerendered branch built its
   response with `vary: RSC` in the header bag handed to `c.body(…)`, and that bag is applied over the
