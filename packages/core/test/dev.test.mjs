@@ -54,12 +54,12 @@ test('dev does not serialize the ctx page prop into the flight payload', async (
   // the wire (that is what the `"props":` row below is), walking own *enumerable* properties. `ctx`
   // is defined non-enumerable precisely so it is skipped — an enumerable one would ship the whole
   // Hono Context, `c.env` bindings and all, to the browser and add >10 kB to every page.
-  const flight = await (await fetch(`${base}/`, { headers: { RSC: '1', cookie: 'visitor=Ada' } })).text();
+  const flight = await (await fetch(`${base}/subscribe`, { headers: { RSC: '1', cookie: 'subscribed=ctx-prop-ada' } })).text();
   assert.match(flight, /"props":\{[^{}]*"url"/, 'dev really does serialize page props — this test is only meaningful while it does');
-  // As a JSON key — the home page renders the literal word "ctx" as prose, which is not a leak.
+  // As a JSON key — the page output never spells the prop name, so only the prop itself could match.
   assert.doesNotMatch(flight, /"ctx":/, 'the ctx prop must stay out of the dev debug payload');
   assert.doesNotMatch(flight, /newResponse|setRenderer|HtmlEscapedCallbackPhase/, 'a serialized Hono Context would carry its own internals');
-  assert.match(flight, /data-ctx/, 'the page should still have rendered its ctx-derived markup');
+  assert.match(flight, /ctx-prop-ada/, 'the page should still have rendered its ctx-derived markup');
 });
 
 test("dev widens the app's own script-src with 'unsafe-eval', which React Refresh needs", async () => {

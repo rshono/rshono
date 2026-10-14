@@ -145,20 +145,21 @@ test('two concurrent requests keep separate request contexts', async () => {
 });
 
 test('the ctx page prop is the request context, without importing getRequestContext()', async () => {
-  const res = await fetch(`${base}/`, { headers: { cookie: 'visitor=Ada%20Lovelace' } });
+  // `/subscribe` is the ctx-prop page now that the home page is just the route index: it reads the
+  // `subscribed` cookie off `ctx` and renders it back.
+  const res = await fetch(`${base}/subscribe`, { headers: { cookie: 'subscribed=ctx-prop-ada' } });
   assert.equal(res.status, 200);
-  const html = await res.text();
-  assert.match(html, /data-ctx="method">(?:<!--[^]*?-->)?GET</, 'ctx.method was not readable from the page prop');
-  assert.match(html, /data-ctx="visitor">(?:<!--[^]*?-->)?Ada Lovelace</, 'ctx.cookies was not readable from the page prop');
+  assert.match(await res.text(), /Subscribed as[^]*?ctx-prop-ada/, 'ctx.cookies was not readable from the page prop');
 });
 
 test("a server component's props never reach the browser, so ctx cannot leak through them", async () => {
   // Production React serializes a server component's *output*, not its props — and `ctx` is
   // non-enumerable besides, which is what keeps React's dev-only debug serialization off it too
   // (see `pageProps` in entry.rsc.tsx). Either way the Hono Context must not be on the wire.
-  const flight = await (await fetch(`${base}/`, { headers: { RSC: '1', cookie: 'visitor=Ada' } })).text();
-  assert.match(flight, /"data-ctx":"visitor","children":"Ada"/, 'the page should have rendered its ctx-derived markup');
-  // As a JSON key — the page renders the literal word "ctx" as prose, which is not a leak.
+  const flight = await (await fetch(`${base}/subscribe`, { headers: { RSC: '1', cookie: 'subscribed=ctx-prop-ada' } })).text();
+  assert.match(flight, /Subscribed as/, 'the page should have rendered');
+  assert.match(flight, /ctx-prop-ada/, 'and its ctx-derived value');
+  // As a JSON key — the page output never spells the prop name, so only the prop itself could match.
   assert.doesNotMatch(flight, /"ctx":/, 'the ctx prop itself must never be serialized into the payload');
   assert.doesNotMatch(flight, /"props":/, 'production serializes a server component output, never its props');
   assert.doesNotMatch(flight, /newResponse|setRenderer/, 'a serialized Hono Context would carry its own method names');

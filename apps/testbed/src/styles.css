@@ -35,57 +35,6 @@ body {
   flex-direction: column;
 }
 
-/* ─── Header / Nav ──────────────────────────────────────────────────── */
-
-header {
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
-  padding: 0 1.5rem;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-nav {
-  max-width: 960px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 56px;
-}
-
-.logo {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  text-decoration: none;
-  color: var(--color-text);
-  font-size: 1.1rem;
-}
-
-.logo svg {
-  display: block;
-  flex: none;
-}
-
-.nav-links {
-  display: flex;
-  gap: 1.5rem;
-}
-
-.nav-links a {
-  color: var(--color-muted);
-  text-decoration: none;
-  font-size: 0.9rem;
-  font-weight: 500;
-  transition: color 0.15s;
-}
-
-.nav-links a:hover {
-  color: var(--color-text);
-}
-
 /* ─── Main Content ──────────────────────────────────────────────────── */
 
 main {
@@ -112,26 +61,8 @@ footer a {
 
 /* ─── Hero ──────────────────────────────────────────────────────────── */
 
-.hero {
-  text-align: center;
-  padding: 3rem 0 2rem;
-}
-
-.hero h1 {
-  font-size: 3rem;
-  font-weight: 800;
-  margin-bottom: 0.5rem;
-  letter-spacing: -0.02em;
-}
-
 .emoji {
   font-size: 2.5rem;
-}
-
-.subtitle {
-  font-size: 1.25rem;
-  color: var(--color-muted);
-  margin-bottom: 1rem;
 }
 
 .description {
@@ -146,13 +77,6 @@ footer a {
 }
 
 /* ─── Feature Cards ─────────────────────────────────────────────────── */
-
-.features {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
-}
 
 .feature-card {
   background: var(--color-surface);
@@ -174,13 +98,6 @@ footer a {
 }
 
 /* ─── Links & Buttons ───────────────────────────────────────────────── */
-
-.links {
-  display: flex;
-  gap: 0.75rem;
-  justify-content: center;
-  margin-bottom: 1.5rem;
-}
 
 .btn {
   display: inline-block;
@@ -380,14 +297,6 @@ footer a {
 /* ─── Responsive ────────────────────────────────────────────────────── */
 
 @media (max-width: 600px) {
-  .hero h1 {
-    font-size: 2rem;
-  }
-
-  .features {
-    grid-template-columns: 1fr;
-  }
-
   .profile-header {
     flex-direction: column;
     text-align: center;
@@ -457,4 +366,107 @@ footer a {
  */
 .doc-section {
   min-height: 90vh;
+}
+
+/* ─── Route Index (home) ────────────────────────────────────────────── */
+
+.route-index > h1 {
+  font-size: 1.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.route-index > .description {
+  margin: 0;
+  max-width: none;
+}
+
+.route-group {
+  margin-top: 1.5rem;
+}
+
+.route-group h2 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-muted);
+  margin-bottom: 0.5rem;
+}
+
+.route-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.5rem;
+}
+
+.route-item {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  box-shadow: var(--shadow);
+}
+
+.route-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.route-path {
+  text-decoration: none;
+}
+
+.route-path code {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: #eff6ff;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
+.route-path:hover code {
+  background: #dbeafe;
+}
+
+.route-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.route-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
+.route-desc {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  margin-top: 0.375rem;
+}
+
+.route-desc code {
+  font-size: 0.9em;
+  background: var(--color-bg);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+.route-variants {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  margin-top: 0.375rem;
+}
+
+.route-variants a {
+  color: var(--color-accent);
 }

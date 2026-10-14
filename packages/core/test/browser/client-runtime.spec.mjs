@@ -32,7 +32,7 @@ test.describe('soft navigation', () => {
     await page.goto('/');
     const before = await markDocument(page);
 
-    await page.getByRole('link', { name: 'Users', exact: true }).click();
+    await page.getByRole('link', { name: '/users', exact: true }).click();
 
     await expect(page).toHaveURL('/users');
     await expect(page.getByText('Ada Lovelace')).toBeVisible();
@@ -45,7 +45,7 @@ test.describe('soft navigation', () => {
     await counter.click();
     await expect(counter).toHaveText(/Clicked 1 time/);
 
-    await page.getByRole('link', { name: 'Docs' }).click();
+    await page.getByRole('link', { name: '/docs/:slug', exact: true }).click();
     await expect(page).toHaveURL('/docs/getting-started');
     await page.goBack();
 
@@ -93,8 +93,6 @@ test.describe('soft navigation', () => {
 
   test('an off-site link is left to the browser', async ({ page }) => {
     await page.goto('/');
-    // `exact` matters here: accessible-name matching is substring-based by default, so a loose
-    // 'Hono' also matches the "rshono" logo — whose href is "/" — and picks it up first.
     const link = page.getByRole('link', { name: 'Hono', exact: true });
     await expect(link).toHaveAttribute('href', /^https:\/\/hono\.dev/);
   });
@@ -111,7 +109,7 @@ test.describe('navigation fetching', () => {
       if (request.headers()['rsc'] === '1') flightRequests.push(request.url());
     });
 
-    const users = page.getByRole('link', { name: 'Users', exact: true });
+    const users = page.getByRole('link', { name: '/users', exact: true });
     await users.hover();
     await page.waitForTimeout(400); // long enough for any hover-triggered fetch to have started
     expect(flightRequests, 'hover must not speculate').toHaveLength(0);
@@ -143,12 +141,12 @@ test.describe('navigation fetching', () => {
       await route.continue().catch(() => {});
     });
 
-    await page.getByRole('link', { name: 'Users', exact: true }).click();
+    await page.getByRole('link', { name: '/users', exact: true }).click();
     await seen;
     await expect(page).toHaveURL('/');
 
-    // The old tree stays interactive through a pending transition, so the nav is still clickable.
-    await page.getByRole('link', { name: 'Sign Up', exact: true }).click();
+    // The old tree stays interactive through a pending transition, so the index is still clickable.
+    await page.getByRole('link', { name: '/signup', exact: true }).click();
     await expect(page).toHaveURL('/signup');
     await expect(page.getByRole('heading', { name: 'Sign Up' })).toBeVisible();
 
@@ -371,13 +369,13 @@ test.describe('scroll and focus on navigation', () => {
   // and traversal restoration is off with `history.scrollRestoration = 'manual'`.
   test('a new navigation starts at the top', async ({ page }) => {
     await page.setViewportSize({ width: 500, height: 400 });
-    await page.goto('/users');
+    await page.goto('/');
 
     await page.evaluate(() => window.scrollTo(0, 300));
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
 
-    await page.getByRole('link', { name: 'Docs' }).click();
-    await expect(page).toHaveURL('/docs/getting-started');
+    await page.getByRole('link', { name: '/users', exact: true }).click();
+    await expect(page).toHaveURL('/users');
     await expect.poll(() => page.evaluate(() => window.scrollY), { message: 'a pushed page must not inherit the last one’s offset' }).toBe(0);
   });
 
@@ -386,18 +384,18 @@ test.describe('scroll and focus on navigation', () => {
   // been asked for — against the outgoing page, and then overwritten by the incoming one.
   test('going back restores the offset the page was left at', async ({ page }) => {
     await page.setViewportSize({ width: 500, height: 400 });
-    await page.goto('/users');
+    await page.goto('/');
 
     await page.evaluate(() => window.scrollTo(0, 300));
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
 
-    await page.getByRole('link', { name: 'Docs' }).click();
-    await expect(page).toHaveURL('/docs/getting-started');
+    await page.getByRole('link', { name: '/users', exact: true }).click();
+    await expect(page).toHaveURL('/users');
     // Wait out the click's navigation: `goBack` must start a traversal, not supersede a pending push.
     await page.evaluate(() => window.navigation.transition?.finished);
     await page.goBack();
 
-    await expect(page).toHaveURL('/users');
+    await expect(page).toHaveURL('/');
     await expect.poll(() => page.evaluate(() => window.scrollY), { message: 'a traversal must come back to where it left' }).toBeGreaterThan(100);
   });
 
@@ -408,7 +406,10 @@ test.describe('scroll and focus on navigation', () => {
     await page.goto('/profile/1');
 
     await page.evaluate(() => window.scrollTo(0, 250));
-    await page.getByRole('link', { name: 'Users', exact: true }).click();
+    await page.evaluate(() => {
+      const result = navigation.navigate('/users');
+      void Promise.allSettled([result.committed, result.finished]);
+    });
     await expect(page).toHaveURL('/users');
     await page.evaluate(() => window.navigation.transition?.finished);
     await page.evaluate(() => window.scrollTo(0, 300));
@@ -428,7 +429,7 @@ test.describe('scroll and focus on navigation', () => {
   test('a navigation moves focus to the new document', async ({ page }) => {
     await page.goto('/');
 
-    const users = page.getByRole('link', { name: 'Users', exact: true });
+    const users = page.getByRole('link', { name: '/users', exact: true });
     await users.focus();
     await users.click();
 
@@ -467,7 +468,7 @@ test.describe('scroll and focus on navigation', () => {
     await page.goto('/');
     await expect(page.getByText('(hydrated ✓)')).toBeVisible();
 
-    await page.getByRole('link', { name: 'Users', exact: true }).click();
+    await page.getByRole('link', { name: '/users', exact: true }).click();
     await expect(page).toHaveURL('/users');
     await page.evaluate(() => window.navigation.transition?.finished);
     await page.evaluate(() => window.scrollTo(0, 300));
