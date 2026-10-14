@@ -609,9 +609,9 @@ function reloadOnceForLateNotFound(): void {
  * an uncaught error, leaving no live tree to soft-navigate with.
  *
  * A redirect is followed *replacing* the entry that raised it, the way a 30x replaces the URL that answered
- * with one. `history` lets the one caller that must not — an action reply, which re-renders the page the
- * visitor is already on — keep the push it has always had. `notFound()` has nowhere to go but a reload, and a
- * reload is its own entry already.
+ * with one. `history` lets the action-reply paths that must not — the fetch catch, and a digest surfacing
+ * through React during the reply's render — keep the push they have always had. `notFound()` has nowhere to
+ * go but a reload, and a reload is its own entry already.
  */
 function handleControlDigest(error: unknown, { hard = false, history = 'replace' }: { hard?: boolean; history?: 'push' | 'replace' } = {}): boolean {
   const digest = (error as { digest?: unknown } | null)?.digest;
@@ -833,6 +833,18 @@ let setPayload: (payload: RscPayload, afterCommit?: () => void, options?: { reco
  * may the navigation.
  */
 let pendingRender: RenderRecord | undefined;
+
+/**
+ * The history mode for a `redirect()` that surfaced through React, where {@link pendingRender} is the render
+ * that raised it. A navigation payload names the URL that raised the redirect, so the redirect replaces that
+ * entry. An action reply re-renders the page the visitor is already on — a GET of it does not re-run the
+ * action — so its redirect keeps the push the action's other redirect paths have, and Back returns to the
+ * page that submitted the form. `undefined` — the initial payload, or a render past its commit — is not an
+ * action reply and replaces.
+ */
+function controlDigestHistory(): 'push' | 'replace' {
+  return pendingRender?.recoversByLoad === false ? 'push' : 'replace';
+}
 
 /**
  * Re-dispatches the payload already waiting to commit, for {@link loadPayload}'s lost-ping retry. Unlike
@@ -1464,12 +1476,12 @@ async function main() {
   hydrateRoot(document, <BrowserRoot />, {
     formState: initialPayload.formState,
     onCaughtError: (error, errorInfo) => {
-      if (handleControlDigest(error, { hard: true })) return;
+      if (handleControlDigest(error, { hard: true, history: controlDigestHistory() })) return;
       // A boundary handled it and the tree is intact, so no overlay over the app's own fallback.
       console.error(error, errorInfo.componentStack ?? '');
     },
     onUncaughtError: (error, errorInfo) => {
-      if (handleControlDigest(error, { hard: true })) return;
+      if (handleControlDigest(error, { hard: true, history: controlDigestHistory() })) return;
       // Nothing caught it, so React tears the root down — and the root is `document`.
       globalThis.reportError(error);
       const recover = pendingRender;
