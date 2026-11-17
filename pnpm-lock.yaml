@@ -29,9 +29,6 @@ importers:
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
-      prettier-plugin-uncomment:
-        specifier: ^1.0.2
-        version: 1.0.2(prettier@3.9.10)
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
@@ -1876,11 +1873,6 @@ packages:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
     engines: {node: '>= 0.8.0'}
 
-  prettier-plugin-uncomment@1.0.2:
-    resolution: {integrity: sha512-pTjMZMfdDVHwUl6EjUiIjsii38vIF2mHIoVX+FN71vtALNTNPF1BXaKN5ilMaw5MRVKY3KNqMYVDExmw9gn+Tg==}
-    peerDependencies:
-      prettier: '>=3.0.0'
-
   prettier@3.9.10:
     resolution: {integrity: sha512-skGHTH1Yb9QvaTC4hWnRTzEYtCpApF0UMBPz+t/0ZPzP8ihefo/btKd+QA7pUE0fEwA1SbS/NmhyEcstdXOIdA==}
     engines: {node: '>=14'}
@@ -3579,10 +3571,6 @@ snapshots:
       source-map-js: 1.2.2
 
   prelude-ls@1.2.1: {}
-
-  prettier-plugin-uncomment@1.0.2(prettier@3.9.10):
-    dependencies:
-      prettier: 3.9.10
 
   prettier@3.9.10: {}
 

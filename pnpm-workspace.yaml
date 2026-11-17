@@ -18,7 +18,6 @@ allowBuilds:
   # dependency that already carries it — `workerd --version` answers without it having run.
   workerd: false
 minimumReleaseAgeExclude:
-  - prettier-plugin-uncomment@1.0.0 || 1.0.1 || 1.0.2
   - '@rspack/binding-darwin-arm64@2.2.8'
   - '@rspack/binding-darwin-x64@2.2.8'
   - '@rspack/binding-linux-arm64-gnu@2.2.8'

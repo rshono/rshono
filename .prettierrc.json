@@ -3,6 +3,5 @@
   "printWidth": 150,
   "tabWidth": 2,
   "trailingComma": "all",
-  "singleQuote": true,
-  "uncommentKeep": ["@example", "@link", "@type", "@param", "@return", "@callback", "@const"]
+  "singleQuote": true
 }
