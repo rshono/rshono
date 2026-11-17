@@ -30,6 +30,31 @@ function run(command, args, cwd, label) {
   return result.stdout ?? '';
 }
 
+// A registry tarball can 404 for a minute after a release, because the packument lists a version before every
+// CDN edge can serve it. `csstype` 3.2.4 broke this suite 47 seconds after it was published, which is a fact
+// about npm rather than about the scaffold. A 404 can also mean a package is genuinely missing — the retries
+// then end with the same error, after giving the registry time to catch up.
+const TRANSIENT_REGISTRY_ERROR = /(?:E404|404 Not Found|ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND|socket hang up)/i;
+const RETRY_DELAYS = [5_000, 10_000, 20_000, 40_000];
+
+function install(command, args, cwd, label) {
+  for (let attempt = 0; ; attempt++) {
+    const result = spawnSync(command, args, { cwd, encoding: 'utf8', shell: process.platform === 'win32', timeout: 600_000 });
+    const stdout = result.stdout ?? '';
+    const stderr = result.stderr ?? '';
+    if (result.status === 0) return stdout;
+
+    if (attempt === RETRY_DELAYS.length || !TRANSIENT_REGISTRY_ERROR.test(`${stdout}\n${stderr}`)) {
+      throw new Error(`${label} failed (${result.status}):\n${stdout}\n${stderr}`);
+    }
+
+    const delay = RETRY_DELAYS[attempt];
+    console.warn(`  … ${label} hit a transient registry error; retrying in ${delay / 1_000}s`);
+    // Synchronous: the tests themselves are synchronous, and this runs between two child processes anyway.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+  }
+}
+
 let packed;
 
 /**
@@ -61,7 +86,7 @@ function scaffold(name, flags, tarball) {
   manifest.dependencies['@rshono/core'] = `file:${tarball}`;
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  run('npm', ['install', '--no-audit', '--no-fund'], dir, `npm install (${name})`);
+  install('npm', ['install', '--no-audit', '--no-fund'], dir, `npm install (${name})`);
 
   // Deliberately no `format` run: the CLI does not format either, so the `format:check` further down is a
   // real check that the templates ship clean. The tarball edit above is written back with the same
@@ -107,7 +132,7 @@ test(
     // script the project has not decided about, and `pnpm run` fails again on its way to the script — so
     // this is also what proves a default scaffold needs no `allowBuilds` at all, and is right to ship no
     // pnpm-workspace.yaml. (Cloudflare, the one target that does bring install scripts, ships one.)
-    run('pnpm', ['install'], dir, `pnpm install (${name})`);
+    install('pnpm', ['install'], dir, `pnpm install (${name})`);
     run('pnpm', ['run', 'typecheck'], dir, 'typecheck (pnpm)');
     assert.match(run('pnpm', ['run', 'build'], dir, 'build (pnpm)'), /build complete/);
   },
@@ -159,7 +184,7 @@ test('every quality preset produces configs its own tools accept', { skip: enabl
     manifest.devDependencies = Object.fromEntries(Object.entries(manifest.devDependencies).filter(([dep]) => tools.includes(dep)));
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-    run('npm', ['install', '--no-audit', '--no-fund'], dir, `npm install (${name})`);
+    install('npm', ['install', '--no-audit', '--no-fund'], dir, `npm install (${name})`);
     // No `format` first: the templates are written to satisfy every formatter at its configured width, and
     // this is the assertion that keeps them that way now that the CLI no longer formats what it scaffolds.
     run('npm', ['run', 'format:check'], dir, `format:check (${preset})`);
