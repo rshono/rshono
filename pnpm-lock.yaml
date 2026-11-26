@@ -42,8 +42,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       hono:
-        specifier: ^4.13.17
-        version: 4.13.17
+        specifier: ^4.13.21
+        version: 4.13.21
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -82,8 +82,8 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
       hono:
-        specifier: ^4.13.17
-        version: 4.13.17
+        specifier: ^4.13.21
+        version: 4.13.21
       markdown-it:
         specifier: ^15.0.3
         version: 15.0.3
@@ -134,7 +134,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.1.8
-        version: 2.1.8(hono@4.13.17)
+        version: 2.1.8(hono@4.13.21)
       '@rspack/core':
         specifier: 2.2.8
         version: 2.2.8
@@ -161,8 +161,8 @@ importers:
         specifier: ^19.2.5
         version: 19.2.5(@types/react@19.2.18)
       hono:
-        specifier: ^4.13.17
-        version: 4.13.17
+        specifier: ^4.13.21
+        version: 4.13.21
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -187,8 +187,8 @@ importers:
         specifier: workspace:*
         version: link:../../..
       hono:
-        specifier: ^4.13.17
-        version: 4.13.17
+        specifier: ^4.13.21
+        version: 4.13.21
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -202,8 +202,8 @@ importers:
         specifier: workspace:*
         version: link:../../..
       hono:
-        specifier: ^4.13.17
-        version: 4.13.17
+        specifier: ^4.13.21
+        version: 4.13.21
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -1056,8 +1056,8 @@ packages:
   '@tailwindcss/postcss@4.3.5':
     resolution: {integrity: sha512-FAV37Tlx9wBiT/hkfgVD0Q6CWsP2oUX3lf28nrfjW8+ksILjnpuFulUqWDfNR4/ZiEHHDRBX8DUTzD1Rys687A==}
 
-  '@tybys/wasm-util@0.10.4':
-    resolution: {integrity: sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A==}
+  '@tybys/wasm-util@0.10.5':
+    resolution: {integrity: sha512-dOGOPxlaNV+G046mZzN+9C0dAcQZeSKcXiVaM0TYy/LM4ttTmgSBDxYfovcYI8Em3+eAbiAYpvWLOv8+ZVRJKA==}
 
   '@types/esrecurse@4.3.1':
     resolution: {integrity: sha512-xJBAbDifo5hpffDBuHl0Y8ywswbiAp/Wi7Y/GtAgSlZyIABppyurxVueOPE8LUQOxdlgi6Zqce7uoEpqNTeiUw==}
@@ -1561,8 +1561,8 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
-  hono@4.13.17:
-    resolution: {integrity: sha512-vZIcbkvjOR5hHRWERbGkr8fGfF0GGM1ooYkuH448iO3b2AdVEr3AXZSw4Z3Kn+1L5z0CVoVeyV29VGYmFh05kQ==}
+  hono@4.13.21:
+    resolution: {integrity: sha512-h9UsguqfVk4kjUwLvQpHOmOaJpW10jz9lp8bvKUUa04wJG/fabKFBqXZ06D6LFaeKQZtUZRVeg0gfkTTEsX7Mw==}
     engines: {node: '>=16.9.0'}
 
   hookified@1.15.1:
@@ -2441,9 +2441,9 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@hono/node-server@2.1.8(hono@4.13.17)':
+  '@hono/node-server@2.1.8(hono@4.13.21)':
     dependencies:
-      hono: 4.13.17
+      hono: 4.13.21
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -2609,7 +2609,7 @@ snapshots:
     dependencies:
       '@emnapi/core': 1.11.3
       '@emnapi/runtime': 1.11.3
-      '@tybys/wasm-util': 0.10.4
+      '@tybys/wasm-util': 0.10.5
     optional: true
 
   '@playwright/test@1.65.1':
@@ -2814,7 +2814,7 @@ snapshots:
       postcss: 8.5.33
       tailwindcss: 4.3.5
 
-  '@tybys/wasm-util@0.10.4':
+  '@tybys/wasm-util@0.10.5':
     dependencies:
       tslib: 2.9.1
     optional: true
@@ -3321,7 +3321,7 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono@4.13.17: {}
+  hono@4.13.21: {}
 
   hookified@1.15.1: {}
 
