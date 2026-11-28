@@ -133,8 +133,8 @@ importers:
   packages/core:
     dependencies:
       '@hono/node-server':
-        specifier: ^2.1.8
-        version: 2.1.8(hono@4.13.21)
+        specifier: ^2.1.11
+        version: 2.1.11(hono@4.13.21)
       '@rspack/core':
         specifier: 2.2.8
         version: 2.2.8
@@ -580,8 +580,8 @@ packages:
     resolution: {integrity: sha512-IkO+/KEUvwbVpiURZg+P7zF74z5Jxe0UgJxVni+RtoHQ6IZieXaO02kmadomap/q+l6bc/jdPGGqTjhuZnuz1Q==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@hono/node-server@2.1.8':
-    resolution: {integrity: sha512-jdf7FHh6A1lzjpHHQUgxsg2GeER2vMetnAOfeActzcoli6jamlK+NAwL6Dsr5Fl3BS3tYUQzCdtZjU8Qxv7bEA==}
+  '@hono/node-server@2.1.11':
+    resolution: {integrity: sha512-KzKz9vl4vvr1vgLHamj+g5uonbrj5NwAdO3yzOS6cd2HjALVeOgTgeZOyAzNxejbkfOOPIcvuf/Tg8l1pEFLog==}
     engines: {node: '>=20'}
     peerDependencies:
       hono: ^4 || ^5.0.0-0
@@ -2441,7 +2441,7 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@hono/node-server@2.1.8(hono@4.13.21)':
+  '@hono/node-server@2.1.11(hono@4.13.21)':
     dependencies:
       hono: 4.13.21
 
